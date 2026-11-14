@@ -1,0 +1,14 @@
+{
+  "name": "Invoice Approval",
+  "description": "Shaped like UiPath's standard state-machine template: Initialization, Get Transaction Data, Process Transaction and End Process, with a few UI activities in the workflows its states invoke",
+  "main": "Main.xaml",
+  "dependencies": {
+    "UiPath.System.Activities": "[23.10.4]",
+    "UiPath.UIAutomation.Activities": "[23.10.13]"
+  },
+  "schemaVersion": "4.0",
+  "studioVersion": "23.10.3.0",
+  "projectVersion": "1.0.0",
+  "expressionLanguage": "VisualBasic",
+  "targetFramework": "Windows"
+}

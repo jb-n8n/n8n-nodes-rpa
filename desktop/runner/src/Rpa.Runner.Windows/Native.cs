@@ -280,6 +280,22 @@ internal static partial class Native
         return GetWindowText(hwnd, sb, sb.Capacity) > 0 ? sb.ToString() : "";
     }
 
+    public const uint WM_CLOSE = 0x0010;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>Posts WM_CLOSE (what the close button sends) to every top-level window of the process. Sends no
+    /// key, click or answer.</summary>
+    public static void PostCloseToWindowsOf(int pid)
+    {
+        EnumWindows((h, _) =>
+        {
+            if (PidOf(h) == pid) PostMessage(h, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            return true;
+        }, IntPtr.Zero);
+    }
+
     public static int PidOf(IntPtr hwnd)
     {
         GetWindowThreadProcessId(hwnd, out var pid);

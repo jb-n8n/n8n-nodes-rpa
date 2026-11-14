@@ -1,4 +1,5 @@
 import type { INodeProperties } from 'n8n-workflow';
+import { MAX_SECONDS } from '../config.js';
 import { DEFAULT_FILE_TYPES, FILE_TYPES } from './download.js';
 import { locatorProperty } from './locator.js';
 
@@ -150,20 +151,10 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     name: 'maxSeconds',
     type: 'number',
     default: 180,
-    typeOptions: { minValue: 10, maxValue: 300 },
+    typeOptions: { minValue: 10, maxValue: MAX_SECONDS },
+    // Import Steps' notice (IMPORT_NOTICE) says that an import takes about twice this per step list.
     description: 'One deadline for the whole run, AI repair and proof included',
-    displayOptions: only(BROWSER_OPERATIONS.filter((op) => op !== 'importSteps')),
-  },
-  // The same option for Import Steps, with its own help (n8n shows the entry whose displayOptions match).
-  {
-    displayName: 'Max Seconds',
-    name: 'maxSeconds',
-    type: 'number',
-    default: 180,
-    typeOptions: { minValue: 10, maxValue: 300 },
-    description:
-      'One deadline for each run, AI repair and proof included. Each imported step list runs once and is then replayed in a fresh browser, so it can take about twice this. On sites with an authenticator code, Max Seconds must leave room for up to a 30 s wait.',
-    displayOptions: only(['importSteps']),
+    displayOptions: only(BROWSER_OPERATIONS),
   },
   {
     displayName: 'Viewport',
@@ -237,7 +228,8 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     typeOptions: { multipleValues: true },
     default: {},
     placeholder: 'Add Variable',
-    description: 'Values the steps may type into fields, used as {{var.name}} inside the steps (never secrets)',
+    description:
+      'Values for {{var.name}} in the steps. In Run Steps, a password or another secret goes in an RPA Secret Variables credential instead: a value here is masked only where a secret fill or a desktop step types it.',
     hint: 'Not n8n expressions; {{var.name}} is replaced inside steps.',
     options: [
       {
@@ -275,7 +267,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     type: 'boolean',
     default: false,
     noDataExpression: true,
-    description: `Whether unsigned steps may sign in, submit a form or download through a form. ${LITERAL}`,
+    description: `Whether unsigned steps may sign in, submit a form or download through a form. With this on, whoever can set the steps drives the Site Login and, on a login page that copies typed values into the page, can read its password out through step outcomes. Turn it on only when everyone who can set the steps is trusted with that credential. ${LITERAL}`,
     displayOptions: only(['runSteps']),
   },
   {
@@ -308,12 +300,14 @@ export const OPTION_ENTRIES: INodeProperties[] = [
   {
     displayName: 'One-Time Code Workflow',
     name: 'codeWorkflowId',
-    type: 'string',
+    // n8n's workflow selector (as its Execute Workflow node), by list or by ID. A plain ID saved before arrives as text.
+    type: 'workflowSelector',
     default: '',
-    placeholder: 'e.g. 4nQkZp2r8XyT1bLm',
+    // A literal: the steps run whichever workflow it names (operations/runSteps.ts codeWorkflowOptions).
+    noDataExpression: true,
     description:
-      'ID of the workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits.',
-    displayOptions: only(['runSteps']),
+      'The workflow that returns the sign-in\'s one-time code when the sign-in takes it from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, gets requestedAt and returns one item whose code field holds 6 to 10 digits; publish it first. In Import Steps, a recorded sign-in then takes its code from it (a step document sets "source" itself); give Run Steps the same workflow. Must be set directly, not with an expression.',
+    displayOptions: only(['runSteps', 'importSteps']),
   },
   {
     displayName: 'Code Timeout (Seconds)',
@@ -322,7 +316,43 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     default: 120,
     typeOptions: { minValue: 1, maxValue: 300 },
     description: 'How long the sign-in waits for the One-Time Code Workflow. Max Seconds still bounds the whole run.',
-    displayOptions: only(['runSteps']),
+    displayOptions: only(['runSteps', 'importSteps']),
+  },
+  {
+    displayName: 'Version',
+    name: 'version',
+    type: 'number',
+    default: 1,
+    typeOptions: { minValue: 1, numberPrecision: 0 },
+    description:
+      'The version the imported steps get. 1 for a new bot. To change an approved bot, give one more than the highest version any row of its name has in the steps table (active, rejected or superseded), so the new steps are a new version under the same name and no two rows share a name and version: the import form does this. A version in a step document is never used.',
+    displayOptions: only(['importSteps']),
+  },
+  {
+    displayName: 'Approved Before Hand-Over',
+    name: 'approvedBeforeHandOver',
+    type: 'boolean',
+    default: false,
+    description:
+      'Whether this workflow approves the imported steps before it hands the workflow file over, as the import form does. When on, the notes in the workflow file do not ask to import and approve the steps.',
+    displayOptions: only(['importSteps']),
+  },
+  {
+    displayName: 'Import Form Name',
+    name: 'importFormName',
+    type: 'string',
+    default: '',
+    description:
+      'The name of the workflow whose form imports and approves these steps. The notes in the workflow file send the reader there to change the steps or sign them again. Empty: RPA: 5 Import a bot. The import form sets it.',
+    displayOptions: only(['importSteps']),
+  },
+  {
+    displayName: 'Import Form Address',
+    name: 'importFormAddress',
+    type: 'string',
+    default: '',
+    description: "The address of that form (http or https), shown beside its name in the workflow file's notes. Empty: no address. The import form sets it.",
+    displayOptions: only(['importSteps']),
   },
   {
     displayName: 'Login Breaker Reset Key',
@@ -331,7 +361,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     default: '',
     noDataExpression: true,
     description:
-      "Only used with a Site Login. A failed login stops all further logins with that credential. After fixing the account, change this value (for example to today's date) to allow the next login. Type the value, not an expression: it is the same for every item, and a login that fails stays blocked for the rest of the execution.",
+      "With a Site Login, a failed login stops further logins until its username, password or TOTP Secret is changed, which gets one try. If the login was right, or the account is unlocked now, change this value (for example to today's date) to allow the next login. Type it, not an expression: a login that fails stays blocked for the rest of the execution.",
     displayOptions: only(['runSteps', 'importSteps']),
   },
   {

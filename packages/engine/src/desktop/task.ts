@@ -4,16 +4,18 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Page } from 'playwright-core';
-import { shownFailure, stripShownPrefix } from '../classify/classify.js';
+import { stripShownPrefix } from '../classify/classify.js';
 import { CANCELLED, clampBudget, laneFailure, type LaneSuccess } from '../lane/script-lane.js';
 import type { TaskFailure } from '../lane/task.js';
 import { hasSignature, type TrustInput, type TrustResult } from '../lane/trust.js';
 import {
-  DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
-  UNSIGNED_REQUIRED, versionMismatch,
+  DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, desktopStepFailure, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, runnerAppNotAllowed, secretAppNotListed, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
+  UNSIGNED_REQUIRED, UNSIGNED_SECRET_VARIABLE, versionMismatch,
 } from '../messages.js';
 import { createMasker, type Masker } from '../secrets/mask.js';
 import { MAX_RENDERED } from '../secrets/render.js';
+import { registerSecretVars } from '../secrets/secret-fills.js';
+import { appFileName, appListed, type SecretTargets } from '../secrets/secret-targets.js';
 import { scriptHash, verifyScript } from '../sign.js';
 import { FILE_CHECK_FAILED_PREFIX } from '../steps/file-check.js';
 import { runBinaryProblem } from '../steps/limits.js';
@@ -24,7 +26,7 @@ import type { DesktopScript, ErrorCode, PortalPolicy, RunState, Script, Step, St
 import { connectRunner, RUNNER_CONNECT_TIMEOUT_MS, type Lease, type RunnerClient, type RunnerEndpoint } from './client.js';
 import {
   DesktopUnavailableError, ElementCannotActError, ElementNotFoundError, ElementNotUniqueError, ExpectedFileMissingError, NoRunError, PolicyRefusedError, PROTOCOL_VERSION,
-  RunnerBusyError, RunnerConnectError, RunnerDisconnectedError, RunnerTimeoutError,
+  RunnerBusyError, RunnerConnectError, RunnerDisconnectedError, RunnerError, RunnerTimeoutError, RUNNER_ERROR_CODES,
 } from './protocol.js';
 import { createDesktopSurface, DesktopDriftError, MIN_MASKED_TYPED, RunnerTooOldError, type DesktopSurface } from './surface.js';
 import './handlers.js';
@@ -37,6 +39,18 @@ export interface DesktopTaskInput {
   /** The RPA Desktop Runner credential. */
   runner: RunnerEndpoint;
   vars?: Record<string, string>;
+  /**
+   * The names in `vars` whose values are secrets (in n8n, the RPA Secret Variables credential): masked from the run start
+   * like the token, refused by every template except a fill whose value is exactly that one {{var.name}}, and typed only
+   * by signed steps.
+   */
+  secretVars?: string[];
+  /**
+   * Where the secret variables' values may be typed (in n8n, the RPA Secret Variables credential's May Be Typed Into):
+   * a run whose app.exe file name is not one of `apps` is refused (policy_violation) before it connects to the runner, so
+   * before the app starts. Absent: no limit.
+   */
+  secretTargets?: SecretTargets;
   budgetMs?: number;
   defaultStepTimeoutMs?: number;
   signal?: AbortSignal;
@@ -59,7 +73,6 @@ const BUSY_WAIT_MARGIN_MS = 15_000;
  * apply), so waiting the lease plus a margin lets the next run start instead of failing busy just before the lock frees.
  */
 export const defaultBusyWaitMs = (leaseMs: number): number => leaseMs + BUSY_WAIT_MARGIN_MS;
-export const DEFAULT_BUSY_WAIT_MS = defaultBusyWaitMs(DEFAULT_LEASE_MS);
 const BUSY_RETRY_MS = 1_000;
 /**
  * Appended when the runner no longer knows the run (no_run, or a heartbeat told so): the run always sends its own
@@ -112,6 +125,15 @@ export function checkDesktopTrust(raw: unknown, trust: TrustInput): TrustResult 
   return { ok: true, signed: false };
 }
 
+/**
+ * A runner message without its leading error code (`not_unique: `, `invalid params: `): the code names the kind of
+ * failure for the engine, and the rest is the runner's sentence for a person. Any other text comes back as it is.
+ */
+function withoutRunnerCode(message: string): string {
+  const code = [...Object.keys(RUNNER_ERROR_CODES), 'invalid params'].find((c) => message.startsWith(`${c}: `));
+  return code === undefined ? message : message.slice(code.length + 2);
+}
+
 /** The error code of a desktop failure, from the error the failing step met. */
 function codeOf(err: unknown, message: string): ErrorCode {
   if (err instanceof RunnerBusyError) return 'busy';
@@ -121,7 +143,7 @@ function codeOf(err: unknown, message: string): ErrorCode {
   ) {
     return 'runner_unavailable';
   }
-  if (err instanceof PolicyRefusedError) return 'policy_violation';
+  if (err instanceof PolicyRefusedError || message.endsWith(UNSIGNED_SECRET_VARIABLE)) return 'policy_violation';
   if (
     err instanceof ElementNotFoundError || err instanceof ElementNotUniqueError || err instanceof ElementCannotActError || err instanceof RunnerTimeoutError
     || err instanceof DesktopDriftError
@@ -177,7 +199,12 @@ function maskedOutputs(outputs: StepOutput[], script: DesktopScript, secrets: (s
  */
 export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTaskResult> {
   const t0 = Date.now();
-  const secrets = [input.runner?.token, input.trust.key];
+  const vars = input.vars ?? {};
+  // The step context's masker: the token, the key and the secret variables, which only a signed fill of exactly one of
+  // them may type (registerSecretVars). Every other masker of the run is built from `secrets`, which holds them all.
+  const stepMasker = createMasker([input.runner?.token, input.trust.key]);
+  registerSecretVars(input.secretVars, vars, stepMasker);
+  const secrets: (string | undefined)[] = [...stepMasker.secrets];
   let surface: DesktopSurface | undefined;
   /** A failure. `message` is masked for secrets here; a message that can carry runner text is masked for typed values first. */
   const fail = (code: ErrorCode, message: string, extra: Partial<TaskFailure> = {}): TaskFailure => {
@@ -195,6 +222,8 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
   const version = script.version;
   const hash = scriptHash(input.script);
   const ids = { ...(version !== undefined ? { version } : {}), hash };
+  // The secrets' owner limits where their values may be typed: an app not listed never starts with them.
+  if (input.secretTargets && !appListed(input.secretTargets, script.app.exe)) return fail('policy_violation', secretAppNotListed(appFileName(script.app.exe)), ids);
   for (const [name, value] of Object.entries(input.vars ?? {})) {
     if (typeof value === 'string' && value.length > MAX_RENDERED) return fail('incomplete', stripShownPrefix(inputTooLong(name.slice(0, 100), MAX_RENDERED)), ids);
   }
@@ -262,12 +291,18 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     } catch (err) {
       // not_found from app.launch is the executable missing on the runner's machine: an installation problem, not drift.
       if (err instanceof ElementNotFoundError) return fail('runner_unavailable', runnerAppMissing(script.app.exe.split(/[\\/]/).pop() ?? script.app.exe), ids);
+      // policy_refused from app.launch with the runner's exact "not in the runner's allowedApps" text is the app missing from its
+      // policy: name the way out instead. Other policy refusals (a writable folder, a changed file) keep the runner's own words.
+      if (err instanceof PolicyRefusedError) {
+        const exe = script.app.exe.split(/[\\/]/).pop() ?? script.app.exe;
+        if (err.message === `policy_refused: application "${exe}" is not in the runner's allowedApps`) return fail('policy_violation', runnerAppNotAllowed(exe), ids);
+      }
       throw err;
     }
 
     const ctx: StepContext = {
-      page: NO_PAGE, surface, script: script as unknown as Script, policy: NO_NETWORK, vars: input.vars ?? {},
-      masker: createMasker(secrets), defaultTimeoutMs: input.defaultStepTimeoutMs ?? 8000, violations: [],
+      page: NO_PAGE, surface, script: script as unknown as Script, policy: NO_NETWORK, vars,
+      masker: stepMasker, defaultTimeoutMs: input.defaultStepTimeoutMs ?? 8000, violations: [], signed: gate.signed,
     };
     const desktop = surface;
     desktop.trackStep(() => ctx.stepIndex);
@@ -285,7 +320,11 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
       const cause = desktop.errors.get(res.failure.index);
       const code = codeOf(cause, res.failure.message);
       const lost = lease?.error || cause instanceof NoRunError ? ` (${LEASE_LOST})` : '';
-      return fail(code, `${shownFailure(res.failure.intent, failure.message)}${lost}`, base);
+      // Every failed step starts with its number and intent. The runner's own words follow as they came (without its
+      // code); the engine's own wording follows without a limit or capture prefix, so the intent is not said twice.
+      const said = cause instanceof RunnerError ? withoutRunnerCode(failure.message) : stripShownPrefix(failure.message);
+      const shown = desktopStepFailure(res.failure.index + 1, res.failure.intent.replace(/\s+/g, ' ').trim(), said);
+      return fail(code, `${shown}${lost}`, base);
     }
     const tail = { ...ids, log: maskedLog(res.state.log, outputMasker(secrets, surface)), ...(res.state.submitted ? { submitted: true } : {}) };
     const o = override();

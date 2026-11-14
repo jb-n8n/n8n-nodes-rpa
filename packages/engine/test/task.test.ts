@@ -538,7 +538,7 @@ describe('runTask', () => {
       const model = fakeModel([SIGN_IN, done()]);
       const r = await runTask(firstRun({ model, output: { idPattern: 'N26-\\d{4}', requiredFields: ['title'] } }));
       expect(r).toMatchObject({ ok: false, code: 'drift_detected', lane: 'agent', message: FIELDS_UNSUPPORTED });
-      expect(FIELDS_UNSUPPORTED).toBe('repair cannot record field extraction yet: update the script by hand');
+      expect(FIELDS_UNSUPPORTED).toBe('repair cannot record field extraction yet: update the steps by hand');
       expect(model.invocations).toHaveLength(0);
       expect(portal.state().logins).toBe(0);
     });
@@ -549,7 +549,7 @@ describe('runTask', () => {
       if (base.ok) throw new Error('expected drift');
       expect(base).toMatchObject({ code: 'drift_detected', lane: 'script', failure: { intent: 'Open Recalls & Stop-Sales' } });
       // The drift detail is kept, with the reason it was not healed after it (like the pending-proposal case).
-      expect(base.message).toMatch(/^Open Recalls & Stop-Sales\b.+ \(repair cannot record field extraction yet: update the script by hand\)$/);
+      expect(base.message).toMatch(/^Open Recalls & Stop-Sales\b.+ \(repair cannot record field extraction yet: update the steps by hand\)$/);
       expect(base.message.endsWith(` (${FIELDS_UNSUPPORTED})`)).toBe(true);
       expect(base.screenshot?.length).toBeGreaterThan(1000); // the script lane's failure context is kept
       expect(base.log.map((e) => e.intent)).toContain('Sign in');

@@ -6,7 +6,7 @@ import {
   chromium, type Browser, type BrowserContext, type BrowserContextOptions, type CDPSession, type Page, type Request, type Response as PwResponse,
 } from 'playwright-core';
 import {
-  BLOCKED_REQUEST, BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, browserVersionMismatch,
+  BLOCKED_REQUEST, blockedActionAddress, blockedPost, blockedWrite, BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, browserVersionMismatch,
   CHROMIUM_MISSING, ENDPOINT_NOT_SECURE,
   noFreeBrowserSession, notHttp, offListSite, privateAddress, tokenRefused,
 } from '../messages.js';
@@ -31,6 +31,8 @@ export type { AllowedSubmit } from '../policy/submits.js';
 export const PLAYWRIGHT_VERSION = '1.63.0';
 /** How long connecting to a remote browser may take. */
 export const CONNECT_TIMEOUT_MS = 10_000;
+/** The same for an endpoint with a certificate fingerprint: its machine may sign a user in before it answers (5 to 16 s measured). */
+const PINNED_CONNECT_TIMEOUT_MS = 60_000;
 /** How long a Browser Server connection waits for a free session by default (BrowserEndpoint.sessionWaitMs). */
 export const SESSION_WAIT_MS = 60_000;
 /** The longest Session.idle() waits for pending address checks. */
@@ -176,7 +178,20 @@ export function violationMessage(v: Violation, policy: PortalPolicy): string {
     const host = v.host ?? u?.host;
     if (host) return offListSite(host, policy.navHosts);
   }
+  if (v.kind === 'write' && v.method && u && (u.protocol === 'http:' || u.protocol === 'https:')) return blockedWriteMessage(v.method.toUpperCase(), u);
   return BLOCKED_REQUEST;
+}
+
+/**
+ * A blocked write names its request as a Site Login line does (`METHOD host/path`): the path only, never the query or
+ * the fragment, with session segments masked. The caller masks secrets afterwards (script-lane override).
+ */
+function blockedWriteMessage(method: string, u: URL): string {
+  const path = maskSessionSegments(u.pathname).slice(0, 200);
+  const request = `${method} ${u.host}${path}`;
+  if (method === 'GET') return blockedActionAddress(request);
+  if (method === 'POST') return blockedPost(request, `POST ${u.host}${path.split('(…)').join('*')}`);
+  return blockedWrite(request);
 }
 
 /** Why a session was closed. Only the first reason is kept. */
@@ -437,7 +452,9 @@ async function connect(
   const options = { headers, timeout: CONNECT_TIMEOUT_MS, ...slowMo };
   if (e.mode === 'playwright') {
     const wsUrl = e.wsUrl as string;
-    return e.fingerprint ? connectPinned(wsUrl, e.fingerprint, (url) => connectServer(url, options)) : connectServer(wsUrl, options);
+    return e.fingerprint
+      ? connectPinned(wsUrl, e.fingerprint, (url) => connectServer(url, { ...options, timeout: PINNED_CONNECT_TIMEOUT_MS }))
+      : connectServer(wsUrl, options);
   }
   return chromium.connectOverCDP(e.wsUrl as string, options);
 }
@@ -454,7 +471,7 @@ async function connect(
  * tunnel (it takes one connection), so the connect fails.
  */
 async function connectPinned(wssUrl: string, fingerprint: string, connectTo: (wsUrl: string) => Promise<Browser>): Promise<Browser> {
-  const tunnel = await openPinnedTunnel(wssUrl, fingerprint, { handshakeTimeoutMs: CONNECT_TIMEOUT_MS });
+  const tunnel = await openPinnedTunnel(wssUrl, fingerprint, { handshakeTimeoutMs: PINNED_CONNECT_TIMEOUT_MS });
   try {
     const browser = await connectTo(tunnel.wsUrl);
     browser.on('disconnected', () => { void tunnel.close(); });

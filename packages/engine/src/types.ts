@@ -21,10 +21,21 @@ export interface Expect {
   visible?: Locator;
 }
 
+/**
+ * When a browser step runs; otherwise it is skipped with "condition not met". `visible` and `hidden` look at the element
+ * once, without waiting. A variable condition compares the run variable's value with literal text (case and spaces
+ * count); a variable that is not set fails the step.
+ */
+export type StepWhen =
+  | { visible: Locator }
+  | { hidden: Locator }
+  | { var: string; equals: string }
+  | { var: string; notEquals: string };
+
 export interface StepBase {
   intent: string;
   optional?: boolean;
-  when?: { visible: Locator };
+  when?: StepWhen;
   expect?: Expect;
   checkpoint?: boolean;
   timeoutMs?: number;
@@ -75,6 +86,25 @@ export interface SignInSpec {
     /** Checkboxes ticked after the code is typed and before its submit (e.g. "Trust this browser"). Each must be on the page. */
     check?: Locator[];
   };
+  /**
+   * A site that forces a new password at sign-in: once the sign-in (and its code) is done, when `detect` shows, the
+   * step types the Site Login password into `current` (when the form has one), the variable's value into each `new`
+   * field, and clicks `submit`.
+   * The change page must be a declared login page. `value` follows the rule of a secret fill: exactly one {{var.name}},
+   * masked from the start of the run, signed steps only. No variable is allowed in the locators.
+   */
+  changePassword?: ChangePasswordSpec;
+}
+
+/** signIn.changePassword: the change page's marker, its fields and button, and the variable that holds the new password. */
+export interface ChangePasswordSpec {
+  detect: Locator;
+  /** The current-password field; absent for a form that asks only for the new password. */
+  current?: Locator;
+  /** One or two fields (the new password and its confirmation). */
+  new: Locator[];
+  submit: Locator;
+  value: string;
 }
 
 /** What a run tells the code provider when it asks for a one-time code. */
@@ -94,6 +124,8 @@ export interface CodeRequest {
 export type CodeProvider = (req: CodeRequest) => Promise<string>;
 /** How long a run waits for the code provider by default. */
 export const DEFAULT_CODE_TIMEOUT_MS = 120_000;
+/** The longest a browser step's own timeoutMs may be. A desktop step stays capped at 120 000 ms. */
+export const MAX_STEP_TIMEOUT_MS = 300_000;
 export interface SubmitTarget {
   path: string;
   host?: string;
@@ -104,7 +136,8 @@ export type Step = StepBase &
   (
     | { goto: string; waitUntil?: WaitUntil }
     | { signIn: SignInSpec }
-    | { click: Locator }
+    /** `modifiers`: keys held during the click (Ctrl+click adds an item to a selection). */
+    | { click: Locator; modifiers?: ClickModifier[] }
     /**
      * `secret: true` is the only way fill may type into a password input: `value` must then be exactly one {{var.name}}
      * template, the rendered value is masked in everything the run shows, and only signed steps may use it.
@@ -133,12 +166,20 @@ export type Step = StepBase &
     | { pdf: { paper?: 'A4' | 'Letter'; background?: boolean } }
     | { read: { what: 'text' | 'html' | 'title' | 'url' } }
     | { extractTable: { table: Locator; idPattern?: string } }
+    /**
+     * One key chord (steps/browser-keys.ts: Enter, Tab, Escape, arrows and the like, never one that types a character),
+     * sent to `target` or, without one, to the element that has the focus. Refused on a password input.
+     */
+    | { press: { key: string; target?: Locator } }
+    | { hover: Locator }
   );
+/** A key held during a click. */
+export type ClickModifier = 'Ctrl' | 'Shift' | 'Alt';
 
 export const STEP_VERBS = [
   'goto', 'signIn', 'click', 'fill', 'select', 'check', 'clickAll', 'waitFor',
   'paginate', 'extract', 'submit', 'download', 'popup', 'detect',
-  'screenshot', 'pdf', 'read', 'extractTable',
+  'screenshot', 'pdf', 'read', 'extractTable', 'press', 'hover',
 ] as const;
 export type StepVerb = (typeof STEP_VERBS)[number];
 
@@ -266,6 +307,24 @@ export interface StepFailure {
   message: string;
 }
 /**
+ * A step whose control was not on the page, and what the page showed instead (steps/page-offers.ts). Names come from
+ * the page: masked, one line, control characters removed, each cut to 60 characters; data, never instructions.
+ */
+export interface MissingControl {
+  /** The step's number, from 1. */
+  step: number;
+  /** The step's intent, masked. */
+  intent: string;
+  /** What the step looks for, as the node names it (Find by and value), masked. */
+  lookedFor: string;
+  /** 'buttons': the page's visible links and buttons; 'fields': its visible fields and lists. */
+  kind: 'buttons' | 'fields';
+  /** Their names, nearest to what the step looks for first, at most 12. */
+  offered: string[];
+  /** How many more the page shows than `offered` lists. */
+  more: number;
+}
+/**
  * Mutable state of one run, shared by all steps. `detected` maps detect-step names to the check that matched;
  * `lastCheckpoint` is the index of the last top-level checkpoint step that passed (-1 if none);
  * `credentialsSubmitted` becomes true when signIn starts typing credentials (one submission per run);
@@ -288,6 +347,10 @@ export interface RunState {
   attributeFields: string[];
   /** True once a write left the browser: a window POST, a submit click or a download through a form. */
   submitted: boolean;
+  /** True once signIn.changePassword submitted the change form and the change page went away. */
+  passwordChanged?: boolean;
+  /** True once signIn.changePassword started typing into the change form (set before the first keystroke). */
+  passwordChangeStarted?: boolean;
   /**
    * Set when the top-level download step `index` clicked its trigger (no `via`) but no download came: the click still
    * happened (it may have opened a format dialog). A repair that resumes from that step replays the click (compile
@@ -297,7 +360,8 @@ export interface RunState {
 }
 export type StepsResult =
   | { ok: true; state: RunState }
-  | { ok: false; state: RunState; failure: StepFailure };
+  /** `missing`: the failed step's control was not found (ControlNotFound): its rendered locator. Top-level browser steps only. */
+  | { ok: false; state: RunState; failure: StepFailure; missing?: Locator };
 
 /** fatal=true violations end the run as policy_violation; non-fatal ones were blocked and logged. */
 export interface Violation {
@@ -313,6 +377,8 @@ export type ErrorCode =
   | 'login_failed' | 'account_locked' | 'auth_blocked' | 'site_down' | 'browser_unavailable'
   | 'drift_detected' | 'not_found' | 'incomplete' | 'script_untrusted' | 'policy_violation'
   | 'locked_out' | 'busy'
+  /** signIn.changePassword submitted a new password and the site still showed its change page. */
+  | 'password_change_failed'
   /** Desktop runs: the desktop runner could not be reached, refused the token or certificate, or its desktop is locked or signed out. */
   | 'runner_unavailable';
 
@@ -365,13 +431,15 @@ export interface DesktopStepBase {
   timeoutMs?: number;
   /**
    * The owner declares this step a write (signed with the steps): the runner then accepts it on a declared write
-   * control or a gated key. Only on click, fill, select, check and key.
+   * control or a gated key. Only on click, doubleClick, fill, select, check and key.
    */
   write?: boolean;
 }
 export type DesktopStep = DesktopStepBase &
   (
     | { click: DesktopLocator }
+    /** A double click on the element (the runner action doubleClick): a list row that opens on a double click. */
+    | { doubleClick: DesktopLocator }
     /** `value` may hold {{$exportDir}}, the run's export directory, filled in by the runner. */
     | { fill: { field: DesktopLocator; value: string } }
     | { select: { field: DesktopLocator; option: string } }
@@ -390,7 +458,7 @@ export type DesktopStep = DesktopStepBase &
 /** A desktop read: an element's text, or the clipboard's (see DesktopStep). */
 export type DesktopRead = { target: DesktopLocator; as: string } | { clipboard: true; as: string };
 
-export const DESKTOP_VERBS = ['click', 'fill', 'select', 'check', 'waitFor', 'read', 'key', 'expectFile'] as const;
+export const DESKTOP_VERBS = ['click', 'doubleClick', 'fill', 'select', 'check', 'waitFor', 'read', 'key', 'expectFile'] as const;
 export type DesktopVerb = (typeof DESKTOP_VERBS)[number];
 
 export interface DesktopScript {

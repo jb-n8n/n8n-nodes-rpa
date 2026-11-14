@@ -7,7 +7,7 @@ import { IMPORT_NEEDS_SITE_LOGIN } from '../src/messages.js';
 import { importSource } from '../src/import/index.js';
 import type { FlowNode, ImportItem, ImportOptions, ImportReport, ImportResult } from '../src/import/types.js';
 import { MAX_REPORT_ITEMS, MAX_UIPATH_ACTIVITIES, uipathImport } from '../src/import/uipath.js';
-import { readSelector, selectorToCandidates } from '../src/import/uipath-selector.js';
+import { readSelector } from '../src/import/uipath-selector.js';
 import { loginBlockEnd } from '../src/policy/validate.js';
 import { parseScript } from '../src/steps/parse.js';
 import type { Step } from '../src/types.js';
@@ -217,7 +217,7 @@ describe('UiPath projects', () => {
   });
 
   it('selector attributes map to locators', () => {
-    const c = selectorToCandidates;
+    const c = (selector: string, tagHint?: string) => readSelector(selector, tagHint).candidates;
     // aaname on a button, a link or a submit/button input: a role with an exact name.
     expect(c("<webctrl tag='BUTTON' aaname='Save' />")).toEqual([{ role: 'button', name: 'Save', exact: true }]);
     expect(c("<webctrl tag='A' aaname='Reports' />")).toEqual([{ role: 'link', name: 'Reports', exact: true }]);
@@ -573,7 +573,6 @@ describe('UiPath projects', () => {
       { kind: 'untranslated', activity: 'NGetText', displayName: "Get Text 'Total'", note: expect.stringContaining('ID Pattern') },
       { kind: 'email', to: 'ops@acme.example', subject: 'Done', displayName: 'Send Outlook Mail Message' },
       { kind: 'wait', seconds: 3, displayName: 'Pause' },
-      { kind: 'untranslated', activity: 'FlowDecision', displayName: 'Decide', note: expect.stringContaining('Flowchart') },
       { kind: 'untranslated', activity: 'UploadFile', displayName: 'Upload outside a scope', note: expect.stringContaining('Amazon') },
       { kind: 'writeSpreadsheet', path: 'out.xlsx', displayName: 'Write DataTable to Excel' },
       { kind: 'untranslated', activity: 'MysteryActivity', displayName: 'Mystery', note: expect.stringContaining('1 activity inside') },
@@ -581,6 +580,8 @@ describe('UiPath projects', () => {
     const items = r.report.items;
     for (const what of ['Comment', 'Assign', 'Disabled']) expect(items).toContainEqual(expect.objectContaining({ kind: 'dropped', what }));
     expect(items).toContainEqual(expect.objectContaining({ kind: 'untranslated', what: 'Catch Exception' }));
+    // A Flowchart's decision is a report item, not a flow node: a node would cut the UI steps around it into two runs.
+    expect(items).toContainEqual(expect.objectContaining({ at: 'Main.xaml: FlowDecision', kind: 'untranslated', what: 'Decide', reason: expect.stringContaining('the decision was not imported') }));
     expect(JSON.stringify(r)).not.toContain('Never');
   });
 });
@@ -694,5 +695,93 @@ describe('UiPath: identity-first sign-in with a code from a TOTP activity and "S
     // Other names stay untranslated activities.
     const other = importSource('uipath', xaml(card(`<ui:Hotpath DisplayName="Hot path" />${click('Save', "<webctrl tag='BUTTON' aaname='Save' />")}`)), OPTS);
     expect(other.report.items).toContainEqual(expect.objectContaining({ kind: 'untranslated', what: 'Hot path' }));
+  });
+});
+
+describe('UiPath: hover and clicks with keys held', () => {
+  const run = (body: string) => importSource('uipath', xaml(card(body)), { name: 'keys', hasSiteLogin: false });
+  const steps = (r: ImportResult) => r.drafts.flatMap((d) => d.script.steps);
+  const untranslated = (r: ImportResult) => r.report.items.filter((i) => i.kind === 'untranslated').map((i) => [i.what, i.reason]);
+
+  it('a UiPath click with Ctrl held imports as a click with modifiers', () => {
+    const r = run([
+      click('Beta', "<webctrl tag='BUTTON' aaname='Beta' />", ' KeyModifiers="Ctrl"'),
+      click('Gamma', "<webctrl tag='BUTTON' aaname='Gamma' />", ' MouseButton="BTN_LEFT" KeyModifiers="Shift, Ctrl"'),
+      click('Delta', "<webctrl tag='BUTTON' aaname='Delta' />", ' KeyModifiers="Alt"'),
+      click('Search', "<webctrl tag='BUTTON' aaname='Search' />", ' MouseButton="BTN_LEFT" KeyModifiers="None"'),
+    ].join(''));
+    expect(errors(r)).toEqual([]);
+    expect(untranslated(r)).toEqual([]);
+    expect(steps(r).slice(1)).toEqual([
+      { intent: 'Click Beta', click: { role: 'button', exact: true, name: 'Beta' }, modifiers: ['Ctrl'] },
+      { intent: 'Click Gamma', click: { role: 'button', exact: true, name: 'Gamma' }, modifiers: ['Ctrl', 'Shift'] },
+      { intent: 'Click Delta', click: { role: 'button', exact: true, name: 'Delta' }, modifiers: ['Alt'] },
+      { intent: 'Click Search', click: { role: 'button', exact: true, name: 'Search' } },
+    ]);
+    // With an Expected File a click with keys held stays a click, even named like an export: the download step holds no keys.
+    const dl = importSource('uipath', xaml(card([
+      click('Export', "<webctrl tag='BUTTON' aaname='Export' />", ' KeyModifiers="Ctrl"'),
+      click('Search', "<webctrl tag='BUTTON' aaname='Search' />"),
+    ].join(''))), { name: 'keys', hasSiteLogin: false, download: { mime: ['text/csv'], check: ERP_CHECK } });
+    expect(dl.drafts[0].script.steps.slice(1)).toMatchObject([{ click: { name: 'Export' }, modifiers: ['Ctrl'] }, { download: { trigger: { name: 'Search' } } }]);
+  });
+
+  it('a UiPath right-click is reported as untranslated, not imported as a click', () => {
+    const r = run([
+      click('Row', "<webctrl tag='BUTTON' aaname='Row' />", ' MouseButton="BTN_RIGHT"'),
+      click('Wheel', "<webctrl tag='BUTTON' aaname='Wheel' />", ' MouseButton="BTN_MIDDLE" KeyModifiers="Ctrl"'),
+      click('Start', "<webctrl tag='BUTTON' aaname='Start' />", ' KeyModifiers="Ctrl, Win"'),
+      click('Search', "<webctrl tag='BUTTON' aaname='Search' />"),
+    ].join(''));
+    expect(errors(r)).toEqual([]);
+    // Each one is a gap in the flow, as any other untranslated browser activity is; only the plain click is a step.
+    expect(steps(r).filter((s) => !('goto' in s)).map((s) => s.intent)).toEqual(['Click Search']);
+    expect(untranslated(r)).toEqual([
+      ["Click 'Row'", 'NClick: a right-button click is not a step: browser steps click with the left button'],
+      ["Click 'Wheel'", 'NClick: a middle-button click is not a step: browser steps click with the left button'],
+      ["Click 'Start'", 'NClick: a click with win held down is not a step: a browser click may hold Ctrl, Shift and Alt'],
+    ]);
+  });
+
+  it('a UiPath hover inside a sign-in leaves it one signIn step, and no typed value survives', () => {
+    const hover = `<uix:NHover DisplayName="Hover 'Help'"><uix:NHover.Target>${target("<webctrl tag='A' aaname='Help' />")}</uix:NHover.Target></uix:NHover>`;
+    const body = (at: 'user' | 'password' | 'submit') => [
+      typeInto('Username', "<webctrl tag='INPUT' aaname='Username' />", SECRETS.username),
+      ...(at === 'user' ? [hover] : []),
+      typeInto('Password', "<webctrl tag='INPUT' type='password' aaname='Password' />", SECRETS.password),
+      ...(at === 'password' ? [hover] : []),
+      click('Sign in', "<webctrl tag='BUTTON' aaname='Sign in' />"),
+      ...(at === 'submit' ? [hover] : []),
+      typeInto('Verification code', "<webctrl tag='INPUT' aaname='Verification code' />", '482913'),
+      click('Verify', "<webctrl tag='BUTTON' aaname='Verify' />"),
+      click('Reports', "<webctrl tag='A' aaname='Reports' />"),
+    ].join('');
+    const verbs = { user: ['goto', 'hover', 'signIn', 'click'], password: ['goto', 'signIn', 'hover', 'click'], submit: ['goto', 'signIn', 'click'] };
+    for (const at of ['user', 'password', 'submit'] as const) {
+      const r = importSource('uipath', xaml(card(body(at), 'https://portal.example.com/login')), { name: 'hover-sign-in', hasSiteLogin: true, secrets: SECRETS });
+      expect(errors(r), at).toEqual([]);
+      const all = r.drafts.flatMap((d) => d.script.steps);
+      expect(all.map(verbOf), at).toEqual(verbs[at]);
+      expect((all.find((s) => 'signIn' in s) as S<'signIn'>).signIn.totp, at).toBeDefined();
+      for (const v of [SECRETS.username, SECRETS.password, '482913']) expect(JSON.stringify(r), at).not.toContain(v);
+    }
+  });
+
+  it('a UiPath hover imports as hover', () => {
+    const r = run([
+      `<uix:NHover DisplayName="Hover 'Reports'"><uix:NHover.Target>${target("<webctrl tag='A' aaname='Reports' />")}</uix:NHover.Target></uix:NHover>`,
+      click('Sales', "<webctrl tag='A' aaname='Sales' />"),
+      `<ui:Hover DisplayName="Hover 'A  Tools'"><ui:Hover.Target><ui:Target Selector="&lt;webctrl tag='A' aaname='Tools' /&gt;" /></ui:Hover.Target></ui:Hover>`,
+      `<uix:NHover DisplayName="Hover 'Nowhere'"><uix:NHover.Target><uix:TargetAnchorable /></uix:NHover.Target></uix:NHover>`,
+    ].join(''));
+    expect(errors(r)).toEqual([]);
+    expect(untranslated(r)).toEqual([]);
+    expect(steps(r).slice(1)).toEqual([
+      { intent: 'Hover over Reports', hover: { role: 'link', exact: true, name: 'Reports' } },
+      { intent: 'Click Sales', click: { role: 'link', exact: true, name: 'Sales' } },
+      { intent: 'Hover over Tools', hover: { role: 'link', exact: true, name: 'Tools' } },
+    ]);
+    // A hover without a usable target is dropped, as a click without one is.
+    expect(r.report.items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Hover over Nowhere', reason: expect.stringContaining('NHover: ') }));
   });
 });

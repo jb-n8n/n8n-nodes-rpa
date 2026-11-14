@@ -9,7 +9,7 @@
 name: n8n-rpa
 
 # Shared hardening, merged into services with `<<: *hardened`: no privilege escalation, no Linux capabilities.
-# browser repeats the two keys literally (README.md quotes that service verbatim); keep them in step.
+# browser repeats the two keys literally (docs/reference/operator.md quotes that service verbatim); keep them in step.
 x-hardened: &hardened
   security_opt: [no-new-privileges:true]
   cap_drop: [ALL]
@@ -58,7 +58,7 @@ services:
     # Chromium runs with --no-sandbox as pwuser (Playwright's default), so it needs no capabilities and no setuid
     # helper. The run-server is installed in the image from a lockfile (images/browser/Dockerfile): nothing is
     # downloaded at start.
-    # Same values as x-hardened, spelled out because README.md quotes this service line for line (readme.test.ts).
+    # Same values as x-hardened, spelled out because docs/reference/operator.md quotes this service line for line (readme.test.ts).
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     mem_limit: 2g

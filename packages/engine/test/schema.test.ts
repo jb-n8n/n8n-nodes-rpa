@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { importSource } from '../src/import/index.js';
 import type { ImportOptions, ImportSource } from '../src/import/types.js';
 import { parseScript } from '../src/steps/parse.js';
-import { STEP_VERBS } from '../src/types.js';
+import { MAX_STEP_TIMEOUT_MS, STEP_VERBS } from '../src/types.js';
 import { baselineScript, erpScript, ERP_CHECK, fioriScript, reportScript, SAP_VARS, SECRETS, SIGN_IN_STEPS, webguiScript } from './helpers.js';
 
 const ROOT = new URL('../../../', import.meta.url);
@@ -52,6 +52,12 @@ function templateDocuments(): { at: string; doc: unknown }[] {
     }
   }
   return out;
+}
+
+/** The sample step documents the guides tell a person to upload as they are (docs/samples). */
+function sampleDocuments(): { at: string; doc: unknown }[] {
+  const dir = new URL('docs/samples/', ROOT);
+  return readdirSync(dir).filter((f) => f.endsWith('.steps.json')).map((f) => ({ at: `docs/samples/${f}`, doc: JSON.parse(readFileSync(new URL(f, dir), 'utf8')) as unknown }));
 }
 
 /** The UiPath fixture project, zipped as Studio exports it. */
@@ -102,7 +108,8 @@ const EVERY_FIELD = {
   interrupts: [{ target: { css: '#cookie', within: { role: 'dialog' } }, click: { role: 'button', name: 'OK', exact: true } }],
   steps: [
     { intent: 'Open', goto: `${URL_BASE}/start`, waitUntil: 'networkidle', timeoutMs: 100, checkpoint: false, optional: false },
-    { intent: 'Sign in', signIn: { username: { label: 'User' }, next: { role: 'button', name: 'Next' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Go' }, totp: { field: { label: 'Code' }, submit: { text: 'Verify' } } } },
+    { intent: 'Sign in', signIn: { username: { label: 'User' }, next: { role: 'button', name: 'Next' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Go' }, totp: { field: { label: 'Code' }, submit: { text: 'Verify' } },
+      changePassword: { detect: { role: 'heading', name: 'Change your password' }, current: { label: 'Current password' }, new: [{ label: 'New password' }, { label: 'Confirm' }], submit: { role: 'button', name: 'Change' }, value: '{{ var.newPassword }}' } } },
     { intent: 'Click', click: { role: 'link', name: '', exact: false, frame: 'iframe#a', within: { testId: 'nav', within: { css: 'body' } }, fallbacks: [{ css: '#a' }, { text: 'A', exact: true }, { label: 'L' }, { testId: 't' }, { role: 'tab', within: { css: 'nav' } }] }, when: { visible: { css: '#c', fallbacks: [{ css: '#d' }] } }, expect: { url: '/next', heading: 'Next', visible: { text: 'Done' } } },
     { intent: 'Fill', fill: { field: { label: 'Name' }, value: '' } },
     { intent: 'Select', select: { field: { label: 'Kind' }, value: '{{var.kind}}' } },
@@ -110,6 +117,11 @@ const EVERY_FIELD = {
     { intent: 'Open one by variable', click: { role: 'link', name: '{{var.item}}' } },
     { intent: 'Open one by its text', click: { text: '{{var.item}} details', within: { role: 'region', name: '{{ var.region }}' }, fallbacks: [{ role: 'link', name: '{{var.item}}' }, { text: '{{var.item}}' }] }, when: { visible: V_TEXT }, expect: { visible: V_ROLE } },
     { intent: 'Download by variable path', download: { trigger: { text: 'Export' }, via: { path: '/export/{{var.id}}' } } },
+    { intent: 'Close the banner while it shows', click: { css: '#banner-close' }, when: { hidden: { text: 'Loading {{var.item}}' } } },
+    { intent: 'Pick the full report', click: { text: 'Full' }, when: { var: 'mode', equals: 'full' } },
+    { intent: 'Pick the short report', click: { text: 'Short' }, when: { var: '_mode2', notEquals: '' } },
+    { intent: 'Read more pages when asked', when: { var: 'mode', equals: 'all' }, paginate: { next: { text: 'Next' }, until: 'absent', max: 2, each: [{ intent: 'Open', click: loc }] } },
+    { intent: 'Export each page while more show', when: { visible: { text: 'More' } }, paginate: { next: { text: 'Next' }, until: 'absent', max: 2, each: [{ intent: 'Export', download: { trigger: loc } }] } },
     { intent: 'Check', check: { field: { label: 'Agree' }, checked: false } },
     { intent: 'Check default', check: { field: { label: 'Agree' } } },
     { intent: 'Click all', clickAll: { target: loc, max: 100 } },
@@ -137,6 +149,11 @@ const EVERY_FIELD = {
     { intent: 'Read', read: { what: 'url' } },
     { intent: 'Table', extractTable: { table: loc, idPattern: 'T\\d' } },
     { intent: 'Table without id', extractTable: { table: loc } },
+    { intent: 'Search', press: { key: 'Enter', target: { label: 'Search', fallbacks: [{ text: '{{var.field}}' }] } } },
+    { intent: 'Next field', press: { key: 'Ctrl+Alt+Shift+F12' } },
+    { intent: 'Select all', press: { key: 'Ctrl+A' }, when: { var: 'mode', equals: 'all' } },
+    { intent: 'Open the menu', hover: { role: 'button', name: '{{var.menu}}', within: { css: 'nav' } } },
+    { intent: 'Pick another', click: { text: 'Beta' }, modifiers: ['Ctrl', 'Shift', 'Alt'] },
   ],
 };
 
@@ -152,19 +169,26 @@ describe('the step-document JSON Schema', () => {
     expect(verbs).toEqual([...STEP_VERBS]);
   });
 
-  it('every template, README example and import fixture draft validates against the step schema', () => {
+  it("the schema's step timeoutMs maximum is MAX_STEP_TIMEOUT_MS", () => {
+    const step = (schema.definitions as Record<string, { properties: Record<string, { maximum?: number }> }>).step;
+    expect(step.properties.timeoutMs.maximum).toBe(MAX_STEP_TIMEOUT_MS);
+  });
+
+  it('every template, steps reference example and import fixture draft validates against the step schema', () => {
     const helpers = [baselineScript(URL_BASE), reportScript(URL_BASE), webguiScript(URL_BASE), fioriScript(URL_BASE), erpScript(URL_BASE), { startUrl: URL_BASE, steps: SIGN_IN_STEPS }];
     const docs: { at: string; doc: unknown }[] = [
       ...templateDocuments(),
-      ...jsonBlocks('README.md').map((doc, i) => ({ at: `README block ${i}`, doc })),
+      ...['README.md', 'docs/reference/steps.md', 'docs/guides/move-a-bot.md'].flatMap((page) => jsonBlocks(page).map((doc, i) => ({ at: `${page} block ${i}`, doc }))),
       ...jsonBlocks('docs/onboarding/sap-lookalike.md').map((doc, i) => ({ at: `sap-lookalike block ${i}`, doc })),
+      ...sampleDocuments(),
       ...fixtureDrafts(),
       ...helpers.map((doc, i) => ({ at: `test helper ${i}`, doc })),
       { at: 'every field', doc: EVERY_FIELD },
     ];
     // Templates map their steps from the playwright_steps Data Table, so none carries a literal document today.
     expect(templateDocuments()).toEqual([]);
-    expect(jsonBlocks('README.md').length).toBeGreaterThanOrEqual(1);
+    expect(sampleDocuments().map((d) => d.at)).toContain('docs/samples/sandbox-line-items.steps.json');
+    expect(jsonBlocks('docs/reference/steps.md').length).toBeGreaterThanOrEqual(5);
     // chrome and playwright: one draft each per variant; uipath: one per browser sequence per variant.
     expect(fixtureDrafts().length).toBeGreaterThanOrEqual(6);
     for (const { at, doc } of docs) {
@@ -195,6 +219,7 @@ describe('the step-document JSON Schema', () => {
       ['waitUntil on a click', doc(step({ click: loc, waitUntil: 'load' }))],
       ['a bad waitUntil', doc(step({ goto: `${URL_BASE}/a`, waitUntil: 'idle' }))],
       ['timeoutMs below 100', doc(step({ click: loc, timeoutMs: 50 }))],
+      ['timeoutMs above 300000', doc(step({ click: loc, timeoutMs: 300_001 }))],
       ['a locator with two kinds', doc(step({ click: { role: 'button', css: '#b' } }))],
       ['a locator with no kind', doc(step({ click: { name: 'Go' } }))],
       ['an empty locator value', doc(step({ click: { text: '' } }))],
@@ -227,7 +252,31 @@ describe('the step-document JSON Schema', () => {
       ['a read of cookies', doc(step({ read: { what: 'cookies' } }))],
       ['optional as a string', doc(step({ click: loc, optional: 'yes' }))],
       ['a when without visible', doc(step({ click: loc, when: {} }))],
+      ['a when with two forms', doc(step({ click: loc, when: { visible: loc, hidden: loc } }))],
+      ['a when with a locator and a variable', doc(step({ click: loc, when: { visible: loc, var: 'm', equals: 'x' } }))],
+      ['a when with an unknown key', doc(step({ click: loc, when: { hidden: loc, script: 'x' } }))],
+      ['a when with equals beside a locator', doc(step({ click: loc, when: { hidden: loc, equals: 'x' } }))],
+      ['a when variable without equals or notEquals', doc(step({ click: loc, when: { var: 'm' } }))],
+      ['a when variable with both equals and notEquals', doc(step({ click: loc, when: { var: 'm', equals: 'a', notEquals: 'b' } }))],
+      ['a when variable name that starts with a digit', doc(step({ click: loc, when: { var: '1m', equals: 'x' } }))],
+      ['a when variable name written as a template', doc(step({ click: loc, when: { var: '{{var.m}}', equals: 'x' } }))],
+      ['a when value that holds {{', doc(step({ click: loc, when: { var: 'm', equals: '{{var.other}}' } }))],
+      ['a when notEquals that is not a string', doc(step({ click: loc, when: { var: 'm', notEquals: 1 } }))],
       ['an unknown expect key', doc(step({ click: loc, expect: { title: 'T' } }))],
+      ['a press of a letter', doc(step({ press: { key: 'a' } }))],
+      ['a press of a paste', doc(step({ press: { key: 'Ctrl+V' } }))],
+      ['a press of a Windows-key chord', doc(step({ press: { key: 'Win+R' } }))],
+      ['a press of an empty key', doc(step({ press: { key: '' } }))],
+      ['a press of a variable key', doc(step({ press: { key: '{{var.key}}' } }))],
+      ['a press with modifiers out of order', doc(step({ press: { key: 'Shift+Ctrl+Tab' } }))],
+      ['a press without a key', doc(step({ press: { target: loc } }))],
+      ['a press with an unknown key', doc(step({ press: { key: 'Tab', text: 'x' } }))],
+      ['a hover that is not a locator', doc(step({ hover: 'Reports' }))],
+      ['empty modifiers', doc(step({ click: loc, modifiers: [] }))],
+      ['repeated modifiers', doc(step({ click: loc, modifiers: ['Ctrl', 'Ctrl'] }))],
+      ['an unknown modifier', doc(step({ click: loc, modifiers: ['Meta'] }))],
+      ['modifiers on a hover', doc(step({ hover: loc, modifiers: ['Ctrl'] }))],
+      ['modifiers on a press', doc(step({ press: { key: 'Enter' }, modifiers: ['Ctrl'] }))],
       ['a secret fill with text around the template', doc(step({ fill: { field: loc, value: 'x{{var.p}}', secret: true } }))],
       ['a secret fill with a literal', doc(step({ fill: { field: loc, value: 'literal', secret: true } }))],
       ['a secret that is not a boolean', doc(step({ fill: { field: loc, value: '{{var.p}}', secret: 'yes' } }))],
@@ -243,11 +292,33 @@ describe('the step-document JSON Schema', () => {
         ['totp.via', { username: loc, password: loc, submit: loc, totp: { field: loc, submit: loc, via: [loc, V_ROLE] } }],
         ['totp.check', { username: loc, password: loc, submit: loc, totp: { field: loc, submit: loc, check: [V_TEXT] } }],
       ].map(([k, signIn]) => [`a {{var.*}} in signIn.${k as string}`, doc(step({ signIn }))] as [string, unknown]),
+      ...((cp) => [
+        ['a changePassword without a value', { detect: loc, current: loc, new: [loc], submit: loc }],
+        ['a changePassword with a literal value', { ...cp, value: 'Literal-Pass-2026' }],
+        ['a changePassword with two variables', { ...cp, value: '{{var.a}}{{var.b}}' }],
+        ['a changePassword with three new fields', { ...cp, new: [loc, loc, loc] }],
+        ['a changePassword with no new field', { ...cp, new: [] }],
+        ['a changePassword with an unknown key', { ...cp, confirm: loc }],
+        ['a changePassword locator in a frame', { ...cp, current: { label: 'Current', frame: 'iframe' } }],
+        ['a {{var.*}} in changePassword.detect', { ...cp, detect: V_TEXT }],
+        ['a {{var.*}} in changePassword.new', { ...cp, new: [loc, V_ROLE] }],
+        ['a {{var.*}} in changePassword.submit', { ...cp, submit: { css: '#go', within: V_ROLE } }],
+      ].map(([what, changePassword]) => [what, doc(step({ signIn: { username: loc, password: loc, submit: loc, changePassword } }))] as [string, unknown]))(
+        { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' }),
+      ['a changePassword without new', doc(step({ signIn: { username: loc, password: loc, submit: loc, changePassword: { detect: loc, submit: loc, value: '{{var.pw}}' } } }))],
+      ['a changePassword outside signIn', doc(step({ click: loc, changePassword: { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' } }))],
+      ['a changePassword inside totp', doc(step({ signIn: { username: loc, password: loc, submit: loc, totp: { field: loc, submit: loc, changePassword: { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' } } } }))],
       ['a {{var.*}} in a submit button', doc(step({ submit: { button: V_ROLE, path: '/save' } }))],
       ['a {{var.*}} in a submit path', doc(step({ submit: { button: loc, path: '/save/{{var.id}}' } }))],
       ['a {{var.*}} in a download trigger', doc(step({ download: { trigger: V_TEXT } }))],
       ['a {{var.*}} in a download file check', doc(step({ download: { trigger: loc, check: { name: '^{{var.month}}' } } }))],
       ['a {{var.*}} in when.visible of a download', doc(step({ download: { trigger: loc }, when: { visible: V_TEXT } }))],
+      ['a {{var.*}} in when.hidden of a submit', doc(step({ submit: { button: loc, path: '/save' }, when: { hidden: V_ROLE } }))],
+      ['a variable condition on a signIn', doc(step({ signIn: { username: loc, password: loc, submit: loc }, when: { var: 'm', equals: 'x' } }))],
+      ['a variable condition on a submit', doc(step({ submit: { button: loc, path: '/save' }, when: { var: 'm', notEquals: 'x' } }))],
+      ['a variable condition on a paginate that holds a submit', doc(step({ when: { var: 'm', equals: 'x' }, paginate: { next: loc, until: 'absent', max: 1, each: [step({ click: loc }), step({ submit: { button: loc, path: '/save' } })] } }))],
+      ['a variable condition on a paginate that holds a download', doc(step({ when: { var: 'm', notEquals: 'x' }, paginate: { next: loc, until: 'absent', max: 1, each: [step({ download: { trigger: loc } })] } }))],
+      ['a variable condition on a download inside paginate', doc(step({ paginate: { next: loc, until: 'absent', max: 2, each: [step({ download: { trigger: loc }, when: { var: 'm', equals: 'x' } })] } }))],
       ['a {{var.*}} in expect.visible of a submit', doc(step({ submit: { button: loc, path: '/save' }, expect: { visible: { css: '#ok', fallbacks: [V_ROLE] } } }))],
       ['a {{var.*}} in a download inside paginate', doc(step({ paginate: { next: loc, until: 'absent', max: 2, each: [step({ download: { trigger: V_ROLE } })] } }))],
       // A {{var.*}} where the run never renders it: anything but a role locator's name and a text locator's text.
@@ -269,6 +340,34 @@ describe('the step-document JSON Schema', () => {
     }
   });
 
+  it('schema and parseScript agree on a {{var.*}} in a paginate\'s own locators: refused over a write, accepted over a read-only body', () => {
+    const own: [string, Record<string, unknown>][] = [
+      ['when.visible text', { when: { visible: V_TEXT } }],
+      ['when.visible role', { when: { visible: V_ROLE } }],
+      ['when.visible within', { when: { visible: { css: '#t', within: V_ROLE } } }],
+      ['when.visible fallbacks', { when: { visible: { css: '#t', fallbacks: [V_TEXT] } } }],
+      ['expect.visible', { expect: { visible: V_ROLE } }],
+      ['next', { next: V_ROLE }],
+      ['next within', { next: { text: 'Next', within: V_TEXT } }],
+      ['next fallbacks', { next: { text: 'Next', fallbacks: [V_ROLE] } }],
+    ];
+    const bodies: [string, unknown, boolean][] = [
+      ['submit', { intent: 's', submit: { button: loc, path: '/save' } }, false],
+      ['download', { intent: 'd', download: { trigger: loc } }, false],
+      ['a read-only body', { intent: 'c', click: V_ROLE }, true],
+    ];
+    for (const [where, { next, ...rest }] of own) for (const [body, each, ok] of bodies) {
+      const d = { startUrl: URL_BASE, steps: [{ intent: 'p', ...rest, paginate: { next: next ?? loc, until: 'absent', max: 2, each: [{ intent: 'r', click: loc }, each] } }] };
+      expect(parses(d), `parseScript, ${where} over ${body}`).toBe(ok);
+      expect(validateDocument(d), `the schema, ${where} over ${body}: ${errorsOf(validateDocument)}`).toBe(ok);
+    }
+  });
+
+  it('the schema accepts a changePassword without current, as parseScript does', () => {
+    const d = { startUrl: URL_BASE, steps: [{ intent: 'x', signIn: { username: loc, password: loc, submit: loc, changePassword: { detect: loc, new: [loc, loc], submit: loc, value: '{{var.pw}}' } } }] };
+    expect(parses(d)).toBe(true);
+    expect(validateDocument(d), errorsOf(validateDocument)).toBe(true);
+  });
   it('the schema accepts a secret fill with one var template, spaces included, and secret: false with any value', () => {
     const doc = (value: string, secret: boolean) => ({ startUrl: URL_BASE, steps: [{ intent: 'x', fill: { field: loc, value, secret } }] });
     for (const d of [doc('{{var.pw}}', true), doc('{{ var.pw }}', true), doc('literal', false)]) {
@@ -277,7 +376,7 @@ describe('the step-document JSON Schema', () => {
     }
   });
 
-  it('the rules the schema cannot express are the known gaps (the README lists them)', () => {
+  it('the rules the schema cannot express are the known gaps (docs/reference/steps.md lists them)', () => {
     const doc = (...steps: unknown[]) => ({ startUrl: URL_BASE, steps });
     const gaps: [string, unknown][] = [
       // 1. regular expressions are only checked to be non-empty strings
@@ -292,17 +391,20 @@ describe('the step-document JSON Schema', () => {
       ['an intent of 101 emoji (202 code units)', doc({ intent: '😀'.repeat(101), click: loc })],
       // 6. names that start with $ are reserved in templates ({{$exportDir}} belongs to desktop step sets)
       ['a {{$...}} template', doc({ intent: 'x', fill: { field: loc, value: '{{$now}}' } })],
+      // 7. a when variable condition may not test a variable that a secret fill types (a rule across steps)
+      ['a condition on a secret fill variable', doc({ intent: 'x', fill: { field: loc, value: '{{var.pw}}', secret: true } }, { intent: 'y', click: loc, when: { var: 'pw', equals: 'x' } })],
+      ['a condition on the new-password variable', doc({ intent: 'x', signIn: { username: loc, password: loc, submit: loc, changePassword: { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' } } }, { intent: 'y', click: loc, when: { var: 'pw', equals: 'x' } })],
     ];
     for (const [what, d] of gaps) {
       expect(parses(d), `parseScript accepts ${what}`).toBe(false);
       expect(validateDocument(d), `the schema now rejects ${what}: move it to the invalid sample`).toBe(true);
     }
     // 4, the other way round: the schema is stricter. WHATWG URL parsing reads `http:host` as http://host/, which
-    // parseScript accepts; the schema's pattern wants the two slashes (the README says so).
+    // parseScript accepts; the schema's pattern wants the two slashes (docs/reference/steps.md says so).
     for (const startUrl of ['http:erp.example.com/start', 'HTTPS:erp.example.com']) {
       const d = { startUrl, steps: [{ intent: 'x', click: loc }] };
       expect(parses(d), `parseScript refuses ${startUrl}`).toBe(true);
-      expect(validateDocument(d), `the schema now accepts ${startUrl}: drop the "stricter" sentence from the README`).toBe(false);
+      expect(validateDocument(d), `the schema now accepts ${startUrl}: drop the "stricter" sentence from docs/reference/steps.md`).toBe(false);
     }
   });
 });

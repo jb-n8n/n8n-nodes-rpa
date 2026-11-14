@@ -261,7 +261,7 @@ cmd_fingerprint() {
   load_outputs
   local out lines
   out="$(ssm_run 'RPA fingerprints' "& 'C:\\Program Files\\RPA Runner\\scripts\\Show-RpaConnection.ps1'")"
-  lines="$(printf '%s\n' "$out" | tr -d '\r' | LC_ALL=C grep -E "^(Runner|Browser) fingerprint: ($FINGERPRINT_PATTERN|not known yet)\$" || true)"
+  lines="$(printf '%s\n' "$out" | tr -d '\r' | LC_ALL=C grep -E "^(Runner|Browser) fingerprint: ($FINGERPRINT_PATTERN|not known yet( \\(the program has not started\\))?)\$" || true)"
   [ -n "$lines" ] || fail "Show-RpaConnection.ps1 printed no fingerprint: is the package installed? (status, install)"
   printf '%s\n' "$lines"
   case "$lines" in *"not known yet"*) fail "a fingerprint is not known yet: that program has not started (rpa-runner signs in about a minute after boot)" ;; esac

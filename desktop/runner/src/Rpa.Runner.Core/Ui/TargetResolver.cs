@@ -25,15 +25,25 @@ public sealed class TargetResolver
 
     public static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
 
-    /// <summary>Polls until a candidate wins or the timeout passes, then throws not_found or not_unique.</summary>
+    /// <summary>How long the primary target may match more than one element on every attempt before Resolve answers
+    /// not_unique without waiting out the timeout. A window that is still drawing can show two matches for a moment; a
+    /// locator that still matches several after this long is ambiguous.</summary>
+    public static readonly TimeSpan NotUniqueAfter = TimeSpan.FromSeconds(3);
+
+    /// <summary>Polls until a candidate wins or the timeout passes, then throws not_found or not_unique. Throws
+    /// not_unique earlier once the primary target has matched several elements on every attempt for
+    /// <see cref="NotUniqueAfter"/>.</summary>
     public Resolution Resolve(RunState run, Target target, TimeSpan timeout, CancellationToken ct = default)
     {
         var deadline = _time.GetUtcNow() + timeout;
+        DateTimeOffset? severalSince = null;
         while (true)
         {
             var attempt = TryResolve(run, target);
             if (attempt.Winner is not null) return attempt.Winner;
-            if (_time.GetUtcNow() >= deadline) throw attempt.Failure();
+            var now = _time.GetUtcNow();
+            severalSince = attempt.PrimaryCount > 1 ? severalSince ?? now : null;
+            if (now >= deadline || now - severalSince >= NotUniqueAfter) throw attempt.Failure();
             ct.ThrowIfCancellationRequested();
             Thread.Sleep(PollInterval);
         }
@@ -97,7 +107,7 @@ public sealed class TargetResolver
     public sealed record Attempt(Resolution? Winner, int PrimaryCount, string? PrimaryWindowTitle, Target Target)
     {
         public RpcException Failure() => PrimaryCount > 1
-            ? RpcErrors.NotUnique(PrimaryCount, Target.Describe())
+            ? RpcErrors.NotUnique(PrimaryCount, Target)
             : RpcErrors.NotFound(Target.Describe(), PrimaryWindowTitle);
     }
 

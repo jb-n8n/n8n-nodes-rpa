@@ -39,6 +39,19 @@ public interface IPolicyFiles
     /// <summary>Creates the backup folder, for administrators only.</summary>
     void CreateBackupFolder(string folder);
 
+    /// <summary>What is wrong with an existing folder for change copies, as for the backup folder
+    /// (<see cref="BackupFolderProblems"/>). Empty when the tool would use it.</summary>
+    IReadOnlyList<string> ChangeFolderProblems(string folder);
+
+    /// <summary>Creates the folder for change copies, for administrators only.</summary>
+    void CreateChangeFolder(string folder);
+
+    /// <summary>
+    /// Creates a copy of a change file as a new file with this content (it fails when something has the name), with
+    /// the owner and the access rules the folder for change copies gives. Nothing is left when this fails.
+    /// </summary>
+    void CreateChangeCopy(string path, byte[] content);
+
     /// <summary>
     /// Creates a backup as a new file with this content (it fails when something has the name), with the owner and
     /// the access rules the backup folder gives. Nothing is left when this fails.
@@ -137,8 +150,9 @@ public sealed record PolicyConsole(IReadOnlyList<bool>? OtherProcesses, bool Tak
 
 /// <summary>
 /// The policy tool's commands: <c>show</c>, <c>apply</c> and <c>allow-app</c>. A change is shown as plain lines and
-/// written only after a yes (or with <c>--yes</c>). Exit codes: 0 applied or nothing to change, 1 refused or invalid,
-/// 2 usage, 3 declined at the prompt.
+/// written only after a yes (or with <c>--yes</c>). <c>apply</c> first copies the change file into a folder of its own
+/// (<see cref="ChangeFolder"/>) and works from that copy. Exit codes: 0 applied or nothing to change, 1 refused or
+/// invalid, 2 usage, 3 declined at the prompt.
 /// </summary>
 public static class PolicyCommand
 {
@@ -160,18 +174,22 @@ public static class PolicyCommand
 
     public const string Usage = """
         Usage: RpaPolicy show [--policy <path>]
-               RpaPolicy apply <change.json> [--yes] [--policy <path>]
+               RpaPolicy apply <change.json> [--yes] [--close-on-success] [--policy <path>]
                RpaPolicy allow-app <path-to-exe> [--pin-hash] [--yes] [--policy <path>]
           show          Print the policy file
-          apply         Add what a change file lists to the policy
+          apply         Add what a change file lists to the policy (from a copy the tool keeps in
+                        policy-changes beside the policy file)
           allow-app     Add an application to the policy's allowedApps
           --pin-hash    Also pin the application file's SHA-256
           --yes         Do not ask before writing (only from an administrator console)
+          --close-on-success
+                        In a window of its own, close it once the change is applied instead of
+                        waiting for Enter (the recorder starts the tool so)
           --policy      The policy file (default %ProgramData%\RPA Runner\policy.json; only from an
                         administrator console)
         """;
 
-    private sealed record Arguments(string Command, string? Target, string? Policy, bool Yes, bool PinHash)
+    private sealed record Arguments(string Command, string? Target, string? Policy, bool Yes, bool PinHash, bool CloseOnSuccess = false)
     {
         public string PolicyPath => Policy ?? Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
     }
@@ -209,6 +227,28 @@ public static class PolicyCommand
         return backup;
     }
 
+    /// <summary>The folder where <c>apply</c> keeps a copy of each change file it is given, <c>policy-changes</c>
+    /// beside the policy file. It is the tool's own, for administrators only, as the backup folder is.</summary>
+    public static string ChangeFolder(string policyPath) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(policyPath)) ?? "", "policy-changes");
+
+    /// <summary>
+    /// <c>&lt;name&gt;.&lt;yyyyMMdd-HHmmss&gt;.json</c> in the change folder, where the name is the change file's without
+    /// <c>.json</c> (at most 100 characters, a character Windows refuses in a file name, such as the colon of a stream,
+    /// as <c>_</c>), or with <c>-2</c>, <c>-3</c> and so on before <c>.json</c>: the first of these names that is not
+    /// taken.
+    /// </summary>
+    public static string ChangeCopyPath(string policyPath, string changeFileName, DateTimeOffset now, Func<string, bool> taken)
+    {
+        var name = changeFileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? changeFileName[..^5] : changeFileName;
+        name = new string(name.Select(c => c is '<' or '>' or ':' or '"' or '/' or '\\' or '|' or '?' or '*' || char.IsControl(c) ? '_' : c).ToArray());
+        if (name.Length > 100) name = name[..100];
+        var stem = Path.Combine(ChangeFolder(policyPath), $"{name}.{now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}");
+        var copy = $"{stem}.json";
+        for (var n = 2; taken(copy); n++) copy = $"{stem}-{n}.json";
+        return copy;
+    }
+
     /// <summary>
     /// Writes one line (or, for the prompt, its start). Everything the tool prints goes through here: control and
     /// format characters, which could move the cursor, break the line or reorder the text, are written as
@@ -244,25 +284,37 @@ public static class PolicyCommand
         return visible.ToString();
     }
 
+    /// <summary>Whether the change was applied (or there was nothing to change) with nothing left for the person to
+    /// read: a runner that could not be restarted is said, and then the tool waits.</summary>
+    private sealed class Ending
+    {
+        public bool Clean { get; set; }
+    }
+
     /// <summary>
     /// Runs one command. Whoever starts the tool chooses its arguments, and the Windows administrator prompt shows an
     /// administrator only the tool's name. So <c>--yes</c> is ignored and <c>--policy</c> is refused unless
     /// <paramref name="console"/> says the options can be honoured (<see cref="PolicyConsole.HonoursOptions"/>):
-    /// the change to the runner's own policy is then still shown and asked about.
+    /// the change to the runner's own policy is then still shown and asked about. <c>--close-on-success</c> needs no
+    /// such console: it only leaves out the wait for Enter after a clean apply, whose summary the person has read and
+    /// answered; after anything else the tool still waits.
     /// </summary>
     public static int Run(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console)
     {
         int code;
+        var ending = new Ending();
         try
         {
-            code = Command(args, input, output, files, restartRunner, console);
+            code = Command(args, input, output, files, restartRunner, console, ending);
         }
         catch (Exception e)
         {
             // Refusals and anything unforeseen end the same way: the message, no stack trace, exit 1.
             code = Fail(output, e.Message);
+            ending.Clean = false;
         }
-        if (console.ClosesWithTheTool)
+        var closeOnSuccess = code == 0 && ending.Clean && Parse(args)?.CloseOnSuccess == true;
+        if (console.ClosesWithTheTool && !closeOnSuccess)
         {
             // The tool's own window closes when it exits; without this nothing it printed could be read.
             Print(output, "Press Enter to close.");
@@ -271,7 +323,7 @@ public static class PolicyCommand
         return code;
     }
 
-    private static int Command(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console)
+    private static int Command(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console, Ending ending)
     {
         if (args is ["--help"] or ["-h"] or ["/?"])
         {
@@ -295,8 +347,8 @@ public static class PolicyCommand
         return arguments.Command switch
         {
             "show" => Show(arguments.PolicyPath, output, files),
-            "apply" => Change(ChangeFile(arguments.Target!, files), arguments, input, output, files, restartRunner, console),
-            _ => Change(AllowApp(arguments, files), arguments, input, output, files, restartRunner, console),
+            "apply" => Change(CopiedChange(arguments.Target!, arguments.PolicyPath, files), arguments, input, output, files, restartRunner, console, ending),
+            _ => Change(AllowApp(arguments, files), arguments, input, output, files, restartRunner, console, ending),
         };
     }
 
@@ -311,7 +363,7 @@ public static class PolicyCommand
         if (args.Length == 0 || args[0] is not ("show" or "apply" or "allow-app")) return null;
         var command = args[0];
         string? target = null, policy = null;
-        bool yes = false, pinHash = false;
+        bool yes = false, pinHash = false, closeOnSuccess = false;
         for (var i = 1; i < args.Length; i++)
         {
             switch (args[i])
@@ -319,12 +371,13 @@ public static class PolicyCommand
                 case "--policy" when i + 1 < args.Length: policy = args[++i]; break;
                 case "--yes" when command != "show": yes = true; break;
                 case "--pin-hash" when command == "allow-app": pinHash = true; break;
+                case "--close-on-success" when command == "apply": closeOnSuccess = true; break;
                 case var a when !a.StartsWith("--", StringComparison.Ordinal) && target is null && command != "show": target = a; break;
                 default: return null;
             }
         }
         if (target is null && command != "show") return null;
-        return new Arguments(command, target, policy, yes, pinHash);
+        return new Arguments(command, target, policy, yes, pinHash, closeOnSuccess);
     }
 
     private static int Fail(TextWriter output, string message)
@@ -413,11 +466,10 @@ public static class PolicyCommand
     }
 
     /// <summary>
-    /// The change file's text. A UNC or device path is refused on its text, before anything is opened. The size is
-    /// checked before the file is read, and no more than the limit is read whatever the size says. The text is read
-    /// as UTF-8 unless the file starts with the byte order mark of another encoding.
+    /// The change file's bytes. A UNC or device path is refused on its text, before anything is opened. The size is
+    /// checked before the file is read, and no more than the limit is read whatever the size says.
     /// </summary>
-    private static string ChangeFile(string path, IPolicyFiles files)
+    private static byte[] ChangeFile(string path, IPolicyFiles files)
     {
         var full = RunnerPolicy.IsUncOrDevice(path) ? path : Path.GetFullPath(path);
         if (RunnerPolicy.IsUncOrDevice(full)) throw new RunnerPolicy.InvalidPolicyException("the change file must be on a local drive");
@@ -426,7 +478,52 @@ public static class PolicyCommand
         var bytes = new byte[MaxChangeFileBytes + 1];
         var read = file.Content.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
         if (read > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
-        return Text(bytes, read);
+        return bytes[..read];
+    }
+
+    /// <summary>
+    /// The text of the change that <c>apply</c> shows and applies. The change file is read once (<see cref="ChangeFile"/>)
+    /// and copied as a new file into the change folder, which the tool creates for administrators only when it is
+    /// missing and uses only when it can trust it, looked at after it was created (as the backup folder); then the copy
+    /// is read. The change file may sit in a folder its user can change: what it holds after the copy changes nothing.
+    /// The copy stays, as a record of what the tool was given. The text is read as UTF-8 unless it starts with the
+    /// byte order mark of another encoding.
+    /// </summary>
+    private static string CopiedChange(string path, string policyPath, IPolicyFiles files)
+    {
+        var bytes = ChangeFile(path, files);
+        var folder = ChangeFolder(policyPath);
+        Copying(folder, () => { if (files.Kind(folder) == PathKind.None) files.CreateChangeFolder(folder); });
+        switch (files.Kind(folder))
+        {
+            case PathKind.Folder when files.ChangeFolderProblems(folder) is { Count: > 0 } problems:
+                throw new RunnerPolicy.InvalidPolicyException($"the change folder cannot be trusted: {string.Join("; ", problems)}; an administrator must check and remove it");
+            case PathKind.Folder:
+                break;
+            default:
+                throw new RunnerPolicy.InvalidPolicyException($"{folder} exists and is not a folder; an administrator must check and remove it");
+        }
+        var copy = ChangeCopyPath(policyPath, Path.GetFileName(path), DateTimeOffset.Now, name => files.Kind(name) != PathKind.None);
+        byte[]? copied = null;
+        Copying(folder, () =>
+        {
+            files.CreateChangeCopy(copy, bytes);
+            copied = files.ReadBytes(copy) ?? throw new IOException("the copy is not there");
+        });
+        return Text(copied!, copied!.Length);
+    }
+
+    /// <summary>Runs a step of the copy; a failure says that nothing was changed.</summary>
+    private static void Copying(string folder, Action step)
+    {
+        try
+        {
+            step();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"The change file could not be copied to {folder}: {e.Message.TrimEnd('.')}. Nothing was changed.", e);
+        }
     }
 
     /// <summary>
@@ -458,7 +555,7 @@ public static class PolicyCommand
         return JsonSerializer.Serialize(new Dictionary<string, object> { ["allowedApps"] = new[] { app } });
     }
 
-    private static int Change(string change, Arguments arguments, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console)
+    private static int Change(string change, Arguments arguments, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console, Ending ending)
     {
         var before = ExistingPolicy(arguments.PolicyPath, files);
         var current = before is null ? null : Text(before, before.Length);
@@ -474,12 +571,19 @@ public static class PolicyCommand
         Print(output, first);
 
         var result = PolicyChange.Apply(current ?? "", change);
+        // How to protect an app the policy had without write controls: said for a change file (the recorder's), not
+        // for allow-app, which is the way to allow an app without them.
+        var notes = arguments.Command == "apply" ? result.Notes.SelectMany(PolicyChange.Rows).ToList() : [];
         if (result.Summary.Count == 0)
         {
             Print(output, "Nothing to change.");
+            foreach (var row in notes) Print(output, row);
+            // A note is something left to read: a window of its own then waits for Enter.
+            ending.Clean = notes.Count == 0;
             return 0;
         }
-        var rows = PolicyChange.Printed(result.Summary);
+        // The notes come first: the lines that widen what may run stay below them, near the prompt.
+        var rows = notes.Concat(PolicyChange.Printed(result.Summary)).ToList();
         if (rows.Prepend(Visible(first)).Sum(row => row.Length + 1) > MaxSummaryLength)
             return Fail(output, $"the summary of this change would be longer than {MaxSummaryLength} characters; split it into smaller changes");
         if (!arguments.Yes && console.Buffer() is { } buffer)
@@ -520,6 +624,7 @@ public static class PolicyCommand
             return 0;
         }
         Print(output, "Policy updated. The runner restarts within 10 seconds and uses the new policy.");
+        ending.Clean = true;
         return 0;
     }
 }

@@ -6,7 +6,11 @@
 # It ends both programs and removes the scheduled tasks, the firewall rules and C:\Program Files\RPA Runner. When the
 # installer turned automatic sign-in on, it puts every setting -AutoSignIn changed back to what install.json recorded
 # and removes the stored password; when automatic sign-in names another user by now, it leaves the sign-in values and
-# the stored password alone. A setting it cannot put back is printed when that happens and listed, with what it was
+# the stored password alone. After an install with -Unattended it stops and removes the service RPA Supervisor (which
+# signs its session out) and its event source, removes the bot user's stored password, takes the bot user out of
+# Remote Desktop Users when the installer put it there, and turns Remote Desktop off again when the installer turned
+# it on (and says so at its end). It removes that service and stored password by their names also when install.json
+# is gone. A setting it cannot put back is printed when that happens and listed, with what it was
 # before, in C:\Program Files\RPA Runner\uninstall-leftovers.json, a file only administrators can read or change;
 # the install directory then stays, with that one file in it, also with -RemoveData. The next install reads the list
 # and records those settings again, so that a later uninstall tries them again.

@@ -1,6 +1,6 @@
 import { NodeOperationError, type INodeExecutionData } from 'n8n-workflow';
 import type { OutputSpec, SaveTrace } from 'n8n-rpa-engine';
-import { ConfigError, CREDENTIALS } from '../config.js';
+import { ConfigError, CREDENTIALS, HIDDEN_BY_RUNS_ON, MAX_SECONDS, RUNS_ON_NAMES, RUNS_ON_OPERATIONS, runsOnDefault, type RunsOn } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configErrorItem } from '../output.js';
@@ -27,12 +27,42 @@ export const BROWSER_CREDENTIAL_NEEDED = 'This operation runs in a browser: atta
  * Desktop Runner instead), so every operation that runs a browser refuses here, naming it, when it is not attached.
  */
 export async function browserCredentials(ctx: NodeContext, i: number, missing = BROWSER_CREDENTIAL_NEEDED): Promise<Record<string, unknown>> {
-  if (credentialId(ctx, CREDENTIALS.browser) === undefined) throw new ConfigError(missing);
+  if (credentialId(ctx, CREDENTIALS.browser) === undefined) throw new ConfigError(`${missing}${slotNote(ctx, CREDENTIALS.browser)}`);
   return await ctx.getCredentials(CREDENTIALS.browser, i);
 }
 
-/** The attached credential's id ('' when n8n has none), or undefined when the credential is not attached to the node. */
+/**
+ * The node's Runs On: the typed choice on Run Steps and Import Steps; without one, its version's default (Browser and
+ * desktop apps in version 1, A browser in version 2); any other value (an expression) and any other operation hide
+ * nothing, as in n8n. It only chooses which credential slots the node shows.
+ */
+export function runsOn(ctx: NodeContext): RunsOn {
+  if (!RUNS_ON_OPERATIONS.includes(String(rawParameter(ctx, 'operation')))) return 'browserAndDesktop';
+  const v = rawParameter(ctx, 'runsOn');
+  if (v === 'browser' || v === 'desktop') return v;
+  // Any other value (an expression) hides no slot in n8n, whatever the version.
+  return v === undefined ? runsOnDefault(ctx.getNode().typeVersion) : 'browserAndDesktop';
+}
+
+/** Whether Runs On hides this credential type's slot. n8n does not hand the node a credential whose slot is hidden. */
+export function hiddenByRunsOn(ctx: NodeContext, type: string): boolean {
+  const on = runsOn(ctx);
+  return on !== 'browserAndDesktop' && HIDDEN_BY_RUNS_ON[on].includes(type);
+}
+
+/** The sentence a "missing credential" message adds when Runs On is what hides the slot, else ''. */
+export function slotNote(ctx: NodeContext, type: string): string {
+  if (!hiddenByRunsOn(ctx, type)) return '';
+  const shownOn = (Object.keys(HIDDEN_BY_RUNS_ON) as (keyof typeof HIDDEN_BY_RUNS_ON)[]).filter((on) => !HIDDEN_BY_RUNS_ON[on].includes(type));
+  return ` Its slot shows when Runs On is ${[...shownOn, 'browserAndDesktop' as const].map((on) => RUNS_ON_NAMES[on]).join(' or ')}.`;
+}
+
+/**
+ * The attached credential's id ('' when n8n has none), or undefined when the credential is not attached to the node or
+ * its slot is hidden by Runs On (n8n would refuse to read it, and drops it when the workflow is saved).
+ */
 export function credentialId(ctx: NodeContext, type: string): string | undefined {
+  if (hiddenByRunsOn(ctx, type)) return undefined;
   const c = ctx.getNode().credentials?.[type];
   return c ? (c.id ?? '') : undefined;
 }
@@ -46,7 +76,7 @@ export function rawParameter(ctx: NodeContext, path: string): unknown {
 
 const expressionRefused = (label: string): ConfigError => new ConfigError(`${label} must be set directly, not with an expression.`);
 /** An expression as a raw text parameter holds it: "=…", or "{{" (n8n strips the "=" of a noDataExpression parameter). */
-const isExpressionText = (raw: unknown): boolean => typeof raw === 'string' && (raw.startsWith('=') || raw.includes('{{'));
+export const isExpressionText = (raw: unknown): boolean => typeof raw === 'string' && (raw.startsWith('=') || raw.includes('{{'));
 
 /**
  * The raw (unresolved) parameter at a dotted path, for a security setting that must be a literal. Throws
@@ -111,7 +141,7 @@ export function readCommonOptions(ctx: NodeContext, i: number): CommonOptions {
   const trace = asString(opt('saveTrace'), 'onFailure');
   return {
     timeoutMs: Math.round(clamp(asNumber(opt('timeout'), 30), 1, 300) * 1000),
-    maxSeconds: clamp(asNumber(opt('maxSeconds'), 180), 10, 300),
+    maxSeconds: clamp(asNumber(opt('maxSeconds'), 180), 10, MAX_SECONDS),
     viewport: { width: dimension(size, 'width', 1280), height: dimension(size, 'height', 800) },
     allowedHosts: asString(opt('allowedHosts')).split(/[\s,]+/).filter(Boolean),
     allowPrivateNetwork: literalBoolean(ctx, i, 'options.allowPrivateNetwork', 'Allow Private Network', false),
@@ -212,4 +242,17 @@ export function hasDownloadStep(steps: unknown): boolean {
 /** Downloads need the Browser Server or Local Browser: a CDP connection cannot read the downloaded file. Throws a ConfigError before the browser opens. */
 export function refuseCdpDownload(engine: Pick<Engine, 'DOWNLOAD_NEEDS_BROWSER_SERVER'>, endpoint: { mode: string }, wantsDownload: boolean): void {
   if (wantsDownload && endpoint.mode === 'cdp') throw new ConfigError(engine.DOWNLOAD_NEEDS_BROWSER_SERVER);
+}
+
+export const NO_MODEL = 'AI repair is on but no chat model is connected. Connect one to the Model input.';
+
+/** A text parameter for an error item when the parameters could not be read (never throws): trimmed, or null when empty. */
+export function safeParam(ctx: NodeContext, i: number, name: string): string | null {
+  let value: unknown;
+  try {
+    value = ctx.getNodeParameter(name, i, '');
+  } catch {
+    value = '';
+  }
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }

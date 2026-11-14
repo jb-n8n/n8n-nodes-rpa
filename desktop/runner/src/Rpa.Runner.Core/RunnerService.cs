@@ -335,7 +335,7 @@ public sealed class RunnerService
             }
             catch (RetryableActionException e)
             {
-                if (_time.GetUtcNow() >= deadline) throw RpcErrors.Timeout($"{e.Message} ({what})");
+                if (_time.GetUtcNow() >= deadline) throw e.ElementDisabled ? RpcErrors.Disabled(target) : RpcErrors.Timeout($"{e.Message} ({what})");
                 ct.ThrowIfCancellationRequested();
                 Thread.Sleep(TargetResolver.PollInterval);
             }
@@ -642,7 +642,15 @@ public sealed class RunnerService
 
 /// <summary>Thrown by the driver when the action may succeed if retried (element disabled, busy). The message is fixed
 /// text (never a value).</summary>
-public sealed class RetryableActionException(string message) : Exception(message);
+public sealed class RetryableActionException(string message) : Exception(message)
+{
+    /// <summary>The app reports the element to UI Automation as not enabled; when the retries run out, the timeout
+    /// says what to do instead (<see cref="RpcErrors.Disabled"/>).</summary>
+    public bool ElementDisabled { get; private init; }
+
+    /// <summary>The element the action targets is disabled (a read or a focus still works).</summary>
+    public static RetryableActionException Disabled() => new("the element is disabled") { ElementDisabled = true };
+}
 
 /// <summary>The segment typing model: segments are concatenated in order, export-directory markers filled with the
 /// run's directory. Text segments are never interpreted.</summary>

@@ -6,14 +6,19 @@ Microsoft licensing partner, reseller or legal team). We read the sources on **1
 its terms; read the current versions, and the agreement your organisation actually signed, which may differ from the
 public pages. Where the sources below are unclear, this note says so and draws no conclusion.
 
-The RPA desktop runner and browser are open source (MIT). They do not include any Windows licence, and nothing in
-this project changes what your Windows licence allows.
+The RPA desktop runner and browser host are open source (MIT). The third-party software the two zips bring keeps its
+own licences: .NET in the package, and Chromium and Node.js in the browser package
+([THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md)). Each zip carries the notices and licence texts of what it
+holds. The package does not include any Windows licence, and nothing in this project changes what your Windows
+licence allows.
 
 ## What the RPA package does that licensing may care about
 
 - It runs **unattended**: the bot user's Windows session drives apps on behalf of n8n workflows, with nobody at the
   machine (section 4 of [the install guide](windows.md)).
 - With `-AutoSignIn`, Windows signs the bot user in by itself at every start, and the machine is left signed in.
+- With `-Unattended` (Windows Server only), a service signs the bot user in through a Remote Desktop connection from
+  the machine to itself for each run, and out again afterwards.
 - People may reach the machine through **Remote Desktop**, to sign the bot user in or to watch it.
 - n8n reaches the machine over the network (the runner on TCP 8765, the browser on TCP 3000).
 
@@ -106,6 +111,12 @@ read 2026-11-10), whose text available to us did not cover Remote Desktop Servic
 through Remote Desktop, or whose desktop people watch through Remote Desktop, counts as administration, and whether
 an unattended session that n8n drives over the network is "similar functionality" to Remote Desktop Services, are not
 answered by these sources.
+
+With `-Unattended`, the bot user's session is a Remote Desktop session on the server itself, made by a service for
+each run. Windows Server without the Remote Desktop Session Host role allows two remote sessions at a time, which
+Microsoft describes as connections for administration; the bot user's session is one of them. Whether that session
+needs Remote Desktop Services client access licences (RDS CALs) is a question for your Microsoft licence terms and
+your licensing contact (question 5 below). This note is not advice on it.
 
 ## What to confirm with your licensing contact
 

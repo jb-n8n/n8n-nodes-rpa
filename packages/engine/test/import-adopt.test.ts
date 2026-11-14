@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScriptLaneInput, ScriptRun } from '../src/lane/script-lane.js';
 import type { ProveInput, ProveResult } from '../src/prove/prove.js';
-import { adoptDraft, type AdoptInput } from '../src/import/adopt.js';
+import { adoptDraft, statedIdPattern, type AdoptInput } from '../src/import/adopt.js';
 import { runDraft } from '../src/lane/draft.js';
 import { runTask, type TaskInput, type TaskResult } from '../src/lane/task.js';
 import { checkTrust } from '../src/lane/trust.js';
@@ -9,8 +9,8 @@ import { buildProposal, proposalDigest } from '../src/proposal/proposal.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { scriptHash } from '../src/sign.js';
 import { CANCELLED } from '../src/lane/script-lane.js';
-import { IMPORT_EMPTY, IMPORT_NOT_ADOPTABLE, ROWS_WITHHELD, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, REPAIR_NEEDS_ID_AND_EXTRACT, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
-import type { PortalPolicy, Script, Step } from '../src/types.js';
+import { IMPORT_EMPTY, IMPORT_NOT_ADOPTABLE, IMPORT_ROWS_NEED_ID, ROWS_WITHHELD, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, REPAIR_NEEDS_ID_AND_EXTRACT, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
+import type { CodeProvider, PortalPolicy, Script, Step } from '../src/types.js';
 import { fakeModel } from './fake-model.js';
 import { ERP_CHECK, LOCAL, policyFor, SECRETS, TEST_KEY } from './helpers.js';
 
@@ -39,7 +39,9 @@ vi.mock('../src/lane/script-lane.js', async (importOriginal) => {
   return {
     ...mod,
     startScriptLane: async (input: ScriptLaneInput, opts?: Parameters<typeof mod.startScriptLane>[1]) => {
-      lane.seen.push(structuredClone({ ...input, signal: undefined }));
+      // A code provider is a function: kept as is, beside the cloned rest.
+      const { codeProvider, ...rest } = input;
+      lane.seen.push({ ...structuredClone({ ...rest, signal: undefined }), ...(codeProvider ? { codeProvider } : {}) });
       const next = lane.next;
       lane.next = undefined;
       return next ? { run: next } : mod.startScriptLane(input, opts);
@@ -201,6 +203,16 @@ describe('draft mode', () => {
     expect(JSON.stringify(a)).not.toContain('N26-0001');
   });
 
+  it('a draft the import gave another version (a change) is proposed at that version, still with no base', async () => {
+    lane.next = laneSuccess();
+    const a = await adoptDraft(adoptInput({ ...fileDraft(), version: 2 }));
+    if (!a.ok) throw new Error(JSON.stringify(a));
+    expect(a.proposal).toMatchObject({ version: 2, baseVersion: null });
+    expect(a.proposal.steps.version).toBe(2);
+    expect(a.proposal.hash).toBe(scriptHash(a.proposal.steps));
+    expect(a.digest).toBe(proposalDigest(a.proposal));
+  });
+
   it('empty or unparseable drafts are refused before the browser', async () => {
     expect(await runDraft(taskInput([]))).toMatchObject({ ok: false, code: 'policy_violation', message: IMPORT_EMPTY, configError: true });
     expect(await runDraft(taskInput({ steps: [{ intent: 'x', bogus: 1 }] }))).toMatchObject({ ok: false, code: 'policy_violation', configError: true });
@@ -233,7 +245,6 @@ describe('draft mode', () => {
 describe('what can be adopted', () => {
   const cases: [string, Script, AdoptInput['output']?][] = [
     ['no rows and no file', draftOf([{ intent: 'Open Reports', click: { role: 'link', name: 'Reports' } }])],
-    ['rows without an ID Pattern', draftOf([EXTRACT])],
     ['an ID Pattern but no extract step', draftOf([{ intent: 'Open Reports', click: { role: 'link', name: 'Reports' } }]), { idPattern: 'N26-\\d{4}' }],
     ['a download without a check', draftOf([{ intent: 'Export', download: { trigger: { role: 'button', name: 'Export' } } }])],
     ['a check that names neither the file nor its columns', draftOf([{ intent: 'Export', download: { trigger: { role: 'button', name: 'Export' }, check: { minRows: 1 } } }])],
@@ -262,6 +273,36 @@ describe('what can be adopted', () => {
     expect(prove.seen[0].output).toEqual({ idPattern: 'N26-\\d{4}' });
     // There are no agent rows to compare with: the evidence carries no ID list.
     expect(r.proposal.evidence).toEqual({ count: 1, total: 1, diff: { missing: [], extra: [] } });
+  });
+
+  it('steps that state their own ID Pattern are adopted with it: nothing else is asked; an ID Pattern given wins', async () => {
+    const table: Step = { intent: 'Read the grid', extractTable: { table: { role: 'grid' }, idPattern: '19\\d{8}' } };
+    const paged: Step = { intent: 'Pages', paginate: { next: { text: 'Next' }, until: 'absent', max: 2, each: [EXTRACT] } } as Step;
+    expect(statedIdPattern(draftOf([EXTRACT]))).toBe('N26-\\d{4}');
+    expect(statedIdPattern(draftOf([paged, EXTRACT]))).toBe('N26-\\d{4}');
+    expect(statedIdPattern(draftOf([paged, table]))).toBe('(?:N26-\\d{4})|(?:19\\d{8})');
+    expect(statedIdPattern(draftOf([EXTRACT, { intent: 'Read more', extract: { scope: { css: 'main' }, item: { css: 'li' } } }]))).toBeUndefined();
+    expect(statedIdPattern(draftOf([DOWNLOAD]))).toBeUndefined();
+    const cases: [AdoptInput['output'], string][] = [[undefined, 'N26-\\d{4}'], [{ requiredFields: ['id'] }, 'N26-\\d{4}'], [{ idPattern: 'N26-\\d+' }, 'N26-\\d+']];
+    for (const [output, want] of cases) {
+      lane.next = laneSuccess();
+      prove.next = { ok: true, rows: [{ id: 'N26-0001' }], total: 1, reasons: [], diff: { missing: [], extra: [] }, policyViolation: false, readPosts: [] };
+      const r = await adoptDraft(adoptInput(draftOf([paged]), output ? { output } : {}));
+      if (!r.ok) throw new Error(JSON.stringify(r));
+      expect(prove.seen.at(-1)!.output).toEqual({ ...output, idPattern: want });
+      expect(lane.seen.at(-1)!.output).toEqual({ ...output, idPattern: want });
+    }
+  });
+
+  it('rows without an ID Pattern are refused before the browser, and the refusal names the field', async () => {
+    const plain: Step = { intent: 'Read the list', extract: { scope: { css: 'main' }, item: { css: 'li' } } };
+    for (const draft of [draftOf([plain]), draftOf([EXTRACT, plain])]) {
+      const r = await adoptDraft(adoptInput(draft));
+      expect(r).toMatchObject({ ok: false, code: 'policy_violation', adoptable: false, configError: true, message: IMPORT_ROWS_NEED_ID });
+    }
+    expect(IMPORT_ROWS_NEED_ID).toContain('Give each extract and extractTable step an idPattern');
+    expect(lane.seen).toEqual([]);
+    expect(sessions).toEqual([]);
   });
 });
 
@@ -295,6 +336,22 @@ describe('the adoption flow', () => {
     expect(r.proposal.version).toBe(1);
   });
 
+  it('a sign-in that takes its code from a workflow: the draft run and the proof both get the code provider, and the proof waits for a fresh code window', async () => {
+    const provider: CodeProvider = async () => '123456';
+    const totp = { field: { label: 'Authentication code' }, submit: { role: 'button', name: 'Verify' }, source: 'workflow' as const };
+    const draft = fileDraft();
+    draft.steps = draft.steps.map((s) => ('signIn' in s ? { ...s, signIn: { ...s.signIn, totp } } : s));
+    const { totpSecret: _seed, ...noSeed } = SECRETS;
+    lane.next = laneSuccess();
+    const before = Date.now();
+    const r = await adoptDraft(adoptInput(draft, { secrets: noSeed, codeProvider: provider, codeTimeoutMs: 45_000 }));
+    if (!r.ok) throw new Error(JSON.stringify(r));
+    expect(lane.seen[0]).toMatchObject({ codeProvider: provider, codeTimeoutMs: 45_000 });
+    expect(prove.seen[0]).toMatchObject({ codeProvider: provider, codeTimeoutMs: 45_000 });
+    expect(prove.seen[0].freshTotpAfter).toBeGreaterThanOrEqual(before);
+    expect(r.proposal.steps.steps.find((s) => 'signIn' in s)).toMatchObject({ signIn: { totp: { source: 'workflow' } } });
+  });
+
   it('a failed proof reports its reason and gives no proposal', async () => {
     lane.next = laneSuccess();
     prove.next = { ...passingFileProof(), ok: false, reasons: ['Download with Export: no file arrived'], failureCode: 'drift_detected' };
@@ -309,9 +366,9 @@ describe('the adoption flow', () => {
 
   it('a repair whose proof failed names the proof, not Deliver Unconfirmed Rows', async () => {
     // The scripted run stands in for the agent lane's failure: adoptDraft reads only its message.
-    lane.next = { result: { ok: false, code: 'incomplete', message: `${ROWS_WITHHELD}. Reason: a zero-row proof cannot confirm a recorded script`, violations: [], log: [], blockedRequests: [], durationMs: 1 } };
+    lane.next = { result: { ok: false, code: 'incomplete', message: `${ROWS_WITHHELD}. Reason: a zero-row proof cannot confirm recorded steps`, violations: [], log: [], blockedRequests: [], durationMs: 1 } };
     const r = await adoptDraft(adoptInput(draftOf([EXTRACT]), { output: { idPattern: 'N26-\\d{4}' }, repair: { model: fakeModel([]), goal: 'rows' } }));
-    expect(r).toMatchObject({ ok: false, code: 'incomplete', message: `${IMPORT_PROOF_FAILED}. Reason: a zero-row proof cannot confirm a recorded script` });
+    expect(r).toMatchObject({ ok: false, code: 'incomplete', message: `${IMPORT_PROOF_FAILED}. Reason: a zero-row proof cannot confirm recorded steps` });
   });
 
   it('a cancelled adoption does not start the proof', async () => {

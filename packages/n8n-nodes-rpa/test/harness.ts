@@ -15,10 +15,17 @@ export interface HarnessOptions {
   items?: INodeExecutionData[];
   /** Credential data by credential type. A type listed here is attached to the node (getNode().credentials). */
   credentials?: Record<string, ICredentialDataDecryptedObject>;
+  /**
+   * A credential whose fields are expressions: the data one item resolves it to, by type and item index. Undefined
+   * (or no entry) falls back to `credentials`, which must still list the type to attach it.
+   */
+  itemCredentials?: (type: string, itemIndex: number) => ICredentialDataDecryptedObject | undefined;
   /** Id of every attached credential without an entry in credentialIds. */
   credentialId?: string;
   /** Credential ids by credential type (only for types present in `credentials`). */
   credentialIds?: Record<string, string>;
+  /** Credential names by credential type (default `<type> credential`), as n8n gives them on getNode().credentials. */
+  credentialNames?: Record<string, string>;
   staticData?: IDataObject;
   /** What getInputConnectionData returns. Leave undefined for "no model sub-node connected". */
   model?: unknown;
@@ -26,10 +33,14 @@ export interface HarnessOptions {
   signal?: AbortSignal;
   continueOnFail?: boolean;
   nodeName?: string;
+  /** The node's version (getNode().typeVersion). Default 1. */
+  typeVersion?: number;
   /** What getBinaryMetadata returns as fileSize, by binary data id (filesystem-stored binaries carry an id, not the bytes). */
   binaryFileSizes?: Record<string, number>;
   /** Stands in for n8n's executeWorkflow (a sub-workflow run). Absent: calling it throws. */
   executeWorkflow?: (workflowInfo: IExecuteWorkflowInfo, inputData?: INodeExecutionData[]) => Promise<ExecuteWorkflowData>;
+  /** Stands in for n8n's evaluateExpression (the expression as given, `{{ … }}`). Absent: calling it throws. */
+  evaluateExpression?: (expression: string, itemIndex: number) => unknown;
 }
 export interface Harness extends NodeContext {
   readonly modelRequests: number;
@@ -75,10 +86,10 @@ function dig(value: unknown, parts: string[]): unknown {
 export function harness(o: HarnessOptions): Harness {
   const fallbackId = o.credentialId ?? 'cred-1';
   const credentials: INodeCredentials = {};
-  for (const type of Object.keys(o.credentials ?? {})) credentials[type] = { id: o.credentialIds?.[type] ?? fallbackId, name: `${type} credential` };
+  for (const type of Object.keys(o.credentials ?? {})) credentials[type] = { id: o.credentialIds?.[type] ?? fallbackId, name: o.credentialNames?.[type] ?? `${type} credential` };
   const raw = o.rawParameters ?? defaultRaw(o.params, Math.max(1, o.items?.length ?? 1));
   const node: INode = {
-    id: 'node-1', name: o.nodeName ?? 'RPA', type: 'n8n-nodes-rpa.playwright', typeVersion: 1, position: [0, 0],
+    id: 'node-1', name: o.nodeName ?? 'RPA', type: 'n8n-nodes-rpa.playwright', typeVersion: o.typeVersion ?? 1, position: [0, 0],
     parameters: raw as INodeParameters, credentials,
   };
   const staticData = o.staticData ?? {};
@@ -114,8 +125,8 @@ export function harness(o: HarnessOptions): Harness {
       const v = dig(typeof o.params === 'function' ? o.params(itemIndex) : o.params, parts);
       return v === undefined ? fallbackValue : v;
     },
-    async getCredentials(type: string): Promise<ICredentialDataDecryptedObject> {
-      const data = o.credentials?.[type];
+    async getCredentials(type: string, itemIndex?: number): Promise<ICredentialDataDecryptedObject> {
+      const data = (itemIndex !== undefined ? o.itemCredentials?.(type, itemIndex) : undefined) ?? o.credentials?.[type];
       if (!data) throw new Error(`Node "${node.name}" does not have any credentials of type "${type}" set`);
       return data;
     },
@@ -139,6 +150,10 @@ export function harness(o: HarnessOptions): Harness {
     getExecutionCancelSignal: () => o.signal,
     continueOnFail: () => o.continueOnFail ?? false,
     getExecutionId: () => 'exec-1',
+    evaluateExpression(expression: string, itemIndex: number): unknown {
+      if (!o.evaluateExpression) throw new Error('evaluateExpression is not set up in this test');
+      return o.evaluateExpression(expression, itemIndex);
+    },
     async executeWorkflow(workflowInfo: IExecuteWorkflowInfo, inputData?: INodeExecutionData[]): Promise<ExecuteWorkflowData> {
       if (!o.executeWorkflow) throw new Error('executeWorkflow is not set up in this test');
       return o.executeWorkflow(workflowInfo, inputData);

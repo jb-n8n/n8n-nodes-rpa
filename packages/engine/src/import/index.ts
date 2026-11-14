@@ -1,9 +1,13 @@
-// The import entry point: one source in, drafts and a report out. Every source goes the same way: its
-// parser's events, then stripSecrets, then buildDraft. It never throws: anything that goes wrong is a report error.
+// The import entry point: one source in, drafts and a report out. Every recording, code or project goes the same way:
+// its parser's events, then stripSecrets, then buildDraft; a step document is already steps and only goes through the
+// step parsers; a desktop recording's events go to the desktop draft builder. It never throws: anything that goes wrong
+// is a report error.
 import { chromeEvents, readChromeJson } from './chrome.js';
 import { buildDraft } from './draft.js';
 import { playwrightEvents, readPlaywrightCode } from './playwright.js';
+import { importRecording } from './recording.js';
 import { stripSecrets } from './secrets.js';
+import { importStepsDocument } from './steps-document.js';
 import type { ImportOptions, ImportReport, ImportResult, ImportSource } from './types.js';
 import { importUiPath } from './uipath.js';
 
@@ -21,10 +25,27 @@ function draftFrom(parse: (report: ImportReport) => ReturnType<typeof chromeEven
 }
 
 /**
- * Imports a recording, code or project (`data`: the file's bytes or its text) as drafts for adoption, with a report of
- * what was not translated. Never throws, and returns a report even when there is no draft.
+ * Imports a recording, code, project, step document or desktop recording (`data`: the file's bytes or its text) as
+ * drafts for adoption, with a report of what was not translated. Never throws, and returns a report even when there is
+ * no draft.
  */
 export function importSource(source: ImportSource, data: Buffer | Uint8Array | string, opts: ImportOptions): ImportResult {
+  const version = opts.version ?? 1;
+  if (!Number.isSafeInteger(version) || version < 1) return failed({ source, steps: 0, items: [] }, 'the version must be a whole number of 1 or more');
+  const r = importAt(source, data, opts);
+  return version === 1 ? r : withVersion(r, version);
+}
+
+/** The drafts at `version`: the version is part of the steps, so it is set before anything is hashed or replayed. */
+function withVersion(r: ImportResult, version: number): ImportResult {
+  return {
+    ...r,
+    drafts: r.drafts.map((d) => ({ ...d, script: { ...d.script, version } })),
+    ...(r.desktopDrafts ? { desktopDrafts: r.desktopDrafts.map((d) => ({ ...d, script: { ...d.script, version } })) } : {}),
+  };
+}
+
+function importAt(source: ImportSource, data: Buffer | Uint8Array | string, opts: ImportOptions): ImportResult {
   const report: ImportReport = { source, steps: 0, items: [] };
   try {
     switch (source) {
@@ -40,8 +61,12 @@ export function importSource(source: ImportSource, data: Buffer | Uint8Array | s
         }, opts, report);
       case 'uipath': // one draft per browser sequence, plus the flow around them
         return importUiPath(data, opts, report);
+      case 'steps': // steps written by hand: one draft, or one desktop draft
+        return importStepsDocument(data, opts, report);
+      case 'recording': // a desktop recording: one desktop draft, plus a flow with its one desktop node
+        return importRecording(data, opts);
       default:
-        return failed(report, 'the source must be chrome, playwright or uipath');
+        return failed(report, 'the source must be chrome, playwright, uipath, steps or recording');
     }
   } catch {
     // The error's text may quote the input, so only the fact is reported.

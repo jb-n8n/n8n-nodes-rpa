@@ -1,18 +1,21 @@
-# Installs the RPA desktop runner and the RPA browser on this Windows machine, or upgrades an install. Run it from an
-# administrator Windows PowerShell (powershell.exe, 64-bit), from the unpacked package (the folder this file is in):
+# Installs the RPA desktop runner on this Windows machine, and with -WithBrowser the RPA browser beside it, or upgrades
+# an install. Run it from an administrator Windows PowerShell (powershell.exe, 64-bit), from the unpacked package (the
+# folder this file is in):
 #
 #   .\Install-Rpa.ps1 [-User <name>] [-UserPassword <SecureString>] [-RunnerPort 8765] [-BrowserPort 3000]
 #                     [-AllowFrom <address>[,<address>...] | -AllowFromAnyAddress [-IncludePublicNetwork] | -NoFirewall]
-#                     [-NoBrowser] [-AutoSignIn] [-Force]
+#                     [-Address <name or address>] [-WithBrowser | -NoBrowser] [-AutoSignIn | -Unattended [-IdleSeconds 15]]
+#                     [-Force]
 #
-# Both programs run inside the signed-in session of one Windows user, the bot user, started by scheduled tasks at that
-# user's logon.
+# The programs run inside the signed-in session of one Windows user, the bot user, started by scheduled tasks at that
+# user's logon. Someone signs the bot user in (by hand, or Windows with -AutoSignIn), or, with -Unattended, the service
+# RPA Supervisor does it for each run.
 #
 #   -User          The bot user (default rpa-runner). A local user that does not exist is created as a standard user;
 #                  DOMAIN\name must exist already. An existing user's password is never changed, and an existing user
 #                  that is an administrator is refused.
-#   -UserPassword  The password for a new local user, or, with -AutoSignIn, the existing user's password to store
-#                  (it is tried against the account first).
+#   -UserPassword  The password for a new local user, or, with -AutoSignIn or -Unattended, the existing user's
+#                  password to store (it is tried against the account first).
 #                  For example: -UserPassword (Read-Host 'Password' -AsSecureString)
 #   -RunnerPort    The runner's port (default 8765).   -BrowserPort  The browser's port (default 3000).
 #   -AllowFrom     The addresses that may connect: IP addresses or ranges such as 10.0.0.0/24, normally the n8n host.
@@ -23,20 +26,51 @@
 #                  the machine's network is Public (most cloud machines and machines outside a domain) that lets
 #                  nothing in, and a first install is refused; then give -AllowFrom, or add -IncludePublicNetwork.
 #   -IncludePublicNetwork  With -AllowFromAnyAddress: the rules apply on Public networks too.
+#   -Address       The name or address n8n reaches this machine at, for the connection lines (rpa connection):
+#                  install.json keeps it, and an upgrade without -Address keeps it. Without it, when the one address
+#                  that may connect (-AllowFrom) is outside this network and this machine's own address towards it is a
+#                  private one (behind a NAT), the installer asks for it once before the first step, unless -Force or
+#                  -Unattended is given; Enter keeps the lines on the private address, and rpa connection says so.
 #   -NoFirewall    Leave Windows Firewall alone. One of -AllowFrom, -AllowFromAnyAddress and -NoFirewall is needed on
 #                  a first install; an upgrade without any of them keeps what the install was made with.
-#   -NoBrowser     Install the runner only. With the browser installed, whoever holds the browser token and can reach
-#                  the browser's port acts as the bot user through the browser: it can read the files the bot user can
-#                  read (the runner's token among them), and it can create files with a name and content of its
-#                  choice where the bot user can write, which is a way to run programs as the bot user. The runner's
-#                  policy does not limit that, so the policy is a limit for the runner token only; on a machine where
-#                  the policy must hold against n8n itself, install with -NoBrowser and run the browser on another
-#                  machine.
+#   -WithBrowser   Install the RPA browser beside the runner, or add it to an install without it. It needs the browser
+#                  files in the package folder: Get-Rpa.ps1 -WithBrowser puts them there, or unpack
+#                  rpa-browser-windows-x64.zip (from the same release) into the package folder. With the browser
+#                  installed, whoever holds the browser token and can reach the browser's port acts as the bot user
+#                  through the browser: it can read the files the bot user can read (the runner's token among them), and
+#                  it can create files with a name and content of its choice where the bot user can write, which is a
+#                  way to run programs as the bot user. The runner's policy does not limit that, so the policy is a limit
+#                  for the runner token only; on a machine where the policy must hold against n8n itself, install
+#                  without the browser and run the browser on another machine.
+#   -NoBrowser     No browser, which is the default for a first install. On an install that has the browser it removes
+#                  it: its task, firewall rule, token, certificate and files. An upgrade given neither switch keeps the
+#                  browser when the install has it. Adding the browser to an install, or removing it, lists what it
+#                  changes and asks for YES first, unless -Force is given.
 #   -AutoSignIn    Have Windows sign the bot user in by itself at every start and keep the desktop unlocked. The
 #                  password is stored on this machine, and several settings change for the whole machine; the installer
 #                  lists them and asks for YES first, unless -Force is given. Uninstall-Rpa.ps1 puts them back.
-#   -Force         Do not ask (about -AutoSignIn, or about another -User than the one of the install), and upgrade
-#                  even while the runner is running (a run in progress fails).
+#   -Unattended    Nobody needs to be signed in (Windows Server 2019 or later only; refused on Windows 10 and 11, where
+#                  it was not tested, and together with -AutoSignIn). The service RPA Supervisor (runner\RpaSupervisor.exe,
+#                  as SYSTEM) listens on the runner's port, and on the browser's when the browser is installed. When n8n
+#                  connects, it signs the bot user in through a Remote Desktop connection from this machine to itself,
+#                  and signs it out again -IdleSeconds (default 15) after the last connection; the runner (and the
+#                  browser) listen on 127.0.0.1 at their port + 10000. The installer puts the bot user into Remote Desktop Users, turns Remote Desktop on when
+#                  it is off (the registry value only: no firewall rule for Remote Desktop is turned on), stores the bot
+#                  user's password where only SYSTEM and administrators can read it (the LSA secret
+#                  L$RpaRunnerBotPassword), registers the service and points the firewall rules at it. It lists these
+#                  and asks for YES first, unless -Force is given. For an existing user it needs -UserPassword (tried
+#                  against the account first); a user it creates gets a random password. It then signs the bot user in
+#                  once, which makes the user's profile. Over an install with automatic sign-in for the same user it
+#                  needs no -UserPassword: it keeps the password stored for automatic sign-in (tried first), turns
+#                  automatic sign-in off and signs the bot user out. An upgrade keeps unattended mode and its idle
+#                  time without -Unattended; Uninstall-Rpa.ps1, and an install with -Unattended:$false, put these
+#                  back. Given none of -Unattended, -AutoSignIn and -UserPassword, a first install for a new bot user
+#                  on Windows Server is an unattended install, and its list says so first; on Windows 10 and 11 it is
+#                  refused. After Uninstall-Rpa.ps1 without -RemoveData, which keeps the bot user and the data but
+#                  removes the stored password, an install for that user given no mode, or -Unattended without
+#                  -UserPassword, is refused and says the ways out (a new password, -RemoveData, or -Unattended:$false).
+#   -Force         Do not ask (about -AutoSignIn, -Unattended, the browser added or removed, or another -User than the
+#                  one of the install), and upgrade even while the runner is running (a run in progress fails).
 #
 # Unpack the package on a local drive where only you or administrators can change it, for example under your own
 # profile or under C:\Program Files: when it starts, the installer finds the real location of the package and reads
@@ -48,8 +82,8 @@
 # kept) is used when everything in it belongs to Administrators, to SYSTEM or to the bot user of this install, and
 # that user was there before this run: an install for the same user keeps the policy, the tokens and the certificates.
 # Otherwise the installer says how many entries belong to other accounts and names the first, and refuses.
-# Running the installer again upgrades: it replaces the programs and keeps the data and the user; give it the same
-# -User, ports and -NoBrowser as before. Another -User than the one of the install is named and asked about first
+# Running the installer again upgrades: it replaces the programs and keeps the data, the user and the browser or its
+# absence; give it the same -User and ports as before. Another -User than the one of the install is named and asked about first
 # (unless -Force is given), and is refused while automatic sign-in is set up for the first user or while the data
 # directory holds what the first user left there. An upgrade keeps the firewall addresses and networks of the earlier
 # run when none are given, and automatic sign-in that an earlier run turned on (then -AutoSignIn needs no
@@ -72,9 +106,13 @@ param(
   [string[]]$AllowFrom = @(),
   [switch]$AllowFromAnyAddress,
   [switch]$IncludePublicNetwork,
+  [string]$Address,
   [switch]$NoBrowser,
+  [switch]$WithBrowser,
   [switch]$NoFirewall,
   [switch]$AutoSignIn,
+  [switch]$Unattended,
+  [ValidateRange(0, 86400)][int]$IdleSeconds = 15,
   [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
@@ -247,10 +285,11 @@ Import-Module (Join-Path $package 'RpaInstall.psd1') -Force
 
 $parameters = @{
   User = $User; UserPassword = $UserPassword; RunnerPort = $RunnerPort; BrowserPort = $BrowserPort
-  AllowFrom = $AllowFrom; AllowFromAnyAddress = [bool]$AllowFromAnyAddress; IncludePublicNetwork = [bool]$IncludePublicNetwork
-  NoBrowser = [bool]$NoBrowser; NoFirewall = [bool]$NoFirewall; AutoSignIn = [bool]$AutoSignIn; Force = [bool]$Force
+  AllowFrom = $AllowFrom; AllowFromAnyAddress = [bool]$AllowFromAnyAddress; IncludePublicNetwork = [bool]$IncludePublicNetwork; Address = $Address;
+  NoBrowser = [bool]$NoBrowser; WithBrowser = [bool]$WithBrowser; NoFirewall = [bool]$NoFirewall; AutoSignIn = [bool]$AutoSignIn; Unattended = [bool]$Unattended
+  UnattendedGiven = $PSBoundParameters.ContainsKey('Unattended'); IdleSeconds = $IdleSeconds; IdleSecondsGiven = $PSBoundParameters.ContainsKey('IdleSeconds'); Force = [bool]$Force
 }
-$plan = Get-RpaInstallPlan -Parameters $parameters -Facts (Get-RpaMachineFacts -Parameters $parameters)
+$plan = Get-RpaInstallPlan -Parameters $parameters -Facts (Get-RpaMachineFacts -Parameters $parameters -SourceDir $package)
 foreach ($warning in $plan.Warnings) { Write-Warning $warning }
 if ($plan.Refusals.Count -gt 0) {
   foreach ($refusal in $plan.Refusals) { Write-Host $refusal }
@@ -259,9 +298,12 @@ if ($plan.Refusals.Count -gt 0) {
 }
 
 # What the installer has confirmed before it changes anything: another -User than the one the install was made for,
-# and what -AutoSignIn means. One answer covers both.
+# what -AutoSignIn or -Unattended means, and the browser added to an install or removed from it. One answer covers all.
+# A plain upgrade (the same user, mode and browser) asks nothing.
 $askSignIn = ($plan.Steps -contains 'turn on automatic sign-in') -and -not $Force
-if ($plan.Questions.Count -gt 0 -or $askSignIn) {
+$askUnattended = @($plan.Notice).Count -gt 0 -and -not $Force
+$askBrowser = @($plan.BrowserNotice).Count -gt 0 -and -not $Force
+if ($plan.Questions.Count -gt 0 -or $askSignIn -or $askUnattended) {
   foreach ($question in $plan.Questions) { Write-Host $question }
   if ($plan.Questions.Count -gt 0) {
     if ($plan.Steps -contains 'create user') { Write-Host ('  There is no Windows user {0}: continuing creates it.' -f $User) }
@@ -282,7 +324,10 @@ if ($askSignIn) {
   Write-Host '  Uninstall-Rpa.ps1 puts these settings back to what they were. It cannot bring back a password that was'
   Write-Host '  stored for automatic sign-in before.'
 }
-if ($plan.Questions.Count -gt 0 -or $askSignIn) {
+# With -Force they are said all the same, before the first step.
+foreach ($line in @($plan.Notice)) { Write-Host $line }
+foreach ($line in @($plan.BrowserNotice)) { Write-Host $line }
+if ($plan.Questions.Count -gt 0 -or $askSignIn -or $askUnattended -or $askBrowser) {
   $answer = ''
   try { $answer = Read-Host 'Type YES to continue' } catch { $answer = '' }
   if ($answer -cne 'YES') {
@@ -291,6 +336,17 @@ if ($plan.Questions.Count -gt 0 -or $askSignIn) {
   }
 }
 
+# Behind a NAT the lines would carry this machine's private address: the name or address n8n reaches it at, asked
+# once and kept in install.json (the plan's Address). Not with -Force or -Unattended: -Address carries it there.
+if ($plan.AskAddress) {
+  $answer = Read-RpaReachableAddress -AllowFrom $plan.AllowFrom -Read { param($Prompt) Read-Host $Prompt }
+  if ($answer) { $plan.Address = $answer }
+}
+
+# Whether the install has the browser, as the plan decided it from -WithBrowser, -NoBrowser and the install; the steps
+# read it as NoBrowser.
+$browser = [bool]$plan.Browser
+$parameters.NoBrowser = -not $browser
 $upgrade = $plan.Steps -contains 'stop running services'
 if ($upgrade) { Write-Host 'Upgrading RPA:' } else { Write-Host 'Installing RPA:' }
 try { Invoke-RpaInstallPlan -Plan $plan -Parameters $parameters -SourceDir $package }
@@ -300,12 +356,15 @@ catch {
   $userKept = $_.Exception.Data['UserKept']
   if ($notPutBack.Count -eq 0) {
     Write-Host 'The install did not finish. Fix the cause and run Install-Rpa.ps1 again with the same parameters.'
+    # A move from automatic sign-in that had signed the bot user out: automatic sign-in is back, for the next start.
+    if ($_.Exception.Data['SignedOut']) { Write-Host ('  {0} stays signed out until this machine starts again, when Windows signs it in, or until someone signs in as {0}.' -f $User) }
   } else {
     # The undo could not put everything back, so it removed nothing more. What is left, and what to do about it.
     Write-Host 'The install did not finish, and the settings listed above could not be put back.'
     Write-Host ('  They stay recorded in {0}, with what they were before:' -f (Get-RpaLayout).InstallFile)
     Write-Host '  Uninstall-Rpa.ps1 and the next run of Install-Rpa.ps1 use that record.'
-    Write-Host '  The set-up of automatic sign-in did not finish. What the earlier steps installed is left in place.'
+    if ($plan.Unattended) { Write-Host '  The set-up of -Unattended did not finish. What the earlier steps installed is left in place.' }
+    else { Write-Host '  The set-up of automatic sign-in did not finish. What the earlier steps installed is left in place.' }
     if ($userKept) {
       Write-Host ('  The user {0}, which this run created, is kept. Its password is known to nobody.' -f $userKept)
       Write-Host ('  What to do: fix the cause, remove the user {0}, and run Install-Rpa.ps1 again with the same parameters.' -f $userKept)
@@ -320,34 +379,66 @@ $layout = Get-RpaLayout
 Write-Host ''
 Write-Host 'RPA is installed.'
 Write-Host ('  Programs:  {0}' -f $layout.InstallDir)
-Write-Host ('  Data:      {0} (policy.json, the tokens, the certificates, logs)' -f $layout.DataDir)
+if (-not $browser) { Write-Host ('  Data:      {0} (policy.json, the token, the certificate, logs)' -f $layout.DataDir) }
+else { Write-Host ('  Data:      {0} (policy.json, the tokens, the certificates, logs)' -f $layout.DataDir) }
 Write-Host ('  Policy:    {0}' -f (Join-Path $layout.DataDir 'policy.json'))
 $policyTool = Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaPolicy.exe'
 if ($plan.Steps -contains 'write policy') { Write-Host ('             It is new and allows no app. Change it with {0}' -f $policyTool) }
 else { Write-Host ('             It was there already and is kept as it is. Change it with {0}' -f $policyTool) }
-if ($NoBrowser) { Write-Host ('  Task:      \RPA\RPA Runner starts when {0} signs in' -f $User) }
+if (-not $browser) { Write-Host ('  Task:      \RPA\RPA Runner starts when {0} signs in' -f $User) }
 else { Write-Host ('  Tasks:     \RPA\RPA Runner and \RPA\RPA Browser start when {0} signs in' -f $User) }
+if ($plan.Unattended) {
+  Write-Host ('  Service:   RPA Supervisor signs {0} in when n8n connects, and out {1} s after the last connection;' -f $User, $plan.IdleSeconds)
+  Write-Host ('             its log is {0}' -f (Join-Path $layout.SupervisorDir 'supervisor.log'))
+}
 if ($NoFirewall) { Write-Host '  Firewall:  not changed (-NoFirewall)' }
 elseif (-not $plan.AllowFrom) { Write-Host '  Firewall:  not changed (this install was made with -NoFirewall)' }
 else {
   $from = 'any address'
   if ($plan.AllowFrom -notcontains 'any') { $from = $plan.AllowFrom -join ', ' }
-  if ($NoBrowser) { Write-Host ('  Firewall:  inbound TCP {0} is open to {1} (rule RPA-Runner-In)' -f $RunnerPort, $from) }
+  if (-not $browser) { Write-Host ('  Firewall:  inbound TCP {0} is open to {1} (rule RPA-Runner-In)' -f $RunnerPort, $from) }
   else { Write-Host ('  Firewall:  inbound TCP {0} and {1} are open to {2} (rules RPA-Runner-In and RPA-Browser-In)' -f $RunnerPort, $BrowserPort, $from) }
+  if ($plan.Unattended) { Write-Host '             for the RPA Supervisor' }
   if ($plan.PublicNetwork) { Write-Host '             on Domain, Private and Public networks' }
   else { Write-Host '             on Domain and Private networks, not on Public ones' }
 }
 Write-Host ('  Remove:    {0}' -f (Join-Path $layout.InstallDir 'Uninstall-Rpa.ps1'))
 Write-Host ''
+# The short command in the install folder (rpa.cmd), by its full path: nothing puts the install folder on PATH.
+$rpa = Join-Path $layout.InstallDir 'rpa.cmd'
 if ($plan.Steps -contains 'remove the old tokens') {
-  if ($NoBrowser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }
+  if (-not $browser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }
   else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }
-  Write-Host 'Update the n8n credentials with the new tokens, which Show-RpaConnection.ps1 -ShowTokens shows.'
+  if (-not $browser) { Write-Host ('Update the n8n credential with the new runner token, which & "{0}" connection -ShowTokens shows.' -f $rpa) }
+  else { Write-Host ('Update the n8n credentials with the new tokens, which & "{0}" connection -ShowTokens shows.' -f $rpa) }
 }
-if ($plan.Steps -contains 'turn on automatic sign-in') { Write-Host ('Automatic sign-in is on: Windows signs {0} in at its next start.' -f $User) }
-Write-Host ('Sign in as {0}, then run Show-RpaConnection.ps1:' -f $User)
-# Windows PowerShell by its full path, so that the line does not depend on what is found along PATH where it is typed.
-Write-Host ('  {0} -ExecutionPolicy Bypass -File "{1}"' -f (Join-Path $PSHOME 'powershell.exe'), (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1'))
-if (-not $upgrade) { Write-Host ('If {0} is already signed in, sign out and sign in again.' -f $User) }
+$autoSignIn = $plan.Steps -contains 'turn on automatic sign-in'
+if ($plan.Unattended) {
+  Write-Host ('Nobody needs to be signed in: the RPA Supervisor signs {0} in for each run.' -f $User)
+  if ($plan.Steps -contains 'register the supervisor service') {
+    Write-Host ('The installer signed {0} in once, to check the runner; that session ends by itself {1} s after the check (the idle time).' -f $User, $plan.IdleSeconds)
+  }
+  # What the n8n credentials need, as rpa connection shows it (the tokens hidden). The installer prints no secret.
+  Write-Host ''
+  try { & (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') | Out-Host }
+  catch {
+    $shown = 'The connection lines could not be shown'
+    if (-not $browser) { $shown = 'The connection line could not be shown' }
+    Write-Host ('{0} ({1}). Run: & "{2}" connection' -f $shown, $_.Exception.Message, $rpa)
+  }
+  Write-Host ''
+  Write-Host ('For how the supervisor is doing: & "{0}" status' -f $rpa)
+  Write-Host ('While someone is signed in as {0}, runs are refused: sign {0} out after looking at something.' -f $User)
+}
+else {
+  if ($autoSignIn) {
+    $starts = 'the runner and the browser'
+    if (-not $browser) { $starts = 'the runner' }
+    Write-Host ('Automatic sign-in is on. Restart this machine now (Restart-Computer): Windows then signs {0} in and starts {1}. About a minute after its desktop shows, run:' -f $User, $starts)
+  }
+  else { Write-Host ('Sign in as {0}, then run:' -f $User) }
+  Write-Host ('  & "{0}" connection' -f $rpa)
+  if (-not $autoSignIn -and -not $upgrade) { Write-Host ('If {0} is already signed in, sign out and sign in again.' -f $User) }
+}
 # The exit code of a run that finished, whatever the last Windows tool it ran left in $LASTEXITCODE.
 exit 0

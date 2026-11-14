@@ -30,7 +30,7 @@
       "id": "5a1b2c3d-4e5f-4a60-8b70-000000000503",
       "name": "Screenshot example.com",
       "type": "n8n-nodes-rpa.playwright",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [240, 0]
     },
     {
@@ -44,7 +44,7 @@
       "id": "5a1b2c3d-4e5f-4a60-8b70-000000000504",
       "name": "Extract the sandbox table",
       "type": "n8n-nodes-rpa.playwright",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [480, 0]
     }
   ],

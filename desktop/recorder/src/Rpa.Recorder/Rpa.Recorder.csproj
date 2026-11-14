@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- RpaRecorder.exe: records a person's actions in a Windows application (low-level hooks say when, UI Automation
+       says on what) and saves a recording file and a policy change file. The rules are in Rpa.Recorder.Core; this
+       project only asks Windows and UI Automation, and shows the bar. Runs as the signed-in user (asInvoker). Publish:
+       dotnet publish -c Release -r win-x64. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>RpaRecorder</AssemblyName>
+    <RootNamespace>Rpa.Recorder</RootNamespace>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <!-- Recording without the bar (Headless.cs, for the scenario test) is only in the build published with
+       -p:RecorderScenario=true. The package's RpaRecorder.exe is published without it and refuses headless. -->
+  <PropertyGroup Condition="'$(RecorderScenario)' == 'true'">
+    <DefineConstants>$(DefineConstants);RECORDER_SCENARIO</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(RecorderScenario)' != 'true'">
+    <Compile Remove="Headless.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Rpa.Recorder.Core\Rpa.Recorder.Core.csproj" />
+  </ItemGroup>
+</Project>

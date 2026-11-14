@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { APPROVER } from './fixtures.js';
 import type { ICredentialTestFunctions, IDataObject } from 'n8n-workflow';
 import * as engine from 'n8n-rpa-engine';
 import { DEMO_PASSWORD, DEMO_USER, FakeRunner } from '../../engine/test/fake-runner.js';
@@ -12,7 +13,6 @@ import { harness, type HarnessOptions } from './harness.js';
 
 // Golden strings are written out here on purpose (tests assert them verbatim, not through the constants).
 const KEY = 'desktop-signing-key-0123456789abcdef';
-const APPROVER = 'approver@example.com';
 const uia = (automationId: string, controlType = 'Edit') => ({ uia: { path: [{ controlType, automationId }] } });
 const DESKTOP_STEPS = {
   surface: 'desktop', name: 'erp-orders', version: 2, app: { exe: 'ErpDemo.exe' },
@@ -49,21 +49,34 @@ const ctx = (credentials: HarnessOptions['credentials'], p: Record<string, unkno
 const details = (json: IDataObject) => json.details as IDataObject;
 
 describe('RPA Desktop Runner credential', () => {
-  it('asks for the runner URL, the token (masked) and the certificate fingerprint, all required', () => {
+  it('asks for the Connection Line (masked), or the runner URL, the token (masked) and the certificate fingerprint, none required by itself', () => {
     const c = new RpaDesktopRunnerApi();
     expect({ name: c.name, displayName: c.displayName }).toEqual({ name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner' });
     const fields = c.properties.filter((p) => p.type !== 'notice');
-    expect(fields.map((p) => [p.name, p.displayName, p.required, p.typeOptions?.password === true])).toEqual([
-      ['url', 'Runner URL', true, false], ['token', 'Token', true, true], ['fingerprint', 'Certificate Fingerprint', true, false],
+    expect(fields.map((p) => [p.name, p.displayName, p.required === true, p.typeOptions?.password === true])).toEqual([
+      ['connectionLine', 'Connection Line', false, true], ['url', 'Runner URL', false, false], ['token', 'Token', false, true], ['fingerprint', 'Certificate Fingerprint', false, false],
     ]);
-    expect(fields[0].placeholder).toBe('wss://runner.example.com:8765');
+    expect(fields[1].placeholder).toBe('wss://runner.example.com:8765');
+  });
+
+  it('the credential test works with the Connection Line alone, and says what is wrong with a line without repeating it', async () => {
+    runner = await FakeRunner.start();
+    const { host } = new URL(runner.endpoint.url);
+    const hex = runner.endpoint.fingerprint.replace(/:/g, '');
+    const line = `rpa-runner://${host}/rpa/v1#token=${runner.endpoint.token}&fingerprint=${hex}`;
+    expect(await desktopRunnerTestResult({ connectionLine: line }, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (its Windows session is ready for a run)' });
+    const wrongKind = await desktopRunnerTestResult({ connectionLine: line.replace('rpa-runner://', 'rpa-browser://').replace('/rpa/v1#', '/#') }, engine);
+    expect(wrongKind.status).toBe('Error');
+    expect(wrongKind.message).toContain("is the browser's line (rpa-browser://)");
+    expect(wrongKind.message).not.toContain(runner.endpoint.token);
+    expect(runner.tcpConnections).toBe(1);
   });
 
   it('the credential test connects (pinned), calls hello and reports the session', async () => {
     runner = await FakeRunner.start();
-    expect(await desktopRunnerTestResult(runner.endpoint, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (session interactive)' });
+    expect(await desktopRunnerTestResult(runner.endpoint, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (its Windows session is ready for a run)' });
     runner.session = { interactive: true, locked: true };
-    expect(await desktopRunnerTestResult(runner.endpoint, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (session locked)' });
+    expect(await desktopRunnerTestResult(runner.endpoint, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (its Windows session is locked: a run fails until it is unlocked)' });
     const node = new Playwright();
     const viaNode = await node.methods.credentialTest.desktopRunnerTest.call({} as ICredentialTestFunctions, {
       id: 'd1', name: 'Runner', type: 'rpaDesktopRunnerApi', data: { ...runner.endpoint },
@@ -125,6 +138,32 @@ describe('Run Steps routes by the steps\' surface', () => {
     expect(runner.tcpConnections).toBe(0);
   });
 
+  it('Runs On only chooses the slots: the steps still decide where they run, and a slot it hides is named in the message', async () => {
+    runner = await FakeRunner.start();
+    const eng = fakeEngine(() => scriptOk());
+    const both = { rpaDesktopRunnerApi: { ...runner.endpoint }, playwrightBrowserApi: { mode: 'local' }, playwrightScriptSigningApi: { secretKey: KEY } };
+    // Desktop steps on a node set to A browser: n8n hides (and drops) the runner slot, so the node does not use it.
+    const [onBrowser] = await executeRunSteps(ctx(both, params(DESKTOP_STEPS, { runsOn: 'browser' })), eng);
+    expect(onBrowser[0].json.error).toBe(
+      'These are desktop steps (surface "desktop"): they run on a desktop runner. Attach an RPA Desktop Runner credential. Its slot shows when Runs On is A Windows desktop app or Browser and desktop apps.',
+    );
+    // Browser steps on a node set to A Windows desktop app.
+    const [onDesktop] = await executeRunSteps(ctx(both, params(BROWSER_STEPS, { runsOn: 'desktop' })), eng);
+    expect(onDesktop[0].json.error).toBe(
+      'These are browser steps: they run in a browser. Attach an RPA Browser credential. Its slot shows when Runs On is A browser or Browser and desktop apps.',
+    );
+    expect(eng.calls).toHaveLength(0);
+    expect(runner.tcpConnections).toBe(0);
+    // When the slot shows, the message stands as it was.
+    const [missing] = await executeRunSteps(ctx({ playwrightScriptSigningApi: { secretKey: KEY } }, params(DESKTOP_STEPS, { runsOn: 'desktop' })), eng);
+    expect(missing[0].json.error).toBe('These are desktop steps (surface "desktop"): they run on a desktop runner. Attach an RPA Desktop Runner credential.');
+    // Desktop steps on a node set to A Windows desktop app run on the runner, never in a browser.
+    const [ran] = await executeRunSteps(ctx(both, params(DESKTOP_STEPS, { runsOn: 'desktop' })), eng);
+    expect(ran[0].json.error).toBeUndefined();
+    expect(ran[0].json).toMatchObject({ name: 'erp-orders', values: { count: '2 results' } });
+    expect(eng.calls).toHaveLength(0);
+  });
+
   it('desktop steps refuse a Site Login and AI repair (not available for desktop steps yet)', async () => {
     runner = await FakeRunner.start();
     const eng = fakeEngine(() => scriptOk());
@@ -148,17 +187,67 @@ describe('Run Steps routes by the steps\' surface', () => {
     expect(runner.tcpConnections).toBe(0);
     const missing = { ...DESKTOP_STEPS, steps: [{ intent: 'Click Help', click: uia('btnHelp', 'Button'), timeoutMs: 300 }] };
     const [drift] = await executeRunSteps(ctx(creds, params(missing)), eng);
-    expect(drift[0].json.error).toBe('drift_detected: Click Help: no element matched Button #btnHelp in window "ERP Demo - Sign in"');
+    expect(drift[0].json.error).toBe('drift_detected: Step 1 (Click Help): no element matched Button #btnHelp in window "ERP Demo - Sign in"');
     expect(details(drift[0].json)).toMatchObject({ code: 'drift_detected', lane: 'script', stepIntent: 'Click Help', submitted: false });
+  });
+});
+
+describe('desktop steps with the RPA Secret Variables credential', () => {
+  const secretCreds = (runnerEndpoint: object) => ({
+    rpaDesktopRunnerApi: { ...runnerEndpoint }, playwrightScriptSigningApi: { secretKey: KEY },
+    rpaSecretVariablesApi: { variables: { values: [{ name: 'password', value: DEMO_PASSWORD }] } },
+  });
+  const onlyUser = { saveTrace: 'never', variables: { values: [{ name: 'user', value: DEMO_USER }] }, timeout: 2000 };
+  it('signed steps type the password from the credential; nothing in the output shows it', async () => {
+    runner = await FakeRunner.start();
+    const [data] = await executeRunSteps(ctx(secretCreds(runner.endpoint), { ...params(DESKTOP_STEPS), options: onlyUser }), fakeEngine(() => scriptOk()));
+    expect(data[0].json.error).toBeUndefined();
+    const typed = runner.requests.filter((q) => q.method === 'act').flatMap((q) => ((q.params.segments ?? []) as { text?: string }[]).map((x) => x.text ?? ''));
+    expect(typed).toContain(DEMO_PASSWORD);
+    expect(JSON.stringify(data)).not.toContain(DEMO_PASSWORD);
+  });
+  it('unsigned steps cannot type it: policy_violation, nothing typed', async () => {
+    runner = await FakeRunner.start();
+    const unsignedParams = { ...params(DESKTOP_STEPS), requireSignedSteps: false, signature: '', approvedBy: '', options: onlyUser };
+    const [data] = await executeRunSteps(ctx(secretCreds(runner.endpoint), unsignedParams), fakeEngine(() => scriptOk()));
+    expect(data[0].json.error).toBe('policy_violation: Step 2 (Type the password): Unsigned steps cannot type a secret variable. Sign them with Sign Steps; Allow Unsigned Writes does not cover it.');
+    expect(JSON.stringify(runner.requests)).not.toContain(DEMO_PASSWORD);
+  });
+  it('May Be Typed Into: an app it does not list is refused before the runner is reached; a listed app runs as before', async () => {
+    runner = await FakeRunner.start();
+    const limited = (mayBeTypedInto: string) => {
+      const c = secretCreds(runner!.endpoint);
+      return { ...c, rpaSecretVariablesApi: { ...c.rpaSecretVariablesApi, mayBeTypedInto } };
+    };
+    const p = { ...params(DESKTOP_STEPS), options: onlyUser };
+    const [refused] = await executeRunSteps(ctx(limited('Other.exe\nerp.example.com'), p), fakeEngine(() => scriptOk()));
+    expect(refused[0].json.error).toBe("policy_violation: The RPA Secret Variables credential's May Be Typed Into does not list ErpDemo.exe, so this run may not start it. Add ErpDemo.exe there, or remove the credential from this node.");
+    expect(details(refused[0].json)).toMatchObject({ code: 'policy_violation', lane: 'script', submitted: false });
+    expect(runner.tcpConnections).toBe(0);
+    expect(JSON.stringify(refused)).not.toContain(DEMO_PASSWORD);
+    const [ok] = await executeRunSteps(ctx(limited('erpdemo.exe'), p), fakeEngine(() => scriptOk()));
+    expect(ok[0].json.error).toBeUndefined();
+    const typed = runner.requests.filter((q) => q.method === 'act').flatMap((q) => ((q.params.segments ?? []) as { text?: string }[]).map((x) => x.text ?? ''));
+    expect(typed).toContain(DEMO_PASSWORD);
+  });
+  it('a password nobody supplied fails as a missing variable, and the message says where a secret goes', async () => {
+    runner = await FakeRunner.start();
+    const creds = { rpaDesktopRunnerApi: { ...runner.endpoint }, playwrightScriptSigningApi: { secretKey: KEY } };
+    const [data] = await executeRunSteps(ctx(creds, { ...params(DESKTOP_STEPS), options: onlyUser }), fakeEngine(() => scriptOk()));
+    expect(data[0].json.error).toContain('missing input "password" (a secret goes in an RPA Secret Variables credential, any other value in Options → Variables)');
   });
 });
 
 describe('desktop steps elsewhere in the node', () => {
   it('Sign Steps refuses desktop steps that were not reviewed as they are (a crafted digest, a base version)', async () => {
     const { executeSignSteps } = await import('../nodes/Playwright/operations/signSteps.js');
-    // The safety flags and line are the recomputed ones (Sign Steps checks those first); the digest and the change list are not.
+    // The safety flags and line, and the shown change list, are the recomputed ones (Sign Steps checks those first); the
+    // digest and the change list itself are not.
     const safetyFlags = engine.desktopSafetyFlags(engine.parseDesktopScript(DESKTOP_STEPS));
-    const item = { name: 'erp-orders', baseVersion: 1, version: 2, steps: DESKTOP_STEPS, hash: engine.scriptHash(DESKTOP_STEPS), digest: 'd'.repeat(64), safetyFlags, changes: [], evidence: { count: 0, total: null, diff: { missing: [], extra: [] } }, safetyLine: safetyFlags.join('; ') };
+    const item = {
+      name: 'erp-orders', baseVersion: 1, version: 2, steps: DESKTOP_STEPS, hash: engine.scriptHash(DESKTOP_STEPS), digest: 'd'.repeat(64), safetyFlags, changes: [],
+      evidence: { count: 0, total: null, diff: { missing: [], extra: [] } }, safetyLine: safetyFlags.join('; '), changeList: 'No step changes',
+    };
     const p = { operation: 'signSteps', approved: true, approverId: APPROVER, approverAllowlist: APPROVER };
     const out = await executeSignSteps(harness({ params: p, items: [{ json: item }], credentials: { playwrightScriptSigningApi: { secretKey: KEY } }, continueOnFail: true }), engine);
     const error = String(out[0][0].json.error);

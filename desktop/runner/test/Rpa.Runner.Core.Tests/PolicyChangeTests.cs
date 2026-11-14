@@ -72,6 +72,28 @@ public class PolicyChangeTests
     }
 
     [Fact]
+    public void The_install_guides_sample_change_is_accepted()
+    {
+        // docs/install/samples/erp-demo-policy-change.json, the change the Windows guide has an administrator apply. Its
+        // path is the installed demo's under Program Files; elsewhere than on Windows it is moved under this platform's
+        // root, as the policy takes only absolute local paths.
+        var root = typeof(PolicyChangeTests).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
+            .Cast<System.Reflection.AssemblyMetadataAttribute>().Single(a => a.Key == "RepoRoot").Value!;
+        var sample = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(root, "docs", "install", "samples", "erp-demo-policy-change.json")))!;
+        const string Installed = @"C:\Program Files\RPA Runner\erp-demo\v1\ErpDemo.exe";
+        Assert.Equal(Installed, sample["allowedApps"]![0]!["path"]!.GetValue<string>());
+        var path = OperatingSystem.IsWindows() ? Installed : Path.Combine(Root, "RPA Runner", "erp-demo", "v1", "ErpDemo.exe");
+        sample["allowedApps"]![0]!["path"] = path;
+
+        var result = PolicyChange.Apply("""{ "allowedApps": [], "maxFileBytes": 20971520 }""", sample.ToJsonString());
+        Assert.DoesNotContain(result.Summary, line => line.StartsWith("WARNING", StringComparison.Ordinal));
+        var policy = RunnerPolicy.Parse(result.Json);
+        Assert.Equal(("ErpDemo.exe", path), (Assert.Single(policy.AllowedApps).Exe, policy.AllowedApps[0].Path));
+        Assert.Equal(new RunnerPolicy.WriteControl("ErpDemo.exe", "btnPost"), Assert.Single(policy.WriteControls));
+        Assert.Equal(["Ctrl+S", "F11"], policy.GatedKeys.Select(k => k.ToString()));
+    }
+
+    [Fact]
     public void Keeps_the_current_policy_s_other_settings()
     {
         var current = $$"""
@@ -912,6 +934,165 @@ public class PolicyChangeTests
 
         const string line = """Allow app "ErpDemo.exe" at "C:\\Program Files\\ERP Demo\\ErpDemo.exe" (SHA-256 pinned 3A7F5C1E9B2D4F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8)""";
         Assert.Equal(PolicyChange.Rows(line).Select(row => row.TrimEnd()), shown);
+    }
+
+    // The recorder's change file: the buttons its recording clicked that look like writes, each with the name it showed,
+    // and the standard dialog buttons it left out.
+    private const string Protects = "A run must then mark a step as a write to press one of these, and to press any key but Tab, arrows, Home, End, PageUp, PageDown or Escape while a window that holds one is open.";
+    private static string RecorderChange(string writes, string leftOut = "") =>
+        $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}} }], "writeControls": [{{writes}}]{{(leftOut == "" ? "" : $", \"leftOutControls\": [{leftOut}]")}} }""";
+    private const string PostButton = """{ "exe": "ErpDemo.exe", "automationId": "btnPost", "name": "Post" }""";
+    private const string SaveButton = """{ "exe": "ErpDemo.exe", "automationId": "1", "name": "Save" }""";
+    private const string LeftOutSave = "Not protected: \"Save\" (\"1\") of \"ErpDemo.exe\": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares";
+    private const string BotsBefore = "Bots of \"ErpDemo.exe\" approved earlier stop where they press one of these buttons, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape while a window that holds one is open, unless that step was ticked as a write. Sign such a bot again on the import form with that step ticked.";
+    private const string LeftOutTaskYes = "Not protected: \"Yes\" (\"CommandButton_6\") of \"ErpDemo.exe\": CommandButton_1 to CommandButton_11 are the ids of the standard buttons of Windows' task dialogs, which every task dialog of the app shares";
+
+    [Fact]
+    public void A_named_write_control_is_shown_as_a_button_to_protect_and_the_name_is_not_kept()
+    {
+        var result = PolicyChange.Apply("", RecorderChange(PostButton + """, { "exe": "ErpDemo.exe", "automationId": "btnDelete", "name": "Delete" }""", SaveButton));
+        Assert.Equal(
+            [
+                "Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control",
+                "Protect \"Delete\" (\"btnDelete\") of \"ErpDemo.exe\" as a write control",
+                Protects,
+                $"Allow app \"ErpDemo.exe\" at {L(ErpPath)}",
+                LeftOutSave,
+                Count(apps: 1, writes: 2),
+            ],
+            result.Summary);
+        Assert.Empty(result.Notes);
+        var policy = RunnerPolicy.Parse(result.Json);
+        Assert.Equal([("ErpDemo.exe", "btnPost"), ("ErpDemo.exe", "btnDelete")], policy.WriteControls.Select(w => (w.Exe, w.AutomationId)));
+        Assert.DoesNotContain("\"name\"", result.Json);
+        Assert.DoesNotContain("leftOutControls", result.Json);
+        Assert.DoesNotContain("Save", result.Json);
+    }
+
+    [Fact]
+    public void A_write_control_without_a_name_keeps_its_line_and_a_policy_file_takes_no_name_and_no_left_out_list()
+    {
+        var result = PolicyChange.Apply("", """{ "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "btnPost" }] }""");
+        Assert.Equal(["Add write control \"ErpDemo.exe\" / \"btnPost\"", Count(writes: 1)], result.Summary);
+        // The names and the left-out list are for the question only: the policy file has neither.
+        Refused($$"""{ "writeControls": [{{PostButton}}] }""", "{}", "the current policy: unknown key \"name\" in writeControls");
+        Refused($$"""{ "leftOutControls": [{{SaveButton}}] }""", "{}", "the current policy: unknown key \"leftOutControls\"");
+        Assert.Throws<RunnerPolicy.InvalidPolicyException>(() => RunnerPolicy.Parse($$"""{ "writeControls": [{{PostButton}}] }"""));
+    }
+
+    [Fact]
+    public void A_left_out_control_is_shown_once_and_never_applied_and_not_when_the_policy_protects_it()
+    {
+        var result = PolicyChange.Apply("", RecorderChange(PostButton, SaveButton + ", " + SaveButton + """, { "exe": "ErpDemo.exe", "automationId": "2" }"""));
+        Assert.Equal(
+            [
+                "Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control", Protects,
+                $"Allow app \"ErpDemo.exe\" at {L(ErpPath)}", LeftOutSave,
+                "Not protected: \"2\" of \"ErpDemo.exe\": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares",
+                Count(apps: 1, writes: 1),
+            ],
+            result.Summary);
+        Assert.Equal(["btnPost"], RunnerPolicy.Parse(result.Json).WriteControls.Select(w => w.AutomationId));
+
+        // An administrator protected 1 by hand: the line would not be true.
+        var current = """{ "writeControls": [{ "exe": "ERPDEMO.EXE", "automationId": "1" }] }""";
+        Assert.DoesNotContain(PolicyChange.Apply(current, RecorderChange(PostButton, SaveButton)).Summary, line => line.StartsWith("Not protected", StringComparison.Ordinal));
+        // Nothing else to change: a left-out control alone changes nothing.
+        Assert.Empty(PolicyChange.Apply(PolicyChange.Apply("", RecorderChange(PostButton)).Json, RecorderChange(PostButton, SaveButton)).Summary);
+    }
+
+    [Fact]
+    public void A_task_dialog_s_standard_button_is_named_as_left_out_with_its_own_reason()
+    {
+        // "Confirm Save As" (a task dialog) names its Yes CommandButton_6, the same in every task dialog of the app.
+        var result = PolicyChange.Apply("", RecorderChange("", SaveButton + """, { "exe": "ErpDemo.exe", "automationId": "CommandButton_6", "name": "Yes" }"""));
+        Assert.Equal(
+            [
+                // What is allowed comes first, what is left out last: the question does not open with "Not protected".
+                $"Allow app \"ErpDemo.exe\" at {L(ErpPath)}",
+                LeftOutSave,
+                LeftOutTaskYes,
+                Count(apps: 1),
+            ],
+            result.Summary);
+        Assert.Empty(RunnerPolicy.Parse(result.Json).WriteControls);
+        Assert.True(PolicyChange.IsDialogButtonId("CommandButton_1"));
+        Assert.True(PolicyChange.IsDialogButtonId("CommandButton_11"));
+        Assert.False(PolicyChange.IsDialogButtonId("CommandButton_12"));
+        Assert.False(PolicyChange.IsDialogButtonId("CommandButton_101"));
+        Assert.False(PolicyChange.IsDialogButtonId("CommandButton_06"));
+        Assert.False(PolicyChange.IsDialogButtonId("commandbutton_6"));
+        Assert.False(PolicyChange.IsDialogButtonId("CommandLink_6"));
+    }
+
+    [Theory]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "btnSave" }""", "the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not \"btnSave\"")]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "12" }""", "the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not \"12\"")]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "01" }""", "the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not \"01\"")]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "CommandButton_100" }""", "the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not \"CommandButton_100\"")]
+    [InlineData("""{ "exe": "ErpDemo.exe" }""", "the change: leftOutControls[] needs exe and automationId")]
+    [InlineData("""{ "automationId": "1" }""", "the change: leftOutControls[] needs exe and automationId")]
+    [InlineData("""{ "exe": "C:\\ErpDemo.exe", "automationId": "1" }""", "the change: leftOutControls[] needs exe and automationId")]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": 1 }""", "the change: leftOutControls[] needs exe and automationId")]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "1", "name": 5 }""", "the change: a control's name must be text")]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "1", "reason": "x" }""", "the change: unknown key \"reason\" in leftOutControls")]
+    public void Refuses_a_left_out_control_the_line_would_say_something_untrue_about(string entry, string message) =>
+        Refused("", RecorderChange(PostButton, entry), message);
+
+    [Fact]
+    public void Refuses_a_name_that_is_not_text_and_counts_the_left_out_controls_and_the_names_in_the_limits()
+    {
+        Refused("", RecorderChange("""{ "exe": "ErpDemo.exe", "automationId": "btnPost", "name": ["Post"] }"""), "the change: a control's name must be text");
+        Refused("", RecorderChange($$"""{ "exe": "ErpDemo.exe", "automationId": "btnPost", "name": "{{new string('x', 261)}}" }"""),
+            "a value in the change is longer than 260 characters");
+        Refused("", RecorderChange(PostButton, $$"""{ "exe": "ErpDemo.exe", "automationId": "1", "name": "{{new string('x', 261)}}" }"""),
+            "a value in the change is longer than 260 characters");
+        // The app, one write control and 38 left-out controls are 40; one more is 41.
+        var left = string.Join(", ", Enumerable.Repeat(SaveButton, 38));
+        Assert.NotEmpty(PolicyChange.Apply("", RecorderChange(PostButton, left)).Summary);
+        Refused("", RecorderChange(PostButton, left + ", " + SaveButton), "a change may hold at most 40 entries; this one holds 41");
+    }
+
+    [Fact]
+    public void An_app_the_policy_has_without_write_controls_gets_a_note_on_how_to_protect_them_later()
+    {
+        // An app allowed by an earlier version: its entry has no write control. The runner gates no write in it.
+        var earlier = Policy();
+        var note = "No write control is listed for \"ErpDemo.exe\", so the runner gates no write in it. To protect its save or post buttons, record a run that clicks them and apply that recording's change file the same way.";
+        var again = PolicyChange.Apply(earlier, AppChange(ErpPath));
+        Assert.Empty(again.Summary);
+        Assert.Equal([note], again.Notes);
+        Assert.Equal([note], PolicyChange.Apply(earlier, AppChange(ErpPath, $", \"sha256\": \"{ShaA}\"")).Notes);
+
+        // A recording that clicked Post adds the protection; no note then, and none once the policy has it.
+        var protectedNow = PolicyChange.Apply(earlier, RecorderChange(PostButton));
+        Assert.Equal(["Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control", Protects, BotsBefore, Count(writes: 1)], protectedNow.Summary);
+        Assert.Empty(protectedNow.Notes);
+        Assert.Empty(PolicyChange.Apply(protectedNow.Json, AppChange(ErpPath)).Notes);
+        // A new app gets none: its question says what it allows.
+        Assert.Empty(PolicyChange.Apply("", AppChange(ErpPath)).Notes);
+    }
+
+    [Fact]
+    public void Protecting_buttons_of_an_app_the_policy_already_allowed_says_what_happens_to_the_bots_approved_before()
+    {
+        // The app was allowed (bots of it may exist): the question says they stop where they press a protected button.
+        var earlier = Policy();
+        var result = PolicyChange.Apply(earlier, RecorderChange(PostButton, SaveButton));
+        Assert.Equal(["Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control", Protects, BotsBefore, LeftOutSave, Count(writes: 1)], result.Summary);
+        // Without a name the line is the same (the protection is); it names the app as the policy spells it.
+        Assert.Equal(["Add write control \"erpdemo.exe\" / \"btnPost\"", BotsBefore, Count(writes: 1)],
+            PolicyChange.Apply(earlier, """{ "writeControls": [{ "exe": "erpdemo.exe", "automationId": "btnPost" }] }""").Summary);
+        // A further button of an app that already has one: bots approved earlier may press it.
+        var more = PolicyChange.Apply(result.Json, RecorderChange("""{ "exe": "ErpDemo.exe", "automationId": "btnDelete", "name": "Delete" }"""));
+        Assert.Contains(BotsBefore, more.Summary);
+
+        // A new app has no bots yet; nothing protected, nothing said; another app's buttons say nothing of this one.
+        Assert.DoesNotContain(BotsBefore, PolicyChange.Apply("", RecorderChange(PostButton)).Summary);
+        Assert.DoesNotContain(BotsBefore, PolicyChange.Apply(earlier, RecorderChange("", SaveButton)).Summary);
+        Assert.DoesNotContain(BotsBefore, PolicyChange.Apply(result.Json, RecorderChange(PostButton)).Summary);
+        Assert.Equal(["Add write control \"Other.exe\" / \"btnPost\"", Count(writes: 1)],
+            PolicyChange.Apply(earlier, """{ "writeControls": [{ "exe": "Other.exe", "automationId": "btnPost" }] }""").Summary);
     }
 
     [Fact]

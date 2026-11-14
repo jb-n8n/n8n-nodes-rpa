@@ -2,15 +2,15 @@ import { existsSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRunner } from '../src/desktop/client.js';
 import { createDesktopSurface } from '../src/desktop/surface.js';
-import { DEFAULT_BUSY_WAIT_MS, DEFAULT_LEASE_MS, defaultBusyWaitMs, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from '../src/desktop/task.js';
+import { DEFAULT_LEASE_MS, defaultBusyWaitMs, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from '../src/desktop/task.js';
 import { CANCELLED } from '../src/lane/script-lane.js';
 import { runTask } from '../src/lane/task.js';
-import { DESKTOP_STEPS_NEED_RUNNER, RUNNER_BUSY, UNSIGNED_REQUIRED, desktopNotInteractive } from '../src/messages.js';
+import { DESKTOP_STEPS_NEED_RUNNER, RUNNER_BUSY, UNSIGNED_REQUIRED, UNSIGNED_SECRET_VARIABLE, desktopNotInteractive } from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { signScript } from '../src/sign.js';
 import type { DesktopLocator } from '../src/types.js';
 import { NoRunError } from '../src/desktop/protocol.js';
-import { runBinaryTooLarge, runnerAppMissing } from '../src/messages.js';
+import { runBinaryTooLarge, runnerAppMissing, runnerAppNotAllowed, secretAppNotListed } from '../src/messages.js';
 import { MAX_RUN_BINARY_BYTES } from '../src/steps/limits.js';
 import { MAX_EXPECTED_FILE_BYTES } from '../src/steps/parse.js';
 import { newRunState, runSteps, type StepContext } from '../src/steps/run.js';
@@ -162,7 +162,7 @@ describe('desktop task: each handler', () => {
     ]);
     const r = failed(await run(d));
     expect({ code: r.code, message: r.message, index: r.failure?.index }).toEqual({
-      code: 'incomplete', message: 'Return the CSV: no file matching the pattern in the export directory', index: 6,
+      code: 'incomplete', message: 'Step 7 (Return the CSV): no file matching the pattern in the export directory', index: 6,
     });
   });
 
@@ -243,7 +243,7 @@ describe('desktop task: calls the runner takes as the real one does', () => {
     runner = await FakeRunner.start({ policy: { ...DEMO_POLICY, maxFileBytes: 64 } });
     const r = failed(await run(E2E));
     expect({ code: r.code, message: r.message }).toEqual({
-      code: 'policy_violation', message: 'Return the CSV: policy_refused: the matching file is 82 bytes, over the limit of 64 bytes',
+      code: 'policy_violation', message: 'Step 12 (Return the CSV): the matching file is 82 bytes, over the limit of 64 bytes',
     });
     const asked = runner.requests.find((q) => q.method === 'file.retrieve');
     expect(asked?.params.maxBytes).toBe(MAX_EXPECTED_FILE_BYTES);
@@ -263,7 +263,7 @@ describe('desktop task: refusals and runner errors', () => {
   });
 
   it('the default busy wait outlasts the lease, so a run left by a stopped n8n frees the runner in time (M12)', async () => {
-    expect(DEFAULT_BUSY_WAIT_MS).toBe(DEFAULT_LEASE_MS + 15_000);
+    expect(defaultBusyWaitMs(DEFAULT_LEASE_MS)).toBe(DEFAULT_LEASE_MS + 15_000);
     expect(defaultBusyWaitMs(60_000)).toBe(75_000);
     // The stopped n8n's run had this run's lease; without busyWaitMs this run waits it out.
     runner = await FakeRunner.start();
@@ -277,19 +277,48 @@ describe('desktop task: refusals and runner errors', () => {
   it('not_found names the target and the window title; not_unique gives the count', async () => {
     const missing = failed(await run(doc([{ intent: 'Click Help', click: uia('btnHelp', 'Button'), timeoutMs: 300 }])));
     expect({ code: missing.code, message: missing.message }).toEqual({
-      code: 'drift_detected', message: 'Click Help: no element matched Button #btnHelp in window "ERP Demo - Sign in"',
+      code: 'drift_detected', message: 'Step 1 (Click Help): no element matched Button #btnHelp in window "ERP Demo - Sign in"',
     });
     const twice = failed(await run(doc([{ intent: 'Type somewhere', fill: { field: { uia: { path: [{ controlType: 'Edit' }] } }, value: 'x' }, timeoutMs: 300 }])));
-    expect({ code: twice.code, message: twice.message }).toEqual({ code: 'drift_detected', message: 'Type somewhere: Edit matches 2 elements' });
+    expect({ code: twice.code, message: twice.message }).toEqual({ code: 'drift_detected', message: 'Step 1 (Type somewhere): Edit matches 2 elements' });
     const expectFails = failed(await run(doc([{ intent: 'Sign in', click: uia('btnSignIn', 'Button'), expect: { visible: uia('txtSearch') }, timeoutMs: 300 }])));
-    expect({ code: expectFails.code, message: expectFails.message }).toEqual({ code: 'drift_detected', message: 'Sign in: expected UI Automation Edit #txtSearch to be visible within 0.3 s' });
+    expect({ code: expectFails.code, message: expectFails.message }).toEqual({ code: 'drift_detected', message: 'Step 1 (Sign in): expected UI Automation Edit #txtSearch to be visible within 0.3 s' });
+  });
+
+  it('a locator that matches several elements, a disabled element and a copy of the app the run did not start: the step, then the runner\'s own words without their code', async () => {
+    // Copies of what desktop/runner sends (RpcErrors.NotUnique, RetryableActionException.Disabled, WindowScope.RunWindows).
+    const notUnique = 'found 2 buttons named "Copy". Add what tells them apart to the step\'s target: the window, a parent with an automationId, '
+      + 'or a condition such as automationId or className. Target: {controlType="Button", name="Copy"}';
+    const disabled = 'found the button with the id "btnSignIn" disabled. If a person can click it, target an enabled element inside it, or use key steps (Tab, Space). '
+      + 'Target: {controlType="Button", automationId="btnSignIn"}';
+    const otherCopy = 'found its window in a copy of ErpDemo.exe that this run did not start (most often one left open before the run). '
+      + 'Close that copy on the runner machine (or end its process), then run again. Window: {title="ERP Demo - Sign in"}';
+    runner = await FakeRunner.start();
+    const click = doc([{ intent: 'Wait', waitFor: { target: uia('txtUser') }, optional: true, timeoutMs: 300 }, { intent: 'Click Copy', click: uia('btnSignIn', 'Button') }]);
+    const cases: [string, number, string, string, string][] = [
+      ['resolve', -32005, `not_unique: ${notUnique}`, 'drift_detected', `Step 2 (Click Copy): ${notUnique}`],
+      ['act', -32007, `timeout: ${disabled}`, 'drift_detected', `Step 2 (Click Copy): ${disabled}`],
+      ['resolve', -32003, `policy_refused: ${otherCopy}`, 'policy_violation', `Step 2 (Click Copy): ${otherCopy}`],
+    ];
+    for (const [method, code, message, shown, text] of cases) {
+      runner.errorFor = { [method]: { code, message } };
+      const r = failed(await run(click));
+      expect({ code: r.code, message: r.message }).toEqual({ code: shown, message: text });
+      // The step log keeps the runner's own words, code included.
+      expect(r.log?.at(-1)?.note).toBe(message);
+    }
+    // Any other runner text comes through the same way; a text without a known code keeps all its words.
+    runner.errorFor = { resolve: { code: -32005, message: 'not_unique: 3 matches' } };
+    expect(failed(await run(click)).message).toBe('Step 2 (Click Copy): 3 matches');
+    runner.errorFor = { resolve: { code: -32005, message: 'unknown: 3 matches' } };
+    expect(failed(await run(click)).message).toBe('Step 2 (Click Copy): unknown: 3 matches');
   });
 
   it('policy_refused: a declared write control or a gated key without the write flag; with a signed write: true it runs', async () => {
     const post = (write: boolean) => doc([...SIGN_IN, { intent: 'Post', click: uia('btnPost', 'Button'), ...(write ? { write: true } : {}) }]);
     const refused = failed(await run(post(false)));
     expect({ code: refused.code, message: refused.message, submitted: refused.submitted }).toEqual({
-      code: 'policy_violation', message: 'Post: Button #btnPost is a declared write control: the step must be a declared write', submitted: undefined,
+      code: 'policy_violation', message: 'Step 4 (Post): Button #btnPost is a declared write control: the step must be a declared write', submitted: undefined,
     });
     expect(runner!.lastApp?.posted).toBe(0);
     const ok = succeeded(await run(post(true)));
@@ -297,11 +326,11 @@ describe('desktop task: refusals and runner errors', () => {
     expect(runner!.lastApp?.posted).toBe(1);
     expect(runner!.requests.filter((q) => q.method === 'act' && q.params.write === true)).toHaveLength(1);
     const key = failed(await run(doc([...SIGN_IN, { intent: 'Save shortcut', key: { key: 'Ctrl+S' } }])));
-    expect({ code: key.code, message: key.message }).toEqual({ code: 'policy_violation', message: 'Save shortcut: policy_refused: the gated key Ctrl+S needs write: true' });
+    expect({ code: key.code, message: key.message }).toEqual({ code: 'policy_violation', message: 'Step 4 (Save shortcut): the gated key Ctrl+S needs write: true' });
     succeeded(await run(doc([...SIGN_IN, { intent: 'Save shortcut', key: { key: 'Ctrl+S' }, write: true }])));
     // A gated key with extra modifiers is gated too (apps often ignore them), as on the runner.
     const extra = failed(await run(doc([...SIGN_IN, { intent: 'Save shortcut', key: { key: 'Ctrl+Shift+S' } }])));
-    expect(extra.message).toBe('Save shortcut: policy_refused: the gated key Ctrl+Shift+S needs write: true');
+    expect(extra.message).toBe('Step 4 (Save shortcut): the gated key Ctrl+Shift+S needs write: true');
   });
 
   it('while a window holds a declared write control, keys without write: true are navigation keys only, as on the runner', async () => {
@@ -311,12 +340,12 @@ describe('desktop task: refusals and runner errors', () => {
     const refused = failed(await run(doc([...SIGN_IN, enter])));
     expect({ code: refused.code, message: refused.message }).toEqual({
       code: 'policy_violation',
-      message: 'Press Enter: policy_refused: the key Enter could reach a declared write control of this run and needs write: true (only Tab, arrows, Home, End, PageUp, PageDown and Escape do not)',
+      message: 'Step 4 (Press Enter): the key Enter could reach a declared write control of this run and needs write: true (only Tab, arrows, Home, End, PageUp, PageDown and Escape do not)',
     });
     succeeded(await run(doc([...SIGN_IN, tab, { ...enter, write: true }])));
     // Without a target the key goes to the focused element, under the same rule.
     const focused = failed(await run(doc([...SIGN_IN, { intent: 'Press F5', key: { key: 'F5' } }])));
-    expect(focused.message).toMatch(/^Press F5: policy_refused: the key F5 could reach a declared write control/);
+    expect(focused.message).toMatch(/^Step 4 \(Press F5\): the key F5 could reach a declared write control/);
   });
 
   it('an allowed app whose executable is missing is an installation problem (runner_unavailable), never drift (M5)', async () => {
@@ -328,11 +357,11 @@ describe('desktop task: refusals and runner errors', () => {
   it('a control that cannot take the action (the driver\'s invalid params) is drift, not incomplete (M5)', async () => {
     const typeIntoButton = failed(await run(doc([{ intent: 'Type into Sign in', fill: { field: uia('btnSignIn', 'Button'), value: 'x' } }])));
     expect({ code: typeIntoButton.code, message: typeIntoButton.message }).toEqual({
-      code: 'drift_detected', message: 'Type into Sign in: invalid params: the element does not take typed text',
+      code: 'drift_detected', message: 'Step 1 (Type into Sign in): the element does not take typed text',
     });
     const checkAnEdit = failed(await run(doc([{ intent: 'Tick the user name', check: { field: uia('txtUser') } }])));
     expect({ code: checkAnEdit.code, message: checkAnEdit.message }).toEqual({
-      code: 'drift_detected', message: 'Tick the user name: invalid params: the element cannot be checked or unchecked',
+      code: 'drift_detected', message: 'Step 1 (Tick the user name): the element cannot be checked or unchecked',
     });
   });
 
@@ -353,9 +382,67 @@ describe('desktop task: refusals and runner errors', () => {
     expect(JSON.stringify(f)).not.toContain(DEMO_USER);
   });
 
+  it('secret variables: signed steps type one; it is masked everywhere, from the first step on, and refused anywhere else', async () => {
+    const typedTexts = () => runner!.requests.filter((q) => q.method === 'act').flatMap((q) => ((q.params.segments ?? []) as { text?: string }[]).map((x) => x.text ?? ''));
+    // Typed by a fill whose value is exactly the one template, and read back: the read shows [secret].
+    const d = doc([...SIGN_IN, { intent: 'Read the title', read: { target: uia('lblCount', 'Text'), as: 'count' } }]);
+    const r = succeeded(await run(d, { secretVars: ['password', 'user'] }));
+    expect(typedTexts()).toEqual([DEMO_USER, DEMO_PASSWORD]);
+    expect(JSON.stringify(r)).not.toContain(DEMO_PASSWORD);
+    expect(JSON.stringify(r)).not.toContain(DEMO_USER);
+    // A secret variable no step types is still masked: a runner message that quotes it shows [secret].
+    const echo = failed(await run(doc([{ intent: 'Open it', click: uia('Pin-4711', 'Button'), timeoutMs: 300 }]), { vars: { ...VARS, pin: 'Pin-4711' }, secretVars: ['pin'] }));
+    expect(echo.message).toContain('Button #[secret]');
+    expect(JSON.stringify(echo)).not.toContain('Pin-4711');
+    // With text around it or in a select option it is refused before anything is sent (desktop steps have no variable conditions).
+    const uses = [
+      { intent: 'Type the user name', fill: { field: uia('txtUser'), value: 'id:{{var.user}}' } },
+      { intent: 'Status', select: { field: uia('cmbStatus', 'ComboBox'), option: '{{var.user}}' } },
+    ];
+    for (const step of uses) {
+      runner!.requests.length = 0;
+      const f = failed(await run(doc([step]), { secretVars: ['user'] }));
+      expect(f.message, step.intent).toContain('an input value contains a credential secret');
+      expect(JSON.stringify(f)).not.toContain(DEMO_USER);
+      expect(runner!.requests.filter((q) => q.method === 'act')).toEqual([]);
+    }
+  });
+
+  it('a choose step whose run variable is empty says so at once, before any wait, and sends nothing (IW-10)', async () => {
+    runner = await FakeRunner.start();
+    const step = { intent: 'Choose {{var.company_code}} in Company code', select: { field: uia('cmbStatus', 'ComboBox'), option: '{{var.company_code}}' } };
+    const f = failed(await run(doc([step]), { vars: { ...VARS, company_code: '' } }));
+    expect(f.message).toBe('Step 1 (Choose {{var.company_code}} in Company code): the run variable "company_code" is empty, so there is no item to choose: give it a value in Options → Variables of the RPA node');
+    expect(runner!.requests.filter((q) => q.method === 'act')).toEqual([]);
+  });
+
+  it('secret variables: unsigned steps cannot type one (policy_violation), and nothing is typed', async () => {
+    const d = doc(SIGN_IN);
+    const f = failed(await run(d, { trust: { required: false }, secretVars: ['password'] }));
+    expect({ code: f.code, message: f.message }).toEqual({ code: 'policy_violation', message: `Step 2 (Type the password): ${UNSIGNED_SECRET_VARIABLE}` });
+    const typed = runner!.requests.filter((q) => q.method === 'act').map((q) => JSON.stringify(q.params));
+    expect(typed.join()).not.toContain(DEMO_PASSWORD);
+    expect(JSON.stringify(f)).not.toContain(DEMO_PASSWORD);
+  });
+
+  it('May Be Typed Into: an app the list does not name is refused before the runner is reached; a listed one runs; no list is as before', async () => {
+    const d = doc(SIGN_IN);
+    const refused = failed(await run(d, { secretVars: ['password'], secretTargets: { apps: ['Other.exe'], hosts: ['erp.example.com'] } }));
+    expect({ code: refused.code, message: refused.message }).toEqual({ code: 'policy_violation', message: secretAppNotListed('ErpDemo.exe') });
+    expect(runner!.tcpConnections).toBe(0);
+    expect(JSON.stringify(refused)).not.toContain(DEMO_PASSWORD);
+    // Hosts are for browser steps: a list with no app refuses every app.
+    expect(failed(await run(d, { secretVars: ['password'], secretTargets: { apps: [], hosts: ['erp.example.com'] } })).code).toBe('policy_violation');
+    expect(runner!.tcpConnections).toBe(0);
+    // Listed (compared without case, by file name), or no list at all: the run types the password as before.
+    succeeded(await run(d, { secretVars: ['password'], secretTargets: { apps: ['erpdemo.EXE'], hosts: [] } }));
+    succeeded(await run(d, { secretVars: ['password'] }));
+  });
+
   it('an app outside the runner policy is refused at launch', async () => {
     const r = failed(await run(doc(SIGN_IN, { app: { exe: 'C:\\Windows\\notepad.exe' } })));
-    expect({ code: r.code, message: r.message }).toEqual({ code: 'policy_violation', message: 'app not allowed: notepad.exe' });
+    expect({ code: r.code, message: r.message }).toEqual({ code: 'policy_violation', message: runnerAppNotAllowed('notepad.exe') });
+    expect(r.message).toContain('policy apply followed by the path of the recording\'s .policy-change.json file');
     expect(runner!.run).toBeUndefined();
   });
 
@@ -368,7 +455,7 @@ describe('desktop task: refusals and runner errors', () => {
     ]);
     const r = failed(await run(d, { vars: { ...VARS, password: 'Wrong-pw-77' } }, { echoTypedInErrors: true }));
     expect(r.code).toBe('drift_detected');
-    expect(r.message).toBe('Open search: no element matched Edit #txtSearch in window "ERP Demo - Sign in" (last typed: [secret])');
+    expect(r.message).toBe('Step 4 (Open search): no element matched Edit #txtSearch in window "ERP Demo - Sign in" (last typed: [secret])');
     const json = JSON.stringify(r);
     expect(json).not.toContain('Wrong-pw-77');
     expect(json).not.toContain(DEMO_USER);
@@ -424,7 +511,7 @@ describe('the browser lane next to desktop step sets', () => {
       policy: { startUrl: 'https://example.com/', navHosts: ['example.com'], subresourceHosts: [], login: [], allowedSubmits: [] },
       endpoint: { mode: 'playwright', wsUrl: 'ws://127.0.0.1:1/' },
     });
-    expect(r).toMatchObject({ ok: false, code: 'policy_violation', message: `invalid script: ${DESKTOP_STEPS_NEED_RUNNER}` });
+    expect(r).toMatchObject({ ok: false, code: 'policy_violation', message: `invalid steps: ${DESKTOP_STEPS_NEED_RUNNER}` });
   });
 });
 
@@ -434,7 +521,7 @@ describe('desktop task: review follow-ups', () => {
     setTimeout(() => runner!.expireRun(), 400);
     const r = failed(await run(doc([{ intent: 'Wait', waitFor: { target: uia('neverThere') }, timeoutMs: 5000 }])));
     expect({ code: r.code, message: r.message }).toEqual({
-      code: 'runner_unavailable', message: 'Wait: no active run with this runId (the runner no longer has this run: its lease ran out or the runner restarted)',
+      code: 'runner_unavailable', message: 'Step 1 (Wait): no active run with this runId (the runner no longer has this run: its lease ran out or the runner restarted)',
     });
   });
 });

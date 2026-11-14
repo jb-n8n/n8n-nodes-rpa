@@ -45,6 +45,100 @@ const fixture = (path: string) => readFileSync(join(DIR, path), 'utf8');
 
 const items = (r: ImportResult, kind: ImportItem['kind']) => r.report.items.filter((i) => i.kind === kind);
 
+describe('a UiPath project\'s argument and variable defaults become the desktop draft\'s start values', () => {
+  const MAIN = fixture('Main.xaml');
+  const SEARCH = fixture('Workflows/SearchAndExport.xaml');
+  const start = (r: ImportResult) => r.desktopDrafts?.[0]?.startValues;
+
+  it('the sample: what Main passes in, from its variables\' defaults; username has none and password is secret', () => {
+    const r = importSource('uipath', sampleZip(), OPTS);
+    expect(items(r, 'error')).toEqual([]);
+    expect(start(r)).toEqual({ in_CompanyCode: '1000', in_DateFrom: '2026-01-01', in_DateTo: '2026-12-31' });
+    // Start values sit beside the steps, never in them: the signed steps are the same as without them.
+    expect(r.desktopDrafts![0].script).toEqual(EXPECTED);
+  });
+
+  it('an argument\'s own default when the invoke passes nothing; a literal passed in; an expression passed in gives none', () => {
+    const main = MAIN
+      .replace('<InArgument x:TypeArguments="x:String" x:Key="in_DateFrom">[dateFrom]</InArgument>', '')
+      .replace('[companyCode]</InArgument>', '2000</InArgument>')
+      .replace('[dateTo]</InArgument>', '[Now.ToString("yyyy-MM-dd")]</InArgument>');
+    const search = SEARCH.replace('x:Class="SearchAndExport"', 'x:Class="SearchAndExport" this:SearchAndExport.in_DateFrom="2025-07-01" xmlns:this="clr-namespace:"');
+    const r = importSource('uipath', sampleZip({ 'Main.xaml': main, 'Workflows/SearchAndExport.xaml': search }), OPTS);
+    expect(items(r, 'error')).toEqual([]);
+    expect(start(r)).toEqual({ in_CompanyCode: '2000', in_DateFrom: '2025-07-01' });
+  });
+
+  it('a default written as an expression, or as a property element holding one, is no start value; one holding a literal is', () => {
+    const main = MAIN.replace('<InArgument x:TypeArguments="x:String" x:Key="in_DateFrom">[dateFrom]</InArgument>', '')
+      .replace('<InArgument x:TypeArguments="x:String" x:Key="in_DateTo">[dateTo]</InArgument>', '');
+    const search = SEARCH.replace('x:Class="SearchAndExport"', 'x:Class="SearchAndExport" this:SearchAndExport.in_DateFrom="[Now.AddDays(-30).ToString]" xmlns:this="clr-namespace:"')
+      .replace('<x:Members>', '<this:SearchAndExport.in_DateTo><InArgument x:TypeArguments="x:String"><Literal x:TypeArguments="x:String" Value="2025-12-31" /></InArgument></this:SearchAndExport.in_DateTo><x:Members>');
+    const r = importSource('uipath', sampleZip({ 'Main.xaml': main, 'Workflows/SearchAndExport.xaml': search }), OPTS);
+    expect(items(r, 'error')).toEqual([]);
+    expect(start(r)).toEqual({ in_CompanyCode: '1000', in_DateTo: '2025-12-31' });
+  });
+
+  it('never a start value: a name that reads like a secret, a value of the Site Login, a secret variable; the report says why without the value', () => {
+    const rename = (x: string) => x.replaceAll('in_CompanyCode', 'in_PinCode');
+    const site: ImportOptions = { name: 'erp', hasSiteLogin: true, secrets: { username: 'erp-robot', password: '2026-12-31' } };
+    const r = importSource('uipath', sampleZip({ 'Main.xaml': rename(MAIN), 'Workflows/SearchAndExport.xaml': rename(SEARCH) }), site);
+    expect(items(r, 'error')).toEqual([]);
+    expect(r.desktopDrafts![0].variables).toContain('in_PinCode');
+    expect(start(r)).toEqual({ in_DateFrom: '2026-01-01' });
+    const secrets = items(r, 'secret').filter((i) => i.what === 'in_PinCode' || i.what === 'in_DateTo');
+    expect(secrets.map((i) => i.reason)).toEqual([
+      'in_PinCode reads like a secret, so its value in the project is not a start value: supply it in Run steps from a secret source',
+      "in_DateTo's value in the project is a value of the RPA Site Login or one the import removed as a secret, so it is not a start value: supply it in Run steps from a secret source",
+    ]);
+    expect(JSON.stringify(r)).not.toContain('2026-12-31');
+    // A SecureString variable's default is never read, and password stays a secret variable with no start value.
+    const secure = MAIN.replace('<Variable x:TypeArguments="ss:SecureString" Name="password" />', '<Variable x:TypeArguments="ss:SecureString" Default="hunter22" Name="password" />');
+    const s2 = importSource('uipath', sampleZip({ 'Main.xaml': secure }), OPTS);
+    expect(s2.desktopDrafts![0].secretVariables).toEqual(['password']);
+    expect(start(s2)).not.toHaveProperty('password');
+    expect(JSON.stringify(s2)).not.toContain('hunter22');
+  });
+
+  it('names are compared without regard to case: Password with a default, typed as password into the password field, has none', () => {
+    const main = MAIN.replace('<Variable x:TypeArguments="ss:SecureString" Name="password" />', '<Variable x:TypeArguments="x:String" Default="Hunter-2026" Name="Password" />');
+    const r = importSource('uipath', sampleZip({ 'Main.xaml': main }), OPTS);
+    expect(items(r, 'error')).toEqual([]);
+    expect(start(r)).toEqual({ in_CompanyCode: '1000', in_DateFrom: '2026-01-01', in_DateTo: '2026-12-31' });
+    expect(JSON.stringify(r)).not.toContain('Hunter-2026');
+  });
+
+  it('secrets are decided when the walk ends: a variable typed as Sesame first, and only later as sesame into the password field, has none', () => {
+    const main = MAIN
+      .replace('<ui:GetRobotCredential ', '<ui:Comment ')
+      .replace('<Variable x:TypeArguments="ss:SecureString" Name="password" />', '<Variable x:TypeArguments="x:String" Default="open-sesame-77" Name="Sesame" />')
+      .replace('Text="[username]"', 'Text="[Sesame]"')
+      .replace('SecureText="[password]"', 'SecureText="[sesame]"');
+    const r = importSource('uipath', sampleZip({ 'Main.xaml': main }), OPTS);
+    expect(items(r, 'error')).toEqual([]);
+    const d = r.desktopDrafts![0];
+    expect(d.secretVariables.map((v) => v.toLowerCase())).toContain('sesame');
+    // Typed under two casings: the first one, Sesame, was noted with its default before sesame turned secret.
+    expect(d.variables).toEqual(expect.arrayContaining(['Sesame', 'sesame']));
+    expect(start(r)).toEqual({ in_CompanyCode: '1000', in_DateFrom: '2026-01-01', in_DateTo: '2026-12-31' });
+    expect(JSON.stringify(r)).not.toContain('open-sesame-77');
+  });
+
+  it('a default equal to a value the import removed as a secret elsewhere has none, however short; an ordinary one still has its value', () => {
+    const main = MAIN
+      .replace('Default="1000" Name="companyCode"', 'Default="Zx9" Name="companyCode"')
+      .replace("DisplayName=\"Type Into 'User name'\"", "DisplayName=\"Type Into 'Password'\"")
+      .replace('Text="[username]"', 'Text="Zx9"');
+    const r = importSource('uipath', sampleZip({ 'Main.xaml': main }), OPTS);
+    expect(items(r, 'error')).toEqual([]);
+    expect(start(r)).toEqual({ in_DateFrom: '2026-01-01', in_DateTo: '2026-12-31' });
+    expect(items(r, 'secret').map((i) => i.reason)).toContain(
+      "in_CompanyCode's value in the project is a value of the RPA Site Login or one the import removed as a secret, so it is not a start value: supply it in Run steps from a secret source",
+    );
+    expect(JSON.stringify(r.desktopDrafts)).not.toContain('Zx9');
+  });
+});
+
 describe('the sample UiPath desktop project (ERP Demo)', () => {
   it('imports one desktop draft with exactly the expected steps, and no browser draft', () => {
     const r = importSource('uipath', sampleZip(), OPTS);
@@ -69,7 +163,8 @@ describe('the sample UiPath desktop project (ERP Demo)', () => {
         { kind: 'desktop', sequence: 1, displayName: "Open Application 'ERP Demo - Sign in'" },
       ],
     });
-    expect(r.report.items).toContainEqual({ at: 'Main.xaml: LogMessage_1', kind: 'dropped', what: 'Log Message', reason: expect.stringContaining('logging is not a step') });
+    // Housekeeping: kept in the report, marked notNeeded, so the approval does not list it as left out.
+    expect(r.report.items).toContainEqual({ at: 'Main.xaml: LogMessage_1', kind: 'dropped', what: 'Log Message', reason: expect.stringContaining('logging is not a step'), notNeeded: true });
   });
 
   it('the password is a secret run variable: never imported, and the report says how to supply it', () => {
@@ -93,7 +188,7 @@ describe('the sample UiPath desktop project (ERP Demo)', () => {
       ['Main.xaml: SendHotkey_1', 'Step 4: Press Enter in Password'],
       ['Workflows/SearchAndExport.xaml: Click_4', 'Step 16: Click Save'],
     ]);
-    expect(items(r, 'candidateWrite')[1].reason).toContain('list 16 in Write Steps when you approve');
+    expect(items(r, 'candidateWrite')[1].reason).toBe('this step may save, post or submit: if it does, mark it as a write when you approve the steps');
   });
 
   it('the save path becomes {{$exportDir}} and an expectFile step; lossy selector parts are reported', () => {
@@ -312,8 +407,8 @@ describe('approving and signing an imported desktop draft', () => {
     expect(p).toMatchObject({ name: 'erp-1', baseVersion: null, version: 1, evidence: { count: 0, total: null, diff: { missing: [], extra: [] } } });
     expect(p.safetyFlags).toEqual([
       'desktop app: "ErpDemo.exe"',
-      'candidate write: step 4 (Press Enter in Password) may save, post or submit: list 4 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)',
-      'candidate write: step 16 (Click Save) may save, post or submit: list 16 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)',
+      'candidate write: step 4 (Press Enter in Password) may save, post or submit',
+      'candidate write: step 16 (Click Save) may save, post or submit',
       'file returned to n8n: step 17 returns the file matching "^line-items\\\\.csv$" from the run\'s export folder',
     ]);
     expect(p.changes).toHaveLength(17);
@@ -371,9 +466,9 @@ describe('approving and signing an imported desktop draft', () => {
     expect(reasons(sign(based, [], proposalDigest(based)))).toContain('desktop steps have no repair yet, so a desktop proposal must be a first version (no base version) that shows every step');
     const proven = { ...p, evidence: { ...p.evidence, count: 12 } };
     expect(reasons(sign(proven, [], proposalDigest(proven)))).toContain('desktop steps are not replayed at import, so their evidence must be empty (no rows, no file)');
-    expect(reasons(sign(p, [1]))).toEqual(['Write Steps: step 1 is a waitFor step, which cannot be a write (only click, fill, select, check and key steps can)']);
+    expect(reasons(sign(p, [1]))).toEqual(['Write Steps: step 1 is a waitFor step, which cannot be a write (only click, doubleClick, fill, select, check and key steps can)']);
     expect(reasons(sign(p, [18]))).toEqual(['Write Steps: there is no step 18 (the steps are numbered 1 to 17)']);
-    expect(reasons(sign(p, [17]))).toEqual(['Write Steps: step 17 is a expectFile step, which cannot be a write (only click, fill, select, check and key steps can)']);
+    expect(reasons(sign(p, [17]))).toEqual(['Write Steps: step 17 is a expectFile step, which cannot be a write (only click, doubleClick, fill, select, check and key steps can)']);
   });
 
   it('refuses reviewed steps that already mark a write, and shows every signed field in the change list', () => {
@@ -384,7 +479,7 @@ describe('approving and signing an imported desktop draft', () => {
     // Flags and change list match the crafted steps, so only the preset write is refused, with or without Write Steps.
     for (const writeSteps of [[], [16]]) {
       const r = signDesktopSteps({ proposal: crafted, key: KEY, approverId: OWNER, reviewedDigest: proposalDigest(crafted), writeSteps });
-      expect(r).toEqual({ ok: false, reasons: ['the reviewed steps already mark a write: only Write Steps, chosen when you approve, declares writes'] });
+      expect(r).toEqual({ ok: false, reasons: ['the reviewed steps already mark a write: writes are marked only when the steps are approved'] });
     }
     const step = { ...p.steps.steps[8], optional: true, checkpoint: true, timeoutMs: 5000, expect: { visible: { uia: { path: [{ automationId: 'lblResultCount' }] } } } } as DesktopStep;
     expect(describeDesktopStep(step)).toMatch(/; then expect id "lblResultCount" visible; optional; checkpoint; timeout 5000 ms\)$/);

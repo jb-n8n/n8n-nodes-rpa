@@ -1,9 +1,11 @@
 # RPA desktop runner and ERP Demo
 
 The runner speaks the desktop protocol and drives Windows apps through UI Automation; Run Steps sends it desktop
-steps (README, [Desktop runs](../README.md#desktop-runs)). To install the runner, the policy tool and the RPA browser
-on a Windows machine, follow the [Windows install guide](../docs/install/windows.md), which uses the package this
-folder builds (`installer/`, released as `rpa-windows-x64.zip`).
+steps ([Steps: Desktop steps](../docs/reference/steps.md#desktop-steps)). To install the runner, the policy tool and,
+with `-WithBrowser`, the RPA browser on a Windows machine, follow the [Windows install guide](../docs/install/windows.md),
+which uses the packages this folder builds (`installer/`, released as `rpa-windows-x64.zip` and, for the browser,
+`rpa-browser-windows-x64.zip`). The RPA browser serves one browser session at a time: a second browser run that starts while one is open waits up to 60 s for it, then fails
+`browser_unavailable` with `The browser service at wss://<host>:3000/ had no free browser session for 60 s. ...`.
 
 | Path | What it is |
 |---|---|
@@ -11,10 +13,17 @@ folder builds (`installer/`, released as `rpa-windows-x64.zip`).
 | `runner/src/Rpa.Runner.Windows` | The Windows driver (net8.0-windows): UI Automation through [FlaUI](https://github.com/FlaUI/FlaUI) (MIT), session health, the foreground check, window capture. |
 | `runner/src/Rpa.Runner` | The executable, `RpaRunner.exe`. |
 | `runner/src/Rpa.Runner.PolicyTool` | The policy tool, `RpaPolicy.exe`: shows a change to the policy file, asks, and applies it as an administrator. |
+| `runner/src/Rpa.Supervisor.Core` | The platform-neutral part of the RPA Supervisor (net8.0): when to sign the bot user in and out, the port proxy, reading `install.json`, the supervisor's log. |
+| `runner/src/Rpa.Supervisor` | The RPA Supervisor, `RpaSupervisor.exe`: the Windows service for unattended mode and its Remote Desktop host (see "Unattended mode"). |
 | `runner/test/Rpa.Runner.Core.Tests` | Unit tests of the core with a fake desktop (run anywhere). |
+| `runner/test/Rpa.Supervisor.Core.Tests` | Unit tests of the supervisor's core with fake sessions (run anywhere). |
 | `runner/test/Rpa.Runner.Scenario` | The protocol test client CI runs against the real runner and the ERP Demo on Windows. |
+| `recorder/src/Rpa.Recorder.Core` | The platform-neutral part of the recorder (net8.0): the session that turns input into steps, the locator and secret rules, the recording file and the policy change file. |
+| `recorder/src/Rpa.Recorder` | The recorder, `RpaRecorder.exe` (net8.0-windows): a bar that stays on top, and the hooks and UI Automation that watch the app. It saves a recording file for Import Steps; see [Record a bot](../docs/guides/record-a-bot.md). |
+| `recorder/test/Rpa.Recorder.Core.Tests` | Unit tests of the recorder's core with fakes (run anywhere). |
+| `recorder/test/Rpa.Recorder.Scenario` | The recorder scenario CI runs on Windows: a stand-in for a person drives the ERP Demo while `RpaRecorder.exe` records it, and the file is compared with a golden one. |
 | `erp-demo` | ERP Demo: a small "legacy ERP" WinForms app with a v1 and a v2 UI. |
-| `installer` | The Windows package: `Install-Rpa.ps1`, `Uninstall-Rpa.ps1` and their module, the start scripts and `Show-RpaConnection.ps1` (`scripts/`), the script that stages the zip (`build/Stage.ps1`) and the Pester tests. |
+| `installer` | The Windows package: `Install-Rpa.ps1`, `Uninstall-Rpa.ps1` and their module (the package also holds the recorder, in `recorder\`), the start scripts and `Show-RpaConnection.ps1` (`scripts/`), the script that stages the two zips (`build/Stage.ps1`) and the Pester tests. |
 
 ## Running the runner
 
@@ -81,7 +90,8 @@ explicit ACL: the runner's user, SYSTEM and Administrators only.
 
 A run acts only on windows of processes it launched whose executable is allowed. If another application's window holds
 the foreground and the runner cannot bring the run's window back, the action is refused; OS surfaces (notifications, the
-taskbar, the Start menu) are ignored. `mode: "repair"` allows only `focus`, `expand`, `read`, `key` with the value
+taskbar, the Start menu) are ignored. `mode: "repair"` (no operation sends it yet: the node refuses AI repair for
+desktop steps) allows only `focus`, `expand`, `read`, `key` with the value
 `Escape` and no target (it goes to the run's focused element, to close a menu or a dialog; an `Escape` listed in
 `gatedKeys` stays refused), and `click` on tabs, list items and tree items. Because Escape fires a form's cancel button
 whatever has the focus, a repair-mode Escape is refused while its window holds a write control, unless a popup menu of
@@ -107,15 +117,74 @@ acts with that person's access. Three limits to keep in mind:
   runner will not act on them). `file.retrieve` itself reads only from the run's export directory. A dedicated
   Windows user with AppLocker narrows what that user can start.
 - The RPA browser runs as the same Windows user as the runner when it is installed beside it, which the installer
-  does unless it is given `-NoBrowser`. With the browser installed, whoever holds the browser token and can reach the
+  does only with `-WithBrowser`. With the browser installed, whoever holds the browser token and can reach the
   browser's port acts as the bot user through the browser: it can read the files the bot user can read (the runner's
   token among them), and it can create files with a name and content of its choice where the bot user can write,
   which is a way to run programs as the bot user. The runner's policy does not limit that, so the policy is a limit
-  for the runner token only; on a machine where the policy must hold against n8n itself, install with `-NoBrowser`
-  and run the browser on another machine. On Windows Server 2022 a plain Playwright client with the browser token
+  for the runner token only. On a machine where the policy must hold against n8n itself, install without the browser
+  (the default) and run the browser on another machine. On Windows Server 2022 a plain Playwright client with the browser token
   read a file of the bot user through a `file://` page, and, after a CDP session set the download folder of its
   browser context (`Browser.setDownloadBehavior`), saved a download with the name and content it chose into a folder
   of the bot user's profile; the file belonged to the bot user. A file only administrators could read was refused.
+
+## Unattended mode
+
+The runner needs a signed-in, unlocked desktop. In unattended mode nobody has to be signed in: the RPA Supervisor, a
+Windows service (`RPA Supervisor`, `RpaSupervisor.exe`, running as SYSTEM), listens on the runner's port (and the
+browser's) in place of the runner. When n8n connects, it signs the bot user in over a Remote Desktop connection from the
+machine to itself (to `127.0.0.2`, through the RDP client control that ships with Windows), waits until the session is
+Active and the runner listens inside it, and then passes the connection's bytes through unchanged: TLS, the token and
+the protocol stay between n8n and the runner. When no connection has held the session for `idleSeconds`, it signs the
+bot user out again. One bot user, one session at a time.
+
+`Install-Rpa.ps1 -Unattended [-IdleSeconds 15]` sets this up on Windows Server 2019 or later (it refuses Windows 10
+and 11, where it was not tested, and `-AutoSignIn` with it): it puts the bot user into Remote Desktop Users, turns
+Remote Desktop on with the registry value alone when it is off (no firewall rule for Remote Desktop), stores the bot
+user's password in the LSA secret, registers the service (LocalSystem, automatic start, started again a minute after a
+failure) and points the two firewall rules at `RpaSupervisor.exe`. The start scripts read `mode` from `install.json`
+and let the runner and the browser host listen on `127.0.0.1` at the inner ports (`RPA_RUNNER_BIND`,
+`RPA_BROWSER_BIND`). After the service starts, the installer makes one connection to the runner's port and waits up to
+120 s, so that the bot user's profile exists before n8n's first run. An upgrade keeps unattended mode and its idle
+time; `Uninstall-Rpa.ps1`, and an install with `-Unattended:$false`, put back what it changed. The install guide,
+[`docs/install/windows.md`](../docs/install/windows.md), section 4, "Running with nobody signed in", is the user's
+side of this.
+
+The service reads `install.json` in the install directory (`%ProgramFiles%\RPA Runner`), which the installer writes:
+
+| Field | Meaning |
+|---|---|
+| `mode` | `"unattended"` makes the service run; with anything else it writes one line to its log and does nothing. |
+| `user` | The bot user: a local Windows user, as `name`, `.\name` or `<this machine>\name`. |
+| `runnerPort`, `runnerInnerPort` | The service listens on `runnerPort` and passes each connection to `127.0.0.1:runnerInnerPort`, where the runner listens in the bot user's session. |
+| `browserPort`, `browserInnerPort` | The same for the RPA browser; without `browserPort` only the runner is passed on. |
+| `idleSeconds` | How long the session stays signed in without a connection (default 15, 0 to 86400). |
+| `listenAddresses` | The addresses the service listens on (default `["0.0.0.0"]`; the installer writes `["0.0.0.0"]`, where the runner and the browser host listen in the signed-in mode). |
+
+A field that is missing or wrong stops the service at start, and so does a port it cannot listen on; the reason is in
+its log, in one line. The bot user's password is read from the local security authority (the LSA secret
+`L$RpaRunnerBotPassword`, which standard users cannot read) for each sign-in. It reaches the Remote Desktop host process
+on its standard input, never on a command line, and is not written to the log or any file. The Remote Desktop connection
+does not check the server's identity: the server is the machine itself, over the loopback. Before each sign-in the
+service checks that the machine's Remote Desktop service (TermService) is running and that every listener on port 3389
+is that service: while the service is stopped any user may listen on the port, and such a listener stays after the
+service starts again. Until both hold, no sign-in is tried and the connection waits. It does not check who answers on
+the port after that check.
+
+The machine needs Remote Desktop turned on with Network Level Authentication, and the bot user in the Remote Desktop
+Users group. The service refuses a connection rather than act on a session it did not create: when someone is signed in
+as the bot user (at the console or over Remote Desktop), connections are closed until that session is signed out. When
+Windows refuses the password, or the account (unknown, disabled, locked, restricted or expired), or the password has
+expired or must change, the service tries no further sign-in until it is restarted, because retrying could lock the
+account out. Another refusal by the Remote Desktop client fails that connection only.
+
+The service's log and state are in `%ProgramData%\RPA Runner\supervisor\`, a folder the installer creates for SYSTEM and
+administrators only (the service does not create it); when it is missing, is a link, or is owned by anyone but SYSTEM or
+Administrators, the service does not start, and says so in the Windows event log. The log is `supervisor.log` there (the
+previous one in `supervisor.1.log`). It records sign-ins, sign-outs and failures with their reasons, never a password, a
+token or bytes of a connection, and writes the same failure at most once in 30 s. `supervisor-state.json` names the
+session the service created and its last failure, so that after a restart it signs its own stale session out and leaves
+anyone else's alone. A connection waits up to 90 s for the session and the runner together; the first sign-in after a
+restart, or of a new user, can take most of that.
 
 ## Changing the policy
 
@@ -168,7 +237,15 @@ run whether a user is signed in or not), or with input that comes from a file or
   (`Application file not found: <path>` when there is none).
 - `apply <change.json>` adds what a change file lists. A change file is a JSON object with any of `allowedApps`,
   `writeControls`, `gatedKeys`, `helperProcesses` and `clipboardRead`, written as in the policy file. It must be on a
-  local drive (`the change file must be on a local drive` for a UNC or device path).
+  local drive (`the change file must be on a local drive` for a UNC or device path). Two things only a change file
+  may have, both shown in the question and never written into the policy: a `name` in a `writeControls` entry (the
+  control's name), and `leftOutControls`, entries of `exe`, `automationId` and `name` for controls that were not
+  proposed because their ids are those of Windows' standard dialog buttons (OK, Cancel, Yes, No and the like), which
+  every dialog of an app shares: 1 to 11 in a classic dialog, `CommandButton_1` to `CommandButton_11` in a task dialog
+  (such as "Confirm Save As"). A `leftOutControls` entry with any other id is refused
+  (`the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not "<id>"`). The
+  recorder's change file has both: the buttons its recording clicked that the engine's review page ticks as writes
+  (`recorder/src/Rpa.Recorder.Core/WriteRules.cs`), and the standard dialog buttons among them.
 - The change file and the application are paths chosen by whoever started the tool, and the tool works with
   administrator rights. Before it opens such a path or writes it into the policy (`allow-app` with and without
   `--pin-hash`), it tests the path itself:
@@ -213,7 +290,7 @@ for it:
 | Refused | Message |
 |---|---|
 | A change file larger than 256 KiB (checked before it is read) | `the change file is larger than 256 KiB` |
-| More than 40 entries in `allowedApps`, `writeControls`, `gatedKeys` and `helperProcesses` together, each allowed argument list counting as one | `a change may hold at most 40 entries; this one holds <n>` |
+| More than 40 entries in `allowedApps`, `writeControls`, `gatedKeys`, `helperProcesses` and `leftOutControls` together, each allowed argument list counting as one | `a change may hold at most 40 entries; this one holds <n>` |
 | An argument list with more than 20 arguments | `an allowed argument list may hold at most 20 arguments` |
 | A name, path, id or argument longer than 260 characters | `a value in the change is longer than 260 characters` |
 | A short (8.3) name such as `C:\PROGRA~1\...` in an app `path` or a helper `pathPattern` (any `~` followed by a digit): it would name an existing entry's file without being that entry | `write the full path, not a short (8.3) name: <the path>` |
@@ -230,18 +307,21 @@ into), with the file's path or `the current policy` in place of `the change`.
 
 The first line names the policy file: `Creating a new policy at <path>.` or
 `Changing the policy at <path> (<n> app(s), <m> helper process pattern(s) today).` Then one line for each thing the
-change does. Lines that only tighten the policy come first, lines that widen what may run come after them, and a count
-line is last, directly above the prompt:
+change does. Lines that only tighten the policy come first, lines that widen what may run come after them, then the
+controls a change leaves out (they change nothing), and a count line is last, directly above the prompt:
 
 | Line | Meaning |
 |---|---|
 | `Add write control "<exe>" / "<automationId>"` | A new `writeControls` entry. |
+| `Protect "<name>" ("<automationId>") of "<exe>" as a write control` | A new `writeControls` entry with a `name`. Under the last of them: `A run must then mark a step as a write to press one of these, and to press any key but Tab, arrows, Home, End, PageUp, PageDown or Escape while a window that holds one is open.` |
+| `Bots of "<exe>" approved earlier stop where they press one of these buttons, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape while a window that holds one is open, unless that step was ticked as a write. Sign such a bot again on the import form with that step ticked.` | Under the write controls a change adds for an app the policy already allowed: bots of that app may exist, approved without such a step marked as a write. |
 | `Add gated key "<chord>"` | A new `gatedKeys` entry. |
 | `Allow app "<exe>" at "<path>"` | A new `allowedApps` entry. ` (SHA-256 pinned <64 hex digits>)` follows when it sets `sha256`. |
 | `Update app "<exe>" at "<path>" (<what changes>)` | The existing entry for this exe and path changes. In the parentheses, joined by `; `: `SHA-256 pinned <hash>` (it had no pin), `SHA-256 pin changed from <hash> to <hash>`, `allowed arguments added`, `user-writable path allowed`. |
 | `  with arguments: "<arg>" "<arg>" ...` | Under an `Allow app` or `Update app` line, one line for each `allowedArgs` list it adds; `  with arguments: (none)` for an empty list. |
 | `Add helper process "<exe>" at "<pathPattern>"` | A new `helperProcesses` entry. |
 | `Turn on clipboard read` | `clipboardRead` becomes `true`. |
+| `Not protected: "<name>" ("<automationId>") of "<exe>": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares` | A `leftOutControls` entry the policy does not protect. Nothing is written for it, and a change that has nothing else gets no question. For a task dialog's button the reason reads `: CommandButton_1 to CommandButton_11 are the ids of the standard buttons of Windows' task dialogs, which every task dialog of the app shares`. |
 | `This change: <a> app(s) allowed or updated, <h> helper process pattern(s), <w> write control(s), <k> gated key(s).` | The count of the lines above (`, clipboard read turned on` before the full stop when it is). Compare it with what you read: if lines scrolled out of view, the counts still show them. |
 
 The tool breaks a long line itself, into rows of at most 76 characters, and starts every row after the first with
@@ -325,6 +405,14 @@ path that looks right is the program you mean.
   from the folder, not the policy file's (which let the runner's user read the policy). The tool does not delete a
   backup it has made, so a change that failed or was stopped after this step leaves a backup of a policy that did
   not change.
+- **Copies of change files.** `apply` reads the change file once and copies it as a new file into `policy-changes\`
+  beside the policy, as `<change file's name>.<yyyyMMdd-HHmmss>.json` (`-2`, `-3` and so on when that name is
+  taken), then shows and applies that copy, so a change file that changes after the copy changes nothing. The tool
+  creates the folder for Administrators and SYSTEM only, and stops when it is a link or someone other than an
+  administrator owns it, can change it or can create files or folders in it:
+  `the change folder cannot be trusted: <problem>; an administrator must check and remove it`. Each copy stays, as a
+  record of what the tool was given; the tool does not delete copies, so remove old ones by hand when you no longer
+  need them.
 - **When writing fails.** The tool exits 1 and does not restart the runner. A failure before the swap (the
   temporary file or the backup could not be written) leaves the policy file untouched:
   `Writing the policy failed: <reason>. The runner keeps running with the policy it has.` After a swap that failed,
@@ -375,6 +463,13 @@ path that looks right is the program you mean.
 
 `Nothing to change.` means the policy already has everything; the file is not written and the runner is not restarted.
 
+For `apply`, when the change names an app the policy already had and no write control of that app is in the policy
+(an app allowed by an earlier version, for example), the tool says so, under the first line or under
+`Nothing to change.`: `No write control is listed for "<exe>", so the runner gates no write in it. To protect its save
+or post buttons, record a run that clicks them and apply that recording's change file the same way.` Started by the
+recorder, its window then waits for Enter after `Nothing to change.` too. `allow-app`, the way to allow an app
+without its buttons, does not say it.
+
 Exit codes: 0 applied or nothing to change, 1 refused or failed, 2 wrong arguments (the usage is printed), 3 declined
 at the prompt.
 
@@ -392,18 +487,22 @@ clipboard. The data is fixed, so tests can assert exact rows. v2 is the same app
 ```sh
 dotnet build desktop/Rpa.Desktop.sln              # the Windows projects compile on Linux and macOS too
 dotnet test desktop/runner/test/Rpa.Runner.Core.Tests
+dotnet test desktop/recorder/test/Rpa.Recorder.Core.Tests
 ```
 
 No .NET SDK? `docker run --rm -v "$PWD/desktop:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0 dotnet test runner/test/Rpa.Runner.Core.Tests`.
-The UI parts run only on Windows: the `desktop` workflow builds and publishes everything on `windows-latest`, starts
-the runner and drives the ERP Demo through it with the scenario client, then builds the Windows package, installs it
-and drives it. Its artifact `rpa-windows-package` holds the package, `rpa-windows-x64.zip`, with its SHA-256 (see
+The UI parts run only on Windows: the `desktop` workflow builds and publishes everything on `windows-latest` (Windows
+Server 2025 in November 2026), starts
+
+the runner and drives the ERP Demo through it with the scenario client, records the same flow with `RpaRecorder.exe`, then builds the Windows package, installs it
+without the browser and drives it, adds the browser with `-WithBrowser` and drives that, upgrades and uninstalls it, and installs it again with `-Unattended` (without the browser) and drives it through the RPA Supervisor. Its artifact `rpa-windows-package` holds the two zips, `rpa-windows-x64.zip` and `rpa-browser-windows-x64.zip`, with their SHA-256 and `Get-Rpa.ps1` (see
 "Releasing the Windows package"); the artifacts `rpa-desktop-runner` and `erp-demo` are the self-contained win-x64
 builds of the runner and the demo app (no .NET install needed).
 
 ## Releasing the Windows package
 
-The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `Desktop release` workflow
+The maintainers release the Windows package, `rpa-windows-x64.zip` and the browser package `rpa-browser-windows-x64.zip`,
+from the `Desktop release` workflow
 (`.github/workflows/desktop-release.yml`). Pushing a tag `desktop-v<version>`, where `<version>` is the `<Version>` in
 `desktop/Directory.Build.props` (for example `desktop-v0.2.0`), starts it:
 
@@ -416,14 +515,15 @@ The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `De
 3. It checks the package it built. It downloads the package by the artifact id the `desktop` workflow reports, not by
    the artifact's name, so an artifact of the same name uploaded by another job of the run is not taken; the download
    fails if the archive differs from the digest GitHub recorded for that artifact (when it recorded one). It compares
-   the zip's SHA-256 with the hash the `desktop` workflow computed when it staged the zip (not with the `.sha256` file
-   in the artifact), checks that `rpa-windows-x64.zip.sha256` holds that same hash, and that the `VERSION` file in the
-   zip is the tag's version.
+   each zip's SHA-256 with the hash the `desktop` workflow computed when it staged the zip (not with the `.sha256` file
+   in the artifact), checks that each `.sha256` file holds that same hash, that the `VERSION` file in the package's zip
+   and `browser/VERSION` in the browser's zip are the tag's version, and that `Get-Rpa.ps1` names the version and both
+   hashes.
 4. It waits until a required reviewer of the `desktop-release` environment approves the release (see "Before the
    first release" for what that approval covers). Then it downloads and checks the package again in the same way,
    downloads the notes by the id from step 1 (not by name) and compares them with the SHA-256 from step 1, checks
-   that the tag still names the commit it built, records a build attestation of the zip and creates the GitHub
-   Release `desktop-v<version>` with `rpa-windows-x64.zip` and `rpa-windows-x64.zip.sha256`. It stops if a release
+   that the tag still names the commit it built, records a build attestation of both zips and `Get-Rpa.ps1`, and
+   creates the GitHub Release `desktop-v<version>` with the two zips, their `.sha256` files and `Get-Rpa.ps1`. It stops if a release
    for that tag exists already, a draft included; it does not replace one. The release is not marked as the
    repository's latest release, which stays the node's.
 
@@ -443,10 +543,11 @@ version of `desktop/Directory.Build.props` in place of a tag, and never attests 
 
 Then run the dry run once on `main`.
 
-The package is not code-signed: the zip has no signature, and neither have the runner, the policy tool, the ERP Demo
-or the PowerShell scripts in it (the files it ships from other projects, such as `node.exe` and Chromium, are as those
-projects publish them). What a release has instead is the zip's SHA-256 and a build attestation. Check both before
-you unpack a download, with the release's version in place of `<version>`:
+The package is not code-signed: the zips have no signature, and neither have the runner, the policy tool, the ERP
+Demo or the PowerShell scripts in them (the files the browser package ships from other projects, such as `node.exe`
+and Chromium, are as those projects publish them). What a release has instead is each zip's SHA-256 and a build
+attestation. Check both before you unpack a download, with the release's version in place of `<version>` (and the
+same commands for `rpa-browser-windows-x64.zip`):
 
 ```sh
 gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa \
@@ -474,6 +575,15 @@ Error codes: -32001 `runner_busy`, -32002 `desktop_unavailable`, -32003 `policy_
 -32005 `not_unique`, -32006 `expected_file_missing`, -32007 `timeout`, -32008 `no_run`; `error.data.name` carries the
 name. Messages never contain typed values.
 
+`resolve` and `act` look for their target every 200 ms until one candidate matches exactly one visible element or
+`timeoutMs` runs out. A primary target that matched more than one element on every look for 3 seconds is answered
+`not_unique` then (with the count and what to add to the locator), without waiting out a longer `timeoutMs`; a window
+that is still drawing can show two matches for a moment and then one, which resolves. A target that matches nothing
+waits the whole `timeoutMs` (`not_found`), and so does an `act` on a disabled element (`timeout`, with what to do
+instead). A window selector that matches only a window of a copy of an allowed app that the run did not start (one a
+person left open, or one an app that keeps one window handed the launch to) is `policy_refused` with a message that
+says to close that copy.
+
 Beyond the minimum: `act` with `action: "key"` may omit `target` (the key goes to the run's focused element, under the
 same write checks); `snapshot` adds `truncated: true` when it stopped at `maxNodes` or `maxDepth`; `windows { runId }`
 returns `{ windows: [{ title, exe, automationId, className, foreground }] }`, the run's top-level windows (its own and
@@ -481,8 +591,12 @@ owned windows, such as dialogs and open menu drop-downs, never another applicati
 (`foreground: true`, only when it is the run's), then front to back, at most 20.
 
 `clipboard.read { runId }` returns `{ text }`, the clipboard's Unicode text (`""` when it holds none). It returns only
-the run's own copy, so text another application or a person copied (a password) never leaves the machine. It is
-`policy_refused`:
+the run's own copy: it does not return text another application or a person copied (a password). A paste key
+(`Ctrl+V`, `Shift+Insert`) is a key like any other, though: `act` sends it, the app pastes whatever the clipboard
+holds, and an `act` with `action: "read"` or a `snapshot` returns the field's text (a password field, or one named
+like a credential, comes back redacted). On a machine where the clipboard matters, such as a person's own desktop,
+list both chords in `gatedKeys`, so that an `act` needs `write: true` to send them (an app's own Paste menu item is a
+click, which the two chords do not cover). `clipboard.read` is `policy_refused`:
 
 - unless the policy sets `clipboardRead`;
 - while the foreground window is not one of the run's (the runner never brings its window back for a read: the text

@@ -1,11 +1,12 @@
 import type { BrowserContext, Locator as PwLocator, Request } from 'playwright-core';
-import { formPostsElsewhere, notHttp, offListSite, PASSWORD_FILL_REFUSED, PASSWORD_FILL_REFUSED_STEPS, secretFillValue, UNSIGNED_SECRET_FILL } from '../../messages.js';
+import { formPostsElsewhere, notHttp, offListSite, PASSWORD_FILL_REFUSED, PASSWORD_FILL_REFUSED_STEPS, secretFillValue, UNSIGNED_SECRET_FILL, valueNotTaken } from '../../messages.js';
 import { renderVars, SECRET_FILL_VALUE } from '../../secrets/render.js';
-import { secretFillValues } from '../../secrets/secret-fills.js';
-import type { RunState, Step } from '../../types.js';
+import { renderSecretValue } from '../../secrets/secret-fills.js';
+import type { Locator, RunState, Step } from '../../types.js';
 import { PolicyError } from '../errors.js';
 import { formTarget as formTargetInPage, type FormTarget } from '../form-target.js';
 import { build, resolveUnique } from '../locator.js';
+import { typeSecret } from '../secret-target.js';
 import { shownUrl } from '../urls.js';
 import { poll, sleep } from '../poll.js';
 import { settle, type Handler, type StepContext } from '../run.js';
@@ -101,16 +102,19 @@ export async function withWindow<T>(ctx: StepContext, win: WindowGate | undefine
   }
 }
 
+type ClickOptions = { timeout: number; modifiers?: ('Control' | 'Shift' | 'Alt')[] };
+
 /** The submit click with the write window open: check the target, open, click, wait for quiet, always close. */
-async function clickInWriteWindow(ctx: StepContext, locator: PwLocator, state: RunState, timeout: number): Promise<void> {
+async function clickInWriteWindow(ctx: StepContext, locator: PwLocator, state: RunState, options: ClickOptions): Promise<void> {
   const win = ctx.writeWindow;
+  const { timeout } = options;
   if (!win || !ctx.policy.writeWindow) throw new Error('the write window is not available in this session');
   // Playwright's actionability wait (visible, stable, enabled) happens outside the window: it covers only the real click.
   // The form target is read once the control is actionable, right before the window opens.
-  await locator.click({ trial: true, timeout });
+  await locator.click({ ...options, trial: true });
   await assertFormTarget(ctx, locator);
   try {
-    await withWindow(ctx, win, () => locator.click({ timeout }), timeout);
+    await withWindow(ctx, win, () => locator.click(options), timeout);
   } finally {
     if (win.posts.length > 0) state.submitted = true;
   }
@@ -124,7 +128,7 @@ async function clickInWriteWindow(ctx: StepContext, locator: PwLocator, state: R
  * closest button/[role=button]/[role=checkbox]/[role=radio], and then, if still not a control, by the control of its
  * enclosing label. So a locator on a label (`{ text: 'Password' }`, `label[for=pw]`) is checked against the input.
  */
-async function passwordControl(locator: PwLocator, clear: boolean): Promise<boolean> {
+export async function passwordControl(locator: PwLocator, clear: boolean): Promise<boolean> {
   return locator.evaluate((node, wipe) => {
     let el: Element | null = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
     if (!el) return false;
@@ -140,9 +144,10 @@ async function passwordControl(locator: PwLocator, clear: boolean): Promise<bool
   }, clear);
 }
 
-function refusePassword(ctx: StepContext): never {
+/** A step that would type into a password field fails, fatal: the run stops. `message` defaults to fill's refusal. */
+export function refusePassword(ctx: StepContext, message = ctx.policy.writeWindow ? PASSWORD_FILL_REFUSED : PASSWORD_FILL_REFUSED_STEPS): never {
   ctx.violations.push({ kind: 'signin', url: ctx.masker.mask(shownUrl(ctx.page.url())).slice(0, 300), fatal: true });
-  throw new PolicyError(ctx.policy.writeWindow ? PASSWORD_FILL_REFUSED : PASSWORD_FILL_REFUSED_STEPS);
+  throw new PolicyError(message);
 }
 
 /**
@@ -177,14 +182,17 @@ const goto: Handler = async (ctx, step, _state, timeout) => {
   if (res && res.status() >= 500) throw new Error(`HTTP ${res.status()} at ${shownUrl(url)}`);
 };
 
+const PLAYWRIGHT_MODIFIERS = { Ctrl: 'Control', Shift: 'Shift', Alt: 'Alt' } as const;
+
 const click: Handler = async (ctx, step, state, timeout) => {
   const s = step as S<'click'>;
   const { locator, candidate } = await resolveUnique(ctx.page, s.click, timeout);
+  const options: ClickOptions = { timeout, ...(s.modifiers ? { modifiers: s.modifiers.map((m) => PLAYWRIGHT_MODIFIERS[m]) } : {}) };
   if (ctx.writeStep) {
-    await clickInWriteWindow(ctx, locator, state, timeout);
+    await clickInWriteWindow(ctx, locator, state, options);
     return candidate;
   }
-  await locator.click({ timeout });
+  await locator.click(options);
   await settle(ctx.page);
   return candidate;
 };
@@ -201,12 +209,7 @@ function renderSecretFill(ctx: StepContext, template: string): string {
   }
   const m = SECRET_FILL_VALUE.exec(template);
   if (!m) throw new Error(secretFillValue('fill.value'));
-  const known = secretFillValues(ctx.masker);
-  const raw = Object.hasOwn(ctx.vars, m[1]) ? ctx.vars[m[1]] : undefined;
-  const value = typeof raw === 'string' && known.has(raw) ? raw : renderVars(template, ctx.vars, ctx.masker);
-  ctx.masker.add([value]);
-  known.add(value);
-  return value;
+  return renderSecretValue(m[1], template, ctx.vars, ctx.masker);
 }
 
 const fill: Handler = async (ctx, step, _state, timeout) => {
@@ -215,9 +218,23 @@ const fill: Handler = async (ctx, step, _state, timeout) => {
   // Before the page is touched: an unsigned or malformed secret fill never locates its field.
   const value = secret ? renderSecretFill(ctx, s.fill.value) : undefined;
   const { locator, candidate } = await resolveUnique(ctx.page, s.fill.field, timeout);
-  await withoutPasswords(ctx, locator, () => locator.fill(value ?? renderVars(s.fill.value, ctx.vars, ctx.masker), { timeout }), secret);
+  // A secret fill types a value of the RPA Secret Variables credential only where its May Be Typed Into allows
+  // (typeSecret). A plain fill never types one: renderVars refuses every value the masker holds.
+  await withoutPasswords(ctx, locator, () => (value !== undefined ? typeSecret(ctx, locator, value, timeout) : locator.fill(renderVars(s.fill.value, ctx.vars, ctx.masker), { timeout }).catch((err: unknown) => {
+    // The field's type refuses the value (Playwright: "Malformed value", for example text in a date field): the step
+    // does not fit the field, the page did not change. Said with the field and the value as the step writes them.
+    const raw = err instanceof Error ? err.message.split('\n')[0] : String(err);
+    if (!/Malformed value/i.test(raw)) throw err;
+    throw new Error(valueNotTaken(fieldShown(s.fill.field), JSON.stringify(Array.from(String(s.fill.value)).slice(0, 80).join('')), raw));
+  })), secret);
   return candidate;
 };
+
+/** A field as a person names it: its accessible name, label, visible text or test id, else its selector; quoted. */
+function fieldShown(loc: Locator): string {
+  const name = 'role' in loc ? (loc.name ?? loc.role) : 'label' in loc ? loc.label : 'text' in loc ? loc.text : 'testId' in loc ? loc.testId : loc.css;
+  return JSON.stringify(Array.from(String(name)).slice(0, 80).join(''));
+}
 
 const select: Handler = async (ctx, step, _state, timeout) => {
   const s = step as S<'select'>;

@@ -33,7 +33,7 @@ What's in the repository:
 
 ## 3. The image
 
-The image is `ghcr.io/jb-n8n/rpa-browser:<version>`, built from `images/browser/`. Its Playwright version must match the node's `playwright-core` (1.63 today; repository README, "Version matching"). A mismatch fails every run with `browser_unavailable` and names the version it needs.
+The image is `ghcr.io/jb-n8n/rpa-browser:<version>`, built from `images/browser/`. Its Playwright version must match the node's `playwright-core` (1.63 today; docs/reference/operator.md, "Version matching"). A mismatch fails every run with `browser_unavailable` and names the version it needs.
 
 **Publishing it (owner, once).** `.github/workflows/browser-image.yml` publishes only from a `browser-v<major>.<minor>.<patch>` tag on `main`, or from `main` by hand, after the image's tests pass. Before the first publish:
 
@@ -139,8 +139,8 @@ To set the credential up by hand instead: **+ → New credential → RPA Browser
    | `... had no free browser session for 60 s ...` | Every session was busy for the engine's whole 60 s wait: add capacity (section 8). |
    | A navigation timeout or a DNS error on the page | The browser's egress: `allowed_egress_cidrs`, or DNS (`vpc_dns_cidrs` for custom resolvers; the `ecs-attach` example doesn't expose it, so add it to the example's `module` block). |
 
-2. **Hello world.** Open **RPA: Hello world**, pick the credentials and run it. It takes a screenshot and extracts a table, as in the repository README's "Hello world in 10 minutes". Its second node, **Extract the sandbox table**, reads `http://sandbox:8080`, the repository's compose sandbox, which your VPC doesn't have: point it at a table on a page of your own, or remove it.
-3. **First automation.** Run **RPA: 1 Create tables (run once)** once; it creates the two Data Tables. Then follow the repository README's "The self-healing data feed": **RPA: 2 Data feed** runs the steps, and **RPA: 3 Approve steps** is where a person approves repaired steps. Pick the credentials on each node; the sticky notes list them.
+2. **Hello world.** Open **RPA: Hello world**, pick the credentials and run it. It takes a screenshot and extracts a table, as in step 5 of the [browser bot guide](../guides/browser-bot.md#5-run-it). Its second node, **Extract the sandbox table**, reads `http://sandbox:8080`, the repository's compose sandbox, which your VPC doesn't have: point it at a table on a page of your own, or remove it.
+3. **First automation.** Follow the [browser bot guide](../guides/browser-bot.md#2-add-the-sample-sites-login) from step 2, with a Site Login for your own site, this browser's address in `--browser-url`, and your own site in place of the sandbox: a Chrome Recorder export of it on the import form, or the self-healing data feed of Part 2. The sticky notes on each workflow list the credentials to pick.
 
 ## 8. Sizing
 
@@ -159,12 +159,13 @@ Every RPA run holds one browser session from its first step to its last, and eac
 - **Security groups have no exceptions.** With `allowed_egress_cidrs = ["0.0.0.0/0"]` the browser can also reach this VPC's own services on 80 and 443, such as an internal load balancer in front of n8n. n8n's 5678, Redis and Postgres stay closed. Narrow the list to the sites your runs visit where you can.
 - **Platform egress is shared.** Fargate gives a task one network interface, so the browser can use the 443 path you open for the registry, Secrets Manager and Logs. VPC endpoints keep that path inside AWS.
 - **DNS can't be blocked by security groups.** Traffic to the Route 53 Resolver (VPC + 2) isn't filtered. To filter names, use Route 53 Resolver DNS Firewall.
-- **Domain allowlists.** Security groups match addresses only. For names, put AWS Network Firewall in the path of the browser's subnets with a domain list rule group (it matches TLS SNI and HTTP Host), or another transparent filtering gateway. The gate doesn't pass proxy settings to the browser, and an explicit forward proxy would also blur the engine's address checks (repository README, "Address checks run in n8n").
+- **Domain allowlists.** Security groups match addresses only. For names, put AWS Network Firewall in the path of the browser's subnets with a domain list rule group (it matches TLS SNI and HTTP Host), or another transparent filtering gateway. The gate doesn't pass proxy settings to the browser, and an explicit forward proxy would also blur the engine's address checks ([Operator guide](../reference/operator.md#address-checks-run-in-n8n)).
 - **Task metadata can't be blocked.** Fargate has no EC2 instance metadata service, but every task reaches the ECS task metadata endpoint at `169.254.170.2`, and security groups don't filter it. That covers the task metadata, the task role credentials and the agent endpoint the gate uses for protection. This is a residual risk:
   - The paths carry per-task IDs a page doesn't know, and the engine's private-network block refuses link-local addresses by default. Keep it on.
   - The worst case is bounded by the task role, which allows only `ecs:UpdateTaskProtection` on this cluster's tasks: a page that found the agent endpoint could hold scale-in protection and delay scale-in. It could not read the token, which reaches the gate through `secrets`; the run-server and browsers start without it.
   - IAM can scope that action to the cluster, not to one task. A tag condition (`aws:ResourceTag` on the service's propagated tags) could narrow it to this service's tasks; how that applies to the agent's calls isn't verified, so it is a follow-up.
 - **The token on the task.** The gate and Chromium run as the same user (`pwuser`). A page that escaped Chromium and ran code as that user could read the token from the gate's `/proc/<pid>/environ`. With it, it could open sessions on this service, which only n8n's security groups reach. Rotate the token if you suspect a browser compromise.
+- **Plain `ws://` inside the VPC.** The module serves the gate without TLS (its load balancer health check asks `/healthz` over plain HTTP), so the connection between n8n and the browser service carries the token, the passwords a `signIn` step types and the content of the pages in the clear inside the VPC. Whoever can watch that traffic can read them; keep n8n and the browser service in private subnets that only they use.
 - **Hardening:** all capabilities dropped, never privileged, non-root, no public IP, inline least-privilege IAM, a task role trust policy limited to ECS in this account and region (`aws:SourceAccount`, `aws:SourceArn`), and a read-only root filesystem as in the Kubernetes chart. `/tmp` is a task bind mount: the image declares `VOLUME ["/tmp"]` (root-owned 1777), and Fargate copies that path's owner and mode into the mount, so `pwuser` can write it. An image of your own needs the same; the module README explains it.
 - **EC2 launch type.** On EC2 the task can reach the instance metadata service, and through it the instance role, unless the ECS agent runs with `ECS_AWSVPC_BLOCK_IMDS=true`. Set it, or stay on Fargate.
 
@@ -253,5 +254,5 @@ Settled while building, for reference:
 
 ## Upgrades
 
-- **Image.** Change `image` and apply. ECS starts new tasks before stopping old ones (100 % minimum healthy); old tasks with sessions stay protected. Keep the image's Playwright version equal to the node package's `playwright-core`: upgrade both together (repository README, "Version matching").
+- **Image.** Change `image` and apply. ECS starts new tasks before stopping old ones (100 % minimum healthy); old tasks with sessions stay protected. Keep the image's Playwright version equal to the node package's `playwright-core`: upgrade both together (docs/reference/operator.md, "Version matching").
 - **n8n.** Keep n8n at 2.41 or later.

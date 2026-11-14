@@ -175,7 +175,7 @@ describe('signIn with next', () => {
       const state = newRunState();
       const r = await runSteps(ctx, [SIGN_IN], state);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: ${host}/elsewhere/password is not a declared login page`);
+      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: ${host}/elsewhere/password is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(ctx.violations).toContainEqual({ kind: 'signin', url: `${origin}/elsewhere/password`, fatal: true });
       expect(ctx.page.url()).toContain('/elsewhere/password');
       // The password was never typed: not posted, and not in the field.
@@ -193,7 +193,7 @@ describe('signIn with next', () => {
       const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [SIGN_IN], state);
       expect(r.ok).toBe(false);
       // A username the site does not know is a rejected login (it trips the login breaker), not drift.
-      if (!r.ok) expect(r.failure.message).toBe('detected:login_failed');
+      if (!r.ok) expect(r.failure.message).toBe('detected:login_failed: the site sent the sign-in page back');
       // The re-rendered username page is recognised without waiting for the whole step timeout.
       expect(Date.now() - t0).toBeLessThan(bound(2900));
       expect(posts.map((p) => p.path)).toEqual(['/login']);
@@ -242,7 +242,7 @@ describe('signIn with next', () => {
     try {
       const r = await runSteps(ctx, [SIGN_IN]);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.failure.message).toBe('signIn refused: the next button does not post to a declared login page');
+      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: the next button posts to ${host}/elsewhere, which is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(ctx.violations).toContainEqual({ kind: 'signin', url: `${origin}/elsewhere`, fatal: true });
       expect(posts).toEqual([]);
     } finally { await session.close(); }
@@ -255,7 +255,7 @@ describe('signIn with next', () => {
       const state = newRunState();
       const r = await runSteps(ctx, [SIGN_IN], state);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.failure.message).toBe('signIn refused: the submit button does not post to a declared login page');
+      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: the submit button posts to ${host}/elsewhere, which is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(ctx.violations).toContainEqual({ kind: 'signin', url: `${origin}/elsewhere`, fatal: true });
       expect(posts.map((p) => p.path)).toEqual(['/login']);
       expect(state.submitClicked).toBe(false);
@@ -294,6 +294,18 @@ describe('signIn with next', () => {
       expect(r.ok).toBe(true);
       expect(ctx.page.url()).toBe(`${origin}/home`);
       expect(posts.map((p) => p.path)).toEqual(['/login', '/password', '/mfa']);
+    } finally { await session.close(); }
+  });
+
+  it('a password the site rejects on the password page is detected:login_failed', async () => {
+    const ctx = await at('/login', { ...SECRETS, password: 'wrong-pass-123' });
+    try {
+      const state = newRunState();
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [SIGN_IN], state);
+      if (r.ok) throw new Error('expected failure');
+      expect(r.failure.message).toBe('detected:login_failed: the site sent the sign-in page back');
+      expect(posts.map((p) => p.path)).toEqual(['/login', '/password']);
+      expect(state.submitClicked).toBe(true);
     } finally { await session.close(); }
   });
 

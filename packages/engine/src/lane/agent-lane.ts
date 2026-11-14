@@ -148,6 +148,8 @@ export async function agentLane(input: TaskInput, original: RepairInput, h: Hand
   const wrote = h.prior.submitted || session.writesSent > 0;
   if (result.ok && result.lane === 'agent') result = { ...result, submitted: wrote };
   else if (!result.ok && wrote) result = { ...result, submitted: true };
+  // A new password the script lane's sign-in set before the drift is in use now: the workflow must learn it either way.
+  if (h.prior.passwordChanged) result = { ...result, passwordChanged: true };
   return finishLane(input, h.runtime, result, released);
 }
 
@@ -348,7 +350,7 @@ async function agentLaneBody(input: TaskInput, repair: RepairInput, h: Handoff, 
     if (input.signal?.aborted) return fail('incomplete', CANCELLED);
     if (prove.policyViolation) {
       // The prove trace (scrubbed) shows the blocked request: it replaces the healing trace.
-      const out = fail('policy_violation', 'the compiled script attempted a blocked request during prove', prove.violations);
+      const out = fail('policy_violation', 'the compiled steps attempted a blocked request during prove', prove.violations);
       return prove.trace ? { ...out, trace: prove.trace } : out;
     }
     if (prove.ok) {

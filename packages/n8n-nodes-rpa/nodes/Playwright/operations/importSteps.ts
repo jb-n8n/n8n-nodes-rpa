@@ -1,21 +1,26 @@
 import { NodeConnectionTypes, NodeOperationError, type IBinaryKeyData, type IDataObject, type INodeExecutionData, type IPairedItemData } from 'n8n-workflow';
 import type {
-  AdoptInput, AdoptResult, BrowserEndpoint, Draft, ErrorCode, ImportOptions, ImportReport, ImportSource, Masker, OutputSpec, PortalPolicy, Proposal,
+  AdoptInput, AdoptResult, BrowserEndpoint, DesktopDraft, Draft, ErrorCode, FlowNode, ImportOptions, ImportReport, ImportSource, Masker, OutputSpec, PortalPolicy, Proposal, UiPathFlow,
 } from 'n8n-rpa-engine';
 import { browserConfig, ConfigError, CREDENTIALS, policyFor, siteLoginConfig, type SiteLogin } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
-import { configNodeError, errorJson, GUIDANCE } from '../errors.js';
-import { isBreakerCode, runGuarded, type GuardedResult } from '../execute.js';
-import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
-import { workflowFile } from '../import/workflow.js';
-import { lazyChatModel } from '../model.js';
-import { configErrorItem, desktopRepairedStepsJson, repairedStepsItem, slug } from '../output.js';
+import { configNodeError, errorJson, failedOnCode, guidanceFor, shownMessage } from '../errors.js';
+import { isBreakerCode, noteRepairRan, repairAlreadyRan, runGuarded, siteLoginGuard, type GuardedResult } from '../execute.js';
 import {
-  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, hasDownloadStep, literalString, readCommonOptions,
-  refuseCdpDownload, regexOption, SITE_LOGIN_NO_ID, type CommonOptions,
+  DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, reviewSteps, reviewWrites,
+} from '../format.js';
+import { isQueueMode, openGuardStore, queueNeedsRedis, redisAttached, type GuardStoreDeps } from '../guard-store.js';
+import { nonSecretStart, secretTypedInto, stepVariables, workflowFile, type CredentialRef, type PassedOn } from '../import/workflow.js';
+import { lazyChatModel } from '../model.js';
+import { configErrorItem, desktopRepairedStepsJson, plain, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
+import { codeSettingsFor, codeWorkflowOptions } from './codeWorkflow.js';
+import {
+  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, field, hasDownloadStep, hiddenByRunsOn, literalString, NO_MODEL,
+  readCommonOptions, refuseCdpDownload, regexOption, safeParam, SITE_LOGIN_NO_ID, slotNote, type CommonOptions,
 } from './common.js';
-import { expectedDownload, NO_MODEL, noteRepairRan, repairAlreadyRan, siteLoginGuard, variablesOption } from './runSteps.js';
+import { expectedDownload, variablesOption } from './runStepsParams.js';
+import { signingPolicy } from './signSteps.js';
 
 /** The largest file or text Import Steps reads. The importers apply their own, smaller limits. */
 export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
@@ -34,26 +39,46 @@ export const FILE_TOO_LARGE = 'The file is larger than 20 MiB, so it was not rea
 export const TEXT_TOO_LARGE = 'Recording or Code is larger than 20 MiB, so it was not read.';
 export const NAME_REQUIRED = 'Name is required: it names the imported steps.';
 export const NAME_EQUALS = 'Name must not start with "=".';
-export const SOURCE_UNKNOWN = 'Source must be Chrome Recorder (JSON), Playwright Code (JavaScript or TypeScript) or UiPath Project (ZIP or XAML)';
+export const VERSION_INVALID = 'Options → Version must be a whole number of 1 or more.';
+export const SOURCE_UNKNOWN =
+  'Source must be Work It Out From the File, Chrome Recorder (JSON), Playwright Code (JavaScript or TypeScript), UiPath Project (ZIP or XAML), Step Document (JSON) or RPA Recording';
+/** Source → Work It Out From the File, for a file whose name and content say nothing Import Steps knows. */
+export const SOURCE_NOT_DETECTED =
+  'Import Steps could not tell what the file holds: give it the name its tool saves (.rpa-recording.json, .zip, .xaml, .js or .ts), or choose its Source.';
 export const IMPORT_NEEDS_START = 'Import Steps needs a Start URL or a Site Login: the imported steps do not open a page first.';
 /** The repair goal when Goal is empty: the agent sees the imported steps as its base. */
 export const DEFAULT_GOAL = 'Do what the imported steps do, on the page as it is now.';
-export const NOT_TRIED_LIMIT = `not tried: an import adopts at most ${MAX_ADOPTIONS} step lists`;
+export const NOT_TRIED_LIMIT = `not tried: an import replays at most ${MAX_ADOPTIONS} step lists`;
 export const NOT_TRIED_CANCELLED = 'not tried: the execution was cancelled';
+/** A step list after one that failed on its one-time code: another sign-in would ask for (or type) another code. */
+export const NOT_TRIED_CODE = (name: string, reason: string) => `not tried: ${name} failed on its one-time code (${reason})`;
 export const NOTHING_IMPORTED = (reason: string) => `Nothing was imported: ${reason}`;
-export const NONE_ADOPTED = (n: number, first: string) => `None of the ${n} imported step lists could be adopted. ${first}`;
+export const NONE_ADOPTED = (n: number, first: string) => `None of the ${n} imported step lists could be replayed. ${first}`;
 /** Why a draft's steps are null on Data: they carry a Site Login value (defence in depth behind the importer's own stripping). */
 export const STEPS_WITHHELD = 'The steps are not shown: they contain a value of the RPA Site Login.';
 /** A desktop draft on Data: it goes to approval as imported, without a replay. */
 export const DESKTOP_FOR_APPROVAL =
-  'Desktop steps are not replayed at import (there is no desktop proof yet): they go to approval as imported. Review every step, supply the variables in Run steps, and list the steps that save, post or submit in Write Steps when you approve.';
+  'Desktop steps are not replayed at import: they go to approval as imported. Review every step, and mark each step that saves, posts or submits as a write when you approve.';
+/** A browser step document on Data that goes to approval without a run or a replay (it writes or types a secret). */
+export const WRITES_FOR_APPROVAL =
+  "These browser steps are not replayed at import, because they submit a form, download through a form, type a secret or change a password: they go to approval as written. Review every step, each form's target and each download, and supply the variables in Run steps.";
+/** The guidance for a step document that goes to approval as written and fails the check Sign Steps will make: nothing ran. */
+export const CHECKED_NOT_RUN =
+  "The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the message says which rule they break. Correct the step document, or the Site Login's settings, and import it again.";
 /** A UiPath project with browser sequences, imported without an RPA Browser credential (its desktop sequences need none). */
 export const IMPORT_BROWSER_NEEDED = 'The project has browser steps: attach an RPA Browser credential to replay them.';
 
-const SOURCES: readonly string[] = ['chrome', 'playwright', 'uipath'];
+const SOURCES: readonly string[] = ['auto', 'chrome', 'playwright', 'uipath', 'steps', 'recording'];
+/** Sources that may hold only desktop steps: the RPA Browser credential is needed only for browser steps, known after the import. */
+const MAY_BE_DESKTOP: readonly string[] = ['uipath', 'steps', 'recording'];
+/** Sources that are always a file (Input From is hidden for them). */
+const FILE_ONLY: readonly string[] = ['uipath', 'recording'];
+/** Sources whose import does not use Expected File (it is hidden for them): their download steps come from the source. */
+const NO_EXPECTED_FILE: readonly string[] = ['steps', 'recording'];
 
 interface ImportParams {
-  source: ImportSource;
+  /** 'auto' (Work It Out From the File) until the file is read; then the source it holds. */
+  source: ImportSource | 'auto';
   inputFrom: 'binary' | 'text';
   binaryPropertyName: string;
   name: string;
@@ -64,6 +89,16 @@ interface ImportParams {
   expectedFile: unknown;
   vars: Record<string, string>;
   breakerResetKey: string;
+  /** Options → One-Time Code Workflow: the workflow ID, '' when not set. */
+  codeWorkflowId: string;
+  /** Options → Code Timeout (Seconds), in ms. */
+  codeTimeoutMs: number;
+  /** Options → Version: the version every draft gets (1 by default). */
+  version: number;
+  /** Options → Approved Before Hand-Over: this workflow approves the steps before it hands the workflow file over. */
+  approvedBeforeHandOver: boolean;
+  /** Options → Import Form Name and Import Form Address: the form the workflow file's notes name. */
+  importForm: { name: string; address: string };
   common: CommonOptions;
 }
 
@@ -79,10 +114,12 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
   const source = asString(get('source', 'chrome'));
   if (!SOURCES.includes(source)) throw new ConfigError(SOURCE_UNKNOWN);
   const idPattern = asString(get('idPattern', '')).trim();
+  const version = Number(ctx.getNodeParameter('options.version', i, 1));
+  if (!Number.isSafeInteger(version) || version < 1) throw new ConfigError(VERSION_INVALID);
   return {
-    source: source as ImportSource,
-    // A UiPath project is always a file (Input From is hidden for it).
-    inputFrom: source !== 'uipath' && asString(get('inputFrom', 'binary')) === 'text' ? 'text' : 'binary',
+    source: source as ImportSource | 'auto',
+    // A UiPath project and an RPA recording are always a file (Input From is hidden for them).
+    inputFrom: !FILE_ONLY.includes(source) && asString(get('inputFrom', 'binary')) === 'text' ? 'text' : 'binary',
     binaryPropertyName: asString(get('binaryPropertyName', 'data')).trim() || 'data',
     name,
     startUrl: asString(get('startUrl', '')).trim(),
@@ -92,6 +129,10 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
     expectedFile: get('expectedFile', {}),
     vars: variablesOption(ctx.getNodeParameter('options.variables', i, {})),
     breakerResetKey,
+    version,
+    approvedBeforeHandOver: asBoolean(ctx.getNodeParameter('options.approvedBeforeHandOver', i, false), false),
+    importForm: { name: asString(ctx.getNodeParameter('options.importFormName', i, '')).trim(), address: asString(ctx.getNodeParameter('options.importFormAddress', i, '')).trim() },
+    ...codeWorkflowOptions(ctx, (option) => field(ctx.getNodeParameter('options', i, {}), option)),
     common,
   };
 }
@@ -125,8 +166,9 @@ async function readSource(ctx: NodeContext, i: number, p: ImportParams): Promise
 /** What became of one draft. `code` is the engine's error code when the engine refused or failed it. */
 type DraftOutcome =
   | { draft: Draft; kind: 'adopted'; proposal: Proposal }
+  | { draft: Draft; kind: 'forApproval'; review: IDataObject }
   | { draft: Draft; kind: 'notAdoptable'; code?: ErrorCode; reason: string }
-  | { draft: Draft; kind: 'failed'; code?: ErrorCode; reason: string; captures?: Captures };
+  | { draft: Draft; kind: 'failed'; code?: ErrorCode; reason: string; captures?: Captures; guidance?: string };
 
 /** A failed draft's failure screenshot and trace (Debug Trace not Never); the node scrubs the trace again before it is attached. */
 interface Captures { screenshot?: Buffer; trace?: Buffer }
@@ -135,8 +177,6 @@ type ItemOutcome =
   | { kind: 'ok'; data: INodeExecutionData; repaired: INodeExecutionData[] }
   | { kind: 'error'; item: INodeExecutionData; error: NodeOperationError };
 
-/** A JSON copy: n8n items must not share objects with the engine result. */
-const plain = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 /** Every string in a JSON value through the masker (the report and the reasons: defence in depth behind the engine's own masking). */
 function maskDeep<T>(value: T, mask: (s: string) => string): T {
@@ -149,15 +189,16 @@ function maskDeep<T>(value: T, mask: (s: string) => string): T {
   return walk(plain(value)) as T;
 }
 
-/** Options → Name for an error item when the parameters could not be read (never throws). */
-function safeName(ctx: NodeContext, i: number): string | null {
-  let name: unknown;
-  try {
-    name = ctx.getNodeParameter('stepsName', i, '');
-  } catch {
-    name = '';
-  }
-  return typeof name === 'string' && name.trim() ? name.trim() : null;
+/**
+ * One line per step whose absence changes what the bot does: every `untranslated` item, and every `dropped` one the
+ * import did not mark `notNeeded` (a viewport change, a wait the steps do by themselves, a focus click, logging). As the
+ * report words it: where, what, and why. Notes of other kinds (converted steps, values removed as secrets) are not
+ * included; the report itself keeps every item.
+ */
+function leftOutOf(report: ImportReport): string[] {
+  return report.items
+    .filter((i) => i.kind === 'untranslated' || (i.kind === 'dropped' && i.notNeeded !== true))
+    .map((i) => `${[i.at, i.what].filter((s) => s !== '').join(', ')}: ${i.reason}`);
 }
 
 /** Test seam for the guard store: the Redis factory and how the n8n execution mode is read (as Run Steps). */
@@ -174,27 +215,37 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
   const siteLoginId = credentialId(ctx, CREDENTIALS.siteLogin);
   let p: ImportParams;
-  // A UiPath project may hold only desktop sequences: then no browser runs and no RPA Browser credential is needed.
+  // A UiPath project or a step document may hold only desktop steps: then no browser runs and no RPA Browser credential
+  // is needed.
   let endpoint: BrowserEndpoint | undefined;
   let siteLogin: SiteLogin | undefined = undefined;
   let fixedPolicy: PortalPolicy | undefined = undefined;
   let data: Buffer | string;
+  let source: ImportSource;
   try {
     // An empty id would key every id-less Site Login's breaker together ("site-login:").
     if (siteLoginId === '') throw new ConfigError(SITE_LOGIN_NO_ID);
     p = readImportParams(ctx, i);
-    if (p.source !== 'uipath' || credentialId(ctx, CREDENTIALS.browser) !== undefined) {
+    data = await readSource(ctx, i, p);
+    // Work It Out From the File: the file's name, else what it holds, decides the source before anything else is read.
+    if (p.source === 'auto') {
+      const fileName = p.inputFrom === 'binary' ? ctx.helpers.assertBinaryData(i, p.binaryPropertyName).fileName : undefined;
+      const detected = engine.detectImportSource(fileName, data);
+      if (!detected) throw new ConfigError(SOURCE_NOT_DETECTED);
+      source = detected;
+    } else source = p.source;
+    if (!MAY_BE_DESKTOP.includes(source) || credentialId(ctx, CREDENTIALS.browser) !== undefined) {
       endpoint = browserConfig(await browserCredentials(ctx, i));
-      // A CDP connection cannot read downloaded files: refused before anything is read.
-      refuseCdpDownload(engine, endpoint, expectedDownload(engine, p.expectedFile) !== undefined);
+      // A CDP connection cannot read downloaded files: refused before anything is read. A step document's downloads carry
+      // their own checks and a recording runs no browser: Expected File is not used, so neither refuses one.
+      refuseCdpDownload(engine, endpoint, !NO_EXPECTED_FILE.includes(source) && expectedDownload(engine, p.expectedFile) !== undefined);
     }
     if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));
-    if (siteLogin && !node.credentials?.[CREDENTIALS.redis] && isQueueMode(deps)) throw new ConfigError(QUEUE_NEEDS_REDIS);
+    if (siteLogin && !redisAttached(node) && isQueueMode(deps)) throw new ConfigError(queueNeedsRedis(node));
     // With a Site Login or a Start URL the policy is known now; otherwise each draft's first page decides it.
     if (siteLogin || p.startUrl) fixedPolicy = policyOf(p, siteLogin, p.startUrl);
-    data = await readSource(ctx, i, p);
   } catch (error) {
-    return configError(errorMessage(error), safeName(ctx, i));
+    return configError(errorMessage(error), safeParam(ctx, i, 'stepsName'));
   }
 
   const download = expectedDownload(engine, p.expectedFile);
@@ -214,26 +265,53 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     if (v && typeof v === 'object') return Object.values(v).some(containsSecret);
     return false;
   };
+  // A step document without a start address starts where Run Steps would start it: Start URL, else the Site Login's.
+  const startUrl = p.startUrl || (source === 'steps' ? siteLogin?.policy.startUrl ?? '' : '');
   const opts: ImportOptions = {
     name: p.name,
-    ...(p.startUrl ? { startUrl: p.startUrl } : {}),
+    ...(startUrl ? { startUrl } : {}),
     ...(Object.keys(p.vars).length ? { vars: p.vars } : {}),
     ...(download ? { download } : {}),
     ...(p.idPattern ? { idPattern: p.idPattern } : {}),
     ...(secrets ? { secrets } : {}),
     hasSiteLogin: siteLogin !== undefined,
+    // With a One-Time Code Workflow, a recorded code becomes a sign-in that takes its code from that workflow.
+    ...(p.codeWorkflowId ? { codeFromWorkflow: true } : {}),
+    ...(p.version !== 1 ? { version: p.version } : {}),
   };
-  const imported = engine.importSource(p.source, data, opts);
+  const imported = engine.importSource(source, data, opts);
   const report = maskDeep<ImportReport>(imported.report, mask);
   const desktopDrafts = imported.desktopDrafts ?? [];
+  // What the import left out, as its (masked) report words it. The report does not say which step list a line belongs
+  // to, so every item of this import carries all of them.
+  const leftOut = leftOutOf(report);
+  const withLeftOut = <P extends object>(proposal: P): P => (leftOut.length ? { ...proposal, leftOut: [...leftOut] } : proposal);
 
-  // A UiPath project's flow becomes an n8n workflow for Import from file, whatever happens to its drafts.
+  // The ID Pattern each step list is checked with: Import Steps' own, else the one its steps state (the idPattern of
+  // their extract and extractTable steps), so a step document that reads rows needs nothing more. The workflow file's
+  // Run steps carry the same one, typed.
+  const idPatterns = new Map<string, string>();
+  try {
+    for (const d of imported.drafts) {
+      const pattern = p.idPattern ?? engine.statedIdPattern(d.script);
+      if (pattern) idPatterns.set(d.name, regexOption(pattern, 'ID Pattern'));
+    }
+  } catch (error) {
+    return configError(mask(errorMessage(error)), p.name, { report });
+  }
+
+  // Every import with steps comes with the workflow around them, for Import from file, whatever happens to its drafts: a
+  // UiPath project's or a recording's flow, otherwise one pair per step list. It carries the run options the import used.
   let workflow: { binary: IBinaryKeyData; name: string } | undefined;
-  if (imported.flow) {
+  const flow = imported.flow ?? pairsFlow(p.name, imported.drafts, desktopDrafts);
+  if (flow) {
     try {
-      const file = workflowFile(imported.flow, imported.drafts, { name: p.name, desktopDrafts });
-      const name = (JSON.parse(file.data.toString('utf8')) as { name: string }).name;
-      workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name };
+      const file = workflowFile(flow, imported.drafts, {
+        name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)), approvedBeforeHandOver: p.approvedBeforeHandOver, importForm: p.importForm,
+        ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
+        run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork, idPatterns },
+      });
+      workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name: file.name };
     } catch (error) {
       return configError(mask(errorMessage(error)), p.name, { report });
     }
@@ -246,21 +324,39 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     return failed;
   }
 
-  if (imported.drafts.length > 0 && !endpoint) {
-    const failed = configError(credentialId(ctx, CREDENTIALS.browser) === undefined ? IMPORT_BROWSER_NEEDED : BROWSER_CREDENTIAL_NEEDED, p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
+  // A browser step document that writes or types a secret is never run: it goes to approval as written.
+  const asWritten = source === 'steps' ? imported.drafts.filter((d) => engine.needsApprovalAsWritten(d.script.steps)) : [];
+  const toAdopt = imported.drafts.filter((d) => !asWritten.includes(d));
+  if (toAdopt.length > 0 && !endpoint) {
+    const failed = configError(`${source === 'uipath' ? IMPORT_BROWSER_NEEDED : BROWSER_CREDENTIAL_NEEDED}${slotNote(ctx, CREDENTIALS.browser)}`, p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
     if (workflow && failed.kind === 'error') failed.item.binary = { ...workflow.binary };
     return failed;
   }
-  const outcomes = endpoint ? await adoptAll(ctx, engine, i, deps, { p, endpoint, siteLogin, siteLoginId, fixedPolicy, drafts: imported.drafts, masker, textMasker }) : [];
+  const outcomes: DraftOutcome[] = [
+    ...asWritten.map((draft) => forApproval(engine, draft, siteLogin, containsSecret, mask, leftOut)),
+    ...(endpoint && toAdopt.length ? await adoptAll(ctx, engine, i, deps, { p, endpoint, siteLogin, siteLoginId, fixedPolicy, drafts: toAdopt, idPatterns, masker, textMasker }) : []),
+  ];
   const failed = outcomes.filter((o): o is Extract<DraftOutcome, { kind: 'failed' }> => o.kind === 'failed');
   // Desktop drafts are never replayed: each one that carries no Site Login value goes to approval as imported.
   const desktopOut = desktopDrafts.map((d) => {
     const withheld = containsSecret(d.script);
+    // Never a start value for a secret, under any casing.
+    const startValues = nonSecretStart(d.startValues, d.secretVariables);
+    const hasStart = Object.keys(startValues).length > 0;
     let review: IDataObject | undefined;
     let problem: string | undefined;
     if (!withheld) {
       try {
-        review = desktopRepairedStepsJson(engine, engine.desktopProposal(d.script));
+        const line = source === 'steps' ? DESKTOP_DOCUMENT_EVIDENCE_LINE : source === 'recording' ? DESKTOP_RECORDING_EVIDENCE_LINE : DESKTOP_EVIDENCE_LINE;
+        review = {
+          ...desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line, d.secretVariables),
+          // Shown on the review page only; neither the digest nor the signature covers them.
+          reviewSteps: reviewSteps(d.script.steps, {
+            desktop: true, secretVariables: d.secretVariables, ...(hasStart ? { startValues } : {}),
+            ...(source === 'recording' ? { added: importAddedSteps(d.script.steps) } : {}),
+          }) as unknown as IDataObject[],
+          writeCandidates: reviewWrites(d.script.steps, engine.desktopWriteCandidates(d.script), d.secretVariables) as unknown as IDataObject[],
+        };
       } catch (error) {
         problem = mask(errorMessage(error));
       }
@@ -274,13 +370,17 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       writeCandidates: [...d.writeCandidates],
       variables: [...d.variables],
       secretVariables: [...d.secretVariables],
+      // Where they are typed (the app's file name), for the last page's copy block: never a value.
+      ...(d.secretVariables.length ? { mayBeTypedInto: secretTypedInto(d.script, true) } : {}),
+      // A recording's start values (never a secret's), for the review page and the generated workflow.
+      ...(hasStart ? { startValues } : {}),
       reason: withheld ? STEPS_WITHHELD : problem ?? DESKTOP_FOR_APPROVAL,
     };
     return { entry, review };
   });
-  const forApproval = desktopOut.filter((o) => o.review !== undefined).length;
+  const waiting = desktopOut.filter((o) => o.review !== undefined).length + outcomes.filter((o) => o.kind === 'forApproval').length;
   // Every draft failed (a draft that cannot be adopted is a result, not a failure): the error output, with the report.
-  const allFailed = outcomes.length > 0 && failed.length === outcomes.length && forApproval === 0;
+  const allFailed = outcomes.length > 0 && failed.length === outcomes.length && waiting === 0;
   // Failure captures (Debug Trace not Never): on the error item the first failure's are `screenshot` and `trace`, as on a
   // Run Steps failure item; every other failed draft's trace is `trace-<n>`, n its index in `drafts`.
   const captures: IBinaryKeyData = {};
@@ -302,15 +402,19 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   }
   const entries: IDataObject[] = outcomes.map((o, k) => {
     const withheld = containsSecret(o.draft.script);
-    const reason = o.kind !== 'adopted' ? mask(o.reason) : undefined;
+    const reason = o.kind === 'forApproval' ? WRITES_FOR_APPROVAL : o.kind !== 'adopted' ? shownMessage(mask(o.reason)) : undefined;
     const why = withheld ? (reason ? `${reason} ${STEPS_WITHHELD}` : STEPS_WITHHELD) : reason;
+    // The variables a secret fill or a password change types, and the start site's host, for the last page's copy block.
+    const secret = stepVariables(o.draft.script).secret;
     return {
       name: o.draft.name,
       steps: withheld ? null : (plain(o.draft.script) as unknown as IDataObject),
       adopted: o.kind === 'adopted',
-      ...(o.kind !== 'adopted' && o.code ? { code: o.code } : {}),
+      ...(o.kind === 'forApproval' ? { forApproval: true } : {}),
+      ...((o.kind === 'notAdoptable' || o.kind === 'failed') && o.code ? { code: o.code } : {}),
       ...(why !== undefined ? { reason: why } : {}),
       ...(traceRefs.has(k) ? { traceRef: traceRefs.get(k) } : {}),
+      ...(secret.length ? { secretVariables: secret, mayBeTypedInto: secretTypedInto(o.draft.script, false) } : {}),
     };
   });
   entries.push(...desktopOut.map((o) => o.entry));
@@ -320,11 +424,12 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
   if (allFailed) {
     const first = failed[0];
-    const what = `${first.code ? `${first.code}: ` : ''}${mask(first.reason)}`;
+    const what = `${first.code ? `${first.code}: ` : ''}${shownMessage(mask(first.reason))}`;
     const message = outcomes.length === 1 ? what : NONE_ADOPTED(outcomes.length, `${first.draft.name}: ${what}`);
-    const error = new NodeOperationError(node, message, {
-      itemIndex: i, description: first.code ? `${first.code}: ${GUIDANCE[first.code]}` : 'Nothing was adopted. The reasons are in details.drafts.',
-    });
+    // No description when the message itself says what to do (guidanceFor gives '').
+    const guidance = first.code ? first.guidance ?? guidanceFor(first.code, first.reason) : '';
+    const description = first.code ? (guidance ? `${first.code}: ${guidance}` : undefined) : 'No step list was replayed. The reasons are in details.drafts.';
+    const error = new NodeOperationError(node, message, { itemIndex: i, ...(description ? { description } : {}) });
     error.message = message;
     Object.assign(error.context, { code: first.code ?? null, name: p.name });
     const item: INodeExecutionData = {
@@ -337,10 +442,45 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
   const repaired: INodeExecutionData[] = [];
   for (const o of outcomes) {
-    if (o.kind === 'adopted') repaired.push({ ...(await repairedStepsItem(ctx, engine, o.proposal)), pairedItem: paired });
+    if (o.kind === 'adopted') {
+      const item = await repairedStepsItem(ctx, engine, withLeftOut(o.proposal));
+      repaired.push({ ...item, json: withReviewSteps(engine, item.json), pairedItem: paired });
+    }
+    if (o.kind === 'forApproval') repaired.push({ json: withReviewSteps(engine, o.review), pairedItem: paired });
   }
   for (const o of desktopOut) if (o.review) repaired.push({ json: o.review, pairedItem: paired });
   return { kind: 'ok', data: { json: fields, pairedItem: paired, ...binaryField }, repaired };
+}
+
+/** A browser Repaired steps item with its steps as the review page lists them (shown only, never signed or reviewed). */
+function withReviewSteps(engine: Pick<Engine, 'shownUrl'>, json: IDataObject): IDataObject {
+  const doc = json.steps as { steps?: unknown; startUrl?: unknown } | null;
+  const steps = doc?.steps;
+  const startUrl = typeof doc?.startUrl === 'string' ? doc.startUrl : undefined;
+  return { ...json, reviewSteps: reviewSteps(Array.isArray(steps) ? steps : [], { desktop: false, shownUrl: engine.shownUrl, startUrl }) as unknown as IDataObject[] };
+}
+
+/**
+ * A browser draft that goes to approval as written, without a run or a replay: nothing is run, not even its read-only
+ * steps. It is checked as Sign Steps will check it, against the same policy (signingPolicy, validateScript in load mode),
+ * so a document Sign Steps would refuse is refused here, with that reason. Steps that carry a Site Login value are
+ * withheld and not offered for approval, as a desktop draft's are.
+ */
+function forApproval(
+  engine: Engine, draft: Draft, siteLogin: SiteLogin | undefined, containsSecret: (v: unknown) => boolean, mask: (s: string) => string, leftOut: string[],
+): DraftOutcome {
+  // The Data entry says why (STEPS_WITHHELD); there is no other reason.
+  if (containsSecret(draft.script)) return { draft, kind: 'notAdoptable', reason: '' };
+  const policy = signingPolicy(engine, draft.script, siteLogin);
+  if (!policy.ok) return { draft, kind: 'failed', code: 'policy_violation', reason: policy.reason, guidance: CHECKED_NOT_RUN };
+  const checked = engine.validateScript(draft.script, { policy: policy.policy, ...(siteLogin ? { secrets: siteLogin.secrets } : {}), mode: 'load' });
+  if (!checked.ok) return { draft, kind: 'failed', code: 'policy_violation', reason: checked.violations.join('; '), guidance: CHECKED_NOT_RUN };
+  try {
+    const proposal = engine.notReplayedProposal(draft.script, mask);
+    return { draft, kind: 'forApproval', review: repairedStepsJson(engine, leftOut.length ? { ...proposal, leftOut } : proposal, '', { notReplayed: true }) };
+  } catch (error) {
+    return { draft, kind: 'failed', code: 'policy_violation', reason: errorMessage(error), guidance: CHECKED_NOT_RUN };
+  }
 }
 
 /**
@@ -364,6 +504,34 @@ function checkedCaptures(engine: Engine, r: { screenshot?: Buffer; trace?: Buffe
   return trace || screenshot ? { ...(trace ? { trace } : {}), ...(screenshot ? { screenshot } : {}) } : undefined;
 }
 
+/**
+ * The RPA credentials on this node, by id and name only, for the workflow file: the RPA Browser and RPA Site Login the
+ * import used, and the RPA Step Signing and RPA Desktop Runner slots it never reads (no getCredentials). A credential's
+ * values never leave n8n's store here. A slot Runs On hides passes nothing on.
+ */
+function passedOn(node: { credentials?: Record<string, { id: string | null; name: string }> }, hidden: (type: string) => boolean): PassedOn {
+  const ref = (type: string): CredentialRef | undefined => {
+    const c = hidden(type) ? undefined : node.credentials?.[type];
+    return c && typeof c.id === 'string' && c.id !== '' && typeof c.name === 'string' ? { id: c.id, name: c.name } : undefined;
+  };
+  const out: PassedOn = {};
+  const pairs = [['browser', CREDENTIALS.browser], ['siteLogin', CREDENTIALS.siteLogin], ['signing', CREDENTIALS.signing], ['desktopRunner', CREDENTIALS.desktopRunner]] as const;
+  for (const [slot, type] of pairs) {
+    const r = ref(type);
+    if (r) out[slot] = r;
+  }
+  return out;
+}
+
+/** The flow of a source without one (a Chrome recording, Playwright code, a step document): one pair per step list, by its name. */
+function pairsFlow(name: string, drafts: Draft[], desktopDrafts: DesktopDraft[]): UiPathFlow | undefined {
+  const nodes: FlowNode[] = [
+    ...drafts.map((d, k): FlowNode => ({ kind: 'browser', sequence: k + 1, displayName: d.name, draft: d.name })),
+    ...desktopDrafts.map((d, k): FlowNode => ({ kind: 'desktop', sequence: drafts.length + k + 1, displayName: d.name, draft: d.name })),
+  ];
+  return nodes.length ? { name, nodes } : undefined;
+}
+
 /** The policy for a run: the Site Login's (Start URL may move the start page within it), or Start URL's site plus Also Allow These Sites. */
 function policyOf(p: ImportParams, siteLogin: SiteLogin | undefined, url: string): PortalPolicy {
   return policyFor({ siteLogin, url: url || undefined, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork, operation: 'runSteps' });
@@ -377,7 +545,11 @@ function policyOf(p: ImportParams, siteLogin: SiteLogin | undefined, url: string
  */
 async function adoptAll(
   ctx: NodeContext, engine: Engine, i: number, deps: ImportStepsDeps,
-  c: { p: ImportParams; endpoint: BrowserEndpoint; siteLogin?: SiteLogin; siteLoginId?: string; fixedPolicy?: PortalPolicy; drafts: Draft[]; masker: Masker; textMasker: Masker },
+  c: {
+    p: ImportParams; endpoint: BrowserEndpoint; siteLogin?: SiteLogin; siteLoginId?: string; fixedPolicy?: PortalPolicy; drafts: Draft[];
+    /** Each draft's ID Pattern, by its name: Import Steps' own, else the one its steps state. */
+    idPatterns: ReadonlyMap<string, string>; masker: Masker; textMasker: Masker;
+  },
 ): Promise<DraftOutcome[]> {
   const { p, endpoint, siteLogin, siteLoginId } = c;
   const node = ctx.getNode();
@@ -387,9 +559,15 @@ async function adoptAll(
   const guardFor = siteLogin && siteLoginId ? siteLoginGuard(siteLogin, siteLoginId, p.breakerResetKey, 2 * budgetMs + TOTP_WAIT_MS) : undefined;
   const signal = ctx.getExecutionCancelSignal();
   const outcomes: DraftOutcome[] = [];
+  /** Set once a step list failed on its one-time code: the item's later step lists sign in no more. */
+  let codeFailed: string | undefined;
   for (const [k, draft] of c.drafts.entries()) {
     if (k >= MAX_ADOPTIONS) {
       outcomes.push({ draft, kind: 'failed', reason: NOT_TRIED_LIMIT });
+      continue;
+    }
+    if (codeFailed !== undefined) {
+      outcomes.push({ draft, kind: 'failed', reason: codeFailed });
       continue;
     }
     if (signal?.aborted) {
@@ -409,7 +587,8 @@ async function adoptAll(
       outcomes.push({ draft, kind: 'failed', code: 'policy_violation', reason: errorMessage(error) });
       continue;
     }
-    const output: OutputSpec | undefined = p.idPattern ? { idPattern: p.idPattern } : undefined;
+    const idPattern = c.idPatterns.get(draft.name);
+    const output: OutputSpec | undefined = idPattern ? { idPattern } : undefined;
     const repair: AdoptInput['repair'] = p.aiRepair && modelConnected
       ? {
           model: lazyChatModel(() => ctx.getInputConnectionData(NodeConnectionTypes.AiLanguageModel, i)),
@@ -424,6 +603,8 @@ async function adoptAll(
       draft: draft.script,
       policy,
       ...(siteLogin ? { secrets: siteLogin.secrets } : {}),
+      // The run and its replay ask the One-Time Code Workflow, as Run Steps does; the engine masks each code it gets.
+      ...codeSettingsFor(ctx, p),
       endpoint,
       ...(output ? { output } : {}),
       vars: p.vars,
@@ -444,7 +625,7 @@ async function adoptAll(
         loginFailure: (r) => (!r.ok && isBreakerCode(r.code) ? { code: r.code, message: r.message } : undefined),
       });
     } catch (error) {
-      outcomes.push({ draft, kind: 'failed', code: 'incomplete', reason: `the adoption stopped unexpectedly: ${errorMessage(error)}` });
+      outcomes.push({ draft, kind: 'failed', code: 'incomplete', reason: `the replay stopped unexpectedly: ${errorMessage(error)}` });
       continue;
     }
     if (ran.kind === 'blocked') {
@@ -463,16 +644,17 @@ async function adoptAll(
       const hint = r.code === 'drift_detected' && p.aiRepair && !modelConnected ? ` (${NO_MODEL})` : '';
       const captures = p.common.saveTrace === 'never' ? undefined : checkedCaptures(engine, r, { masker: c.masker, textMasker: c.textMasker, policy });
       outcomes.push({ draft, kind: 'failed', code: r.code, reason: `${r.message}${hint}`, ...(captures ? { captures } : {}) });
+      if (failedOnCode(r.code, r.message)) codeFailed = NOT_TRIED_CODE(draft.name, r.message);
     }
   }
   return outcomes;
 }
 
 /**
- * Import Steps: per input item, the recording, code or project → engine.importSource → each draft
+ * Import Steps: per input item, the recording, code, project or step document → engine.importSource → each draft
  * adopted (engine.adoptDraft) → [Data, Repaired Steps]. Repaired Steps holds one item per adopted draft, built exactly
- * as Run Steps builds it, so Sign Steps accepts it unchanged. Data holds `{ report, drafts, workflowName? }` and, for
- * UiPath, the workflow file as binary `workflow`. A configuration error, nothing imported, or every draft failed is an
+ * as Run Steps builds it, so Sign Steps accepts it unchanged. Data holds `{ report, drafts, workflowName? }` and the
+ * workflow file as binary `workflow`. A configuration error, nothing imported, or every draft failed is an
  * error item in Data (n8n's error output), as in Run Steps.
  */
 export async function executeImportSteps(ctx: NodeContext, engine: Engine, deps: ImportStepsDeps = {}): Promise<INodeExecutionData[][]> {
@@ -490,7 +672,7 @@ export async function executeImportSteps(ctx: NodeContext, engine: Engine, deps:
       // under continue-on-fail, where n8n would copy the input items to Data as if they had succeeded.
       const message = errorMessage(error);
       const thrown = error instanceof NodeOperationError ? error : configNodeError(ctx.getNode(), message, i);
-      outcome = { kind: 'error', item: configErrorItem(message, safeName(ctx, i), [{ item: i }]), error: thrown };
+      outcome = { kind: 'error', item: configErrorItem(message, safeParam(ctx, i, 'stepsName'), [{ item: i }]), error: thrown };
     }
     if (outcome.kind === 'error') {
       if (!ctx.continueOnFail()) throw outcome.error;

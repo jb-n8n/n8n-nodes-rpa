@@ -1,20 +1,134 @@
-# Shows what the n8n credentials need: the URL and the certificate fingerprint of the RPA desktop runner and of the RPA
-# browser on this machine, and whether each is listening. Run it as the bot user or from an administrator PowerShell
-# (nobody else can read the data directory):
+# Shows what the n8n credentials need: for the RPA desktop runner and, when it is installed, for the RPA browser, one
+# connection line to paste into the credential's Connection Line field, and below it the URL and the certificate
+# fingerprint for the separate fields, and whether each program is listening. Run it as the bot user or from an
+# administrator PowerShell (nobody else can read the data directory); rpa.cmd in the install folder runs it:
 #
-#   powershell -ExecutionPolicy Bypass -File "C:\Program Files\RPA Runner\scripts\Show-RpaConnection.ps1" [-ShowTokens]
+#   rpa connection [-ShowTokens] [-Address <name or address>]     (this script [-ShowTokens] [-Address ...])
+#   rpa status                                                     (this script -Status)
 #
-# The tokens are shown only with -ShowTokens, which needs an administrator PowerShell. The two token lines are written
-# through the host's own writer, not through a cmdlet or the pipeline, so that no cmdlet's parameters carry a token
-# (PowerShell's module logging records those). What remains: a transcript records what the window shows, a program
-# that runs this script and reads its output (a remote command tool, for example) keeps that output, and a PowerShell
-# command that calls this script in its own session gets the two lines on the screen, not as output. Everything else
-# is written to the pipeline. The runner's fingerprint comes from its start line in logs\runner.out.log; the browser's
-# is the SHA-256 of its certificate (browser-cert.pem). The bot user can write both files, so the fingerprints are
-# what this machine's bot user reports.
-param([switch]$ShowTokens)
+# A connection line is rpa-runner://<address>:<port>/rpa/v1#token=<token>&fingerprint=<64 hex> or
+# rpa-browser://<address>:<port>/#token=<token>&fingerprint=<64 hex>. Its address is the -Address given (the name or
+# address n8n really uses, through a NAT or a tunnel). Without -Address it is the one install.json records (the
+# installer's -Address, or the answer to its question behind a NAT); else, where install.json records one IP address
+# that may connect (-AllowFrom, the n8n host), the address this machine has on its route to that one, else this
+# machine's name; one line says which, and how to choose another. An IPv6 address goes in brackets.
+# -Status shows whether each program listens, the mode, the bot user's sessions and, in unattended mode, the
+# supervisor's state: nothing that goes into a credential.
+#
+# The tokens are shown only with -ShowTokens, which needs an administrator PowerShell; without it each line holds
+# token=<hidden: run with -ShowTokens>, and the script says so. The token lines and the connection lines with a token
+# are written through the host's own writer, not through a cmdlet or the pipeline, and a token is read inside the
+# function that makes its line, so that no command's parameters carry a token (PowerShell's module logging records
+# those). What remains: a transcript records what the window shows, a program that runs this script and reads its output
+# (a remote command tool, for example) keeps that output, and a PowerShell command that calls this script in its own
+# session gets those lines on the screen, not as output. Everything else is written to the pipeline. The runner's
+# fingerprint comes from its start line in logs\runner.out.log; the browser's is the SHA-256 of its certificate
+# (browser-cert.pem). The bot user can write both files, so the fingerprints are what this machine's bot user reports.
+#
+# In unattended mode (Install-Rpa.ps1 -Unattended) it also shows whether the service RPA Supervisor runs, the bot
+# user's sessions (quser.exe), the supervisor's last failure from supervisor-state.json and whether that failure blocks
+# sign-ins until the service is restarted (the service then still shows as running), and where its log is. Its folder
+# can be read by administrators only.
+param([switch]$ShowTokens, [string]$Address, [switch]$Status)
 $ErrorActionPreference = 'Stop'
 $installDir = Split-Path -Parent $PSScriptRoot
+$hidden = '<hidden: run with -ShowTokens>'
+
+# ---- connection address: begin (the same text in scripts\Show-RpaConnection.ps1 and RpaInstall.Machine.ps1; a test
+# compares the two) ----
+# The address as it goes into a connection line: a host name or an IPv4 address as it is, an IPv6 address (with or
+# without its brackets) in brackets; nothing for anything else, so that no text of -Address can add to the line.
+function Get-ConnectionHost([string]$Text) {
+  if ($Text -match '^\d{1,3}(\.\d{1,3}){3}$') {
+    foreach ($part in $Text.Split('.')) { if ([int]$part -gt 255) { return $null } }
+    return $Text
+  }
+  if ($Text -match '^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$') { return $Text }
+  $bare = $Text
+  if ($bare -match '^\[(.*)\]$') { $bare = $Matches[1] }
+  $parsed = $null
+  if ($bare -match '^[0-9A-Fa-f:.]+$' -and $bare.Contains(':') -and [Net.IPAddress]::TryParse($bare, [ref]$parsed)) { return '[{0}]' -f $bare }
+  $null
+}
+
+# The parsed address of a text that is an IPv4 or IPv6 address and could be another machine's (not a loopback or the
+# unspecified address), or nothing. No range, no name, no zone.
+function Get-OtherMachineAddress([string]$Text) {
+  $parsed = $null
+  $v4 = $Text -match '^\d{1,3}(\.\d{1,3}){3}$'
+  $v6 = $Text -match '^[0-9A-Fa-f:.]+$' -and $Text.Contains(':')
+  if (-not ($v4 -or $v6) -or -not [Net.IPAddress]::TryParse($Text, [ref]$parsed)) { return $null }
+  if ([Net.IPAddress]::IsLoopback($parsed) -or $parsed.Equals([Net.IPAddress]::Any) -or $parsed.Equals([Net.IPAddress]::IPv6Any)) { return $null }
+  $parsed
+}
+
+# Without -Address: the address this machine has on its route to n8n, when install.json's allowFrom holds one IP
+# address (the n8n host), as @{ Host = <as it goes into a line>; Address; Towards = <that n8n address> }. Nothing for
+# several addresses, a range, a name, any or none, a loopback address, no route, an answer that cannot go into a line,
+# or a Find-NetRoute that is missing or fails: the lines then carry this machine's name. Find-NetRoute reads this
+# machine's routing table: nothing is sent to that address.
+function Get-RouteAddress($AllowFrom) {
+  $entries = @($AllowFrom | Where-Object { $null -ne $_ })
+  if ($entries.Count -ne 1) { return $null }
+  $target = [string]$entries[0]
+  if (-not (Get-OtherMachineAddress $target)) { return $null }
+  $local = $null
+  try {
+    foreach ($found in @(Find-NetRoute -RemoteIPAddress $target -ErrorAction Stop)) {
+      if ($found.IPAddress) { $local = [string]$found.IPAddress; break }
+    }
+  } catch { return $null }
+  if (-not $local -or -not (Get-OtherMachineAddress $local)) { return $null }
+  $lineHost = Get-ConnectionHost $local
+  if (-not $lineHost) { return $null }
+  @{ Host = $lineHost; Address = $local; Towards = $target }
+}
+
+# Whether an IP address is a private one: 10/8, 172.16/12, 192.168/16, or a unique-local (fc00::/7) or link-local
+# (fe80::/10) IPv6 address.
+function Test-PrivateAddress([string]$Text) {
+  $parsed = $null
+  if (-not [Net.IPAddress]::TryParse($Text, [ref]$parsed)) { return $false }
+  $bytes = $parsed.GetAddressBytes()
+  if ($parsed.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+    return $bytes[0] -eq 10 -or ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or ($bytes[0] -eq 192 -and $bytes[1] -eq 168)
+  }
+  ($bytes[0] -band 0xFE) -eq 0xFC -or ($bytes[0] -eq 0xFE -and ($bytes[1] -band 0xC0) -eq 0x80)
+}
+# ---- connection address: end ----
+
+# A connection line (Line), or why there is none (Problem). -Fingerprint is in the form the other lines show it
+# (upper-case pairs joined by colons) and goes into the line as 64 lower-case hexadecimal digits. With -WithToken the
+# token is read here from -TokenFile, so that it is never a parameter of a command; without it the line holds the
+# placeholder. Only a token of letters, digits, - and _ (the installer's own) goes into a line.
+function Get-ConnectionLine([string]$Kind, [string]$HostName, [int]$Port, [string]$Fingerprint, [string]$TokenFile, [bool]$WithToken) {
+  $path = '/'
+  $name = 'Browser'
+  if ($Kind -eq 'runner') { $path = '/rpa/v1'; $name = 'Runner' }
+  $token = '<hidden: run with -ShowTokens>'
+  if ($WithToken) {
+    try { $token = ([IO.File]::ReadAllText($TokenFile)).Trim() }
+    catch { return @{ Line = $null; Problem = ('the token cannot be read (see the {0} token line)' -f $name) } }
+    if ($token -notmatch '^[A-Za-z0-9_-]+$') { return @{ Line = $null; Problem = 'the token holds a character that a connection line cannot carry; use the Token field' } }
+  }
+  $line = 'rpa-{0}://{1}:{2}{3}#token={4}&fingerprint={5}' -f $Kind, $HostName, $Port, $path, $token, $Fingerprint.Replace(':', '').ToLowerInvariant()
+  @{ Line = $line; Problem = $null }
+}
+
+# -Status shows nothing that goes into a credential, and an -Address that cannot go into a line stops everything.
+if ($Status -and ($ShowTokens -or $Address)) {
+  Write-Output '-Status shows no connection values: give it without -ShowTokens and -Address.'
+  exit 1
+}
+# Kept apart: $address below is each address of this machine.
+$givenAddress = $Address
+if ($givenAddress) {
+  $lineHost = Get-ConnectionHost $givenAddress
+  if (-not $lineHost) {
+    Write-Output ('-Address: {0} is not a host name, an IPv4 address or an IPv6 address.' -f $givenAddress)
+    exit 1
+  }
+}
 $dataDir = Join-Path $env:ProgramData 'RPA Runner'
 $logDir = Join-Path $dataDir 'logs'
 $installFile = Join-Path $installDir 'install.json'
@@ -29,6 +143,25 @@ if ($ShowTokens) {
   if (-not (New-Object Security.Principal.WindowsPrincipal $identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Output '-ShowTokens needs an administrator PowerShell.'
     exit 1
+  }
+}
+
+# The address in the lines: -Address, else the one install.json records (the installer's -Address, or the answer to
+# its question behind a NAT), else the one on the route to n8n, else this machine's name. A name that cannot go into a
+# line (an underscore in it, for example) leaves the lines to -Address.
+$route = $null
+$noLine = $null
+$recorded = $null
+if (-not $givenAddress -and -not $Status -and $install.address -is [string] -and (Get-ConnectionHost $install.address)) {
+  $recorded = $install.address
+  $lineHost = Get-ConnectionHost $recorded
+}
+elseif (-not $givenAddress -and -not $Status) {
+  $route = Get-RouteAddress $install.allowFrom
+  if ($route) { $lineHost = $route.Host }
+  else {
+    $lineHost = Get-ConnectionHost ([Net.Dns]::GetHostName())
+    if (-not $lineHost) { $noLine = 'the name of this machine, {0}, cannot go into a line: run this with -Address <the name or address n8n uses>' -f [Net.Dns]::GetHostName() }
   }
 }
 
@@ -73,22 +206,120 @@ $listening = @([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalPropertie
 
 $services = @(@{
     # The runner writes its failures to its output (runner.out.log), and to logs\runner-<date>.log.
-    Name = 'Runner'; Port = [int]$install.runnerPort; Path = '/rpa/v1'; Log = Join-Path $logDir 'runner.out.log'
+    Name = 'Runner'; Kind = 'runner'; For = 'the setup command or the RPA Desktop Runner credential'; Port = [int]$install.runnerPort; Path = '/rpa/v1'; Log = Join-Path $logDir 'runner.out.log'
     Fingerprint = Get-RunnerFingerprint (Join-Path $logDir 'runner.out.log'); Token = Join-Path $dataDir 'token'
   })
 if ($install.browser) {
   $services += @{
-    Name = 'Browser'; Port = [int]$install.browserPort; Path = ''; Log = Join-Path $logDir 'browser.err.log'
+    Name = 'Browser'; Kind = 'browser'; For = 'the Connection Line of the RPA Browser credential'; Port = [int]$install.browserPort; Path = ''; Log = Join-Path $logDir 'browser.err.log'
     Fingerprint = Get-CertificateFingerprint (Join-Path $dataDir 'browser-cert.pem'); Token = Join-Path $dataDir 'browser-token'
   }
 }
 
-if ($addresses.Count -eq 0) { Write-Output 'This machine has no IPv4 address on a network.' }
+# The bot user's sessions (quser.exe lists them, whoever made them; it exits with 1 when there is none). What it writes
+# to its error stream must not end this script.
+function Write-Sessions([string]$User) {
+  $sessions = $null
+  $ErrorActionPreference = 'Continue'
+  try {
+    $said = @(& (Join-Path ([Environment]::SystemDirectory) 'quser.exe') $User 2>$null)
+    if ($LASTEXITCODE -eq 0) { $sessions = @($said | Select-Object -Skip 1 | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) }
+    elseif ($LASTEXITCODE -eq 1) { $sessions = @() }
+  } catch { }
+  $ErrorActionPreference = 'Stop'
+  if ($null -eq $sessions) { Write-Output ('Sessions of {0}: could not be read (quser.exe)' -f $User) }
+  elseif ($sessions.Count -eq 0) { Write-Output ('Sessions of {0}: none' -f $User) }
+  else { foreach ($session in $sessions) { Write-Output ('Session of {0}: {1}' -f $User, $session) } }
+}
+
+if (-not $Status -and $addresses.Count -eq 0) { Write-Output 'This machine has no IPv4 address on a network.' }
+# A private address on the route to an n8n that is not on a private network (a cloud machine behind a NAT, for example):
+# n8n cannot use the line as it is. Said before the lines, which still carry that address.
+$outside = $route -and (Test-PrivateAddress $route.Address) -and -not (Test-PrivateAddress $route.Towards)
+if ($outside) { Write-Output ("This machine's address towards n8n is {0}, a private one. n8n at {1} is outside this network and cannot use it. The line needs the name or address n8n can reach. In an administrator PowerShell, run: & ""{2}"" connection -ShowTokens -Address followed by that name or address." -f $route.Address, $route.Towards, (Join-Path $installDir 'rpa.cmd')) }
 foreach ($service in $services) {
-  foreach ($address in $addresses) { Write-Output ('{0} URL: wss://{1}:{2}{3}' -f $service.Name, $address, $service.Port, $service.Path) }
-  # A service that has never started has no certificate yet.
+  $notListening = ('{0}: not listening yet. It starts within a minute of the bot user''s sign-in: run this again. If it stays like this, read {1}' -f $service.Name, $service.Log)
+  if ($Status) {
+    if ($listening -contains $service.Port) { Write-Output ('{0}: listening on port {1}' -f $service.Name, $service.Port) } else { Write-Output $notListening }
+    continue
+  }
+  # The line to paste (the runner's into the setup command, npx n8n-nodes-rpa setup, or into its credential), then the
+  # values for the separate fields. A service that has never started has no certificate yet.
+  if ($noLine) { Write-Output ('{0} connection line: {1}' -f $service.Name, $noLine) }
+  elseif ($service.Fingerprint) {
+    $made = Get-ConnectionLine $service.Kind $lineHost $service.Port $service.Fingerprint $service.Token ([bool]$ShowTokens)
+    if ($made.Line) {
+      Write-Output ('{0} connection line, for {1}:' -f $service.Name, $service.For)
+      if ($ShowTokens) { $Host.UI.WriteLine($made.Line) } else { Write-Output $made.Line }
+    } else { Write-Output ('{0} connection line: {1}' -f $service.Name, $made.Problem) }
+  } else { Write-Output ('{0} connection line: not known yet (the program has not started)' -f $service.Name) }
+  # With -Address, the URL for the separate fields names the same address as the line.
+  $urlHosts = $addresses
+  if ($givenAddress -or $recorded) { $urlHosts = @($lineHost) }
+  foreach ($address in $urlHosts) { Write-Output ('{0} URL: wss://{1}:{2}{3}' -f $service.Name, $address, $service.Port, $service.Path) }
   if ($service.Fingerprint) { Write-Output ('{0} fingerprint: {1}' -f $service.Name, $service.Fingerprint) }
-  else { Write-Output ('{0} fingerprint: not known yet' -f $service.Name) }
-  if ($listening -notcontains $service.Port) { Write-Output ('{0}: not listening: see {1}' -f $service.Name, $service.Log) }
+  else { Write-Output ('{0} fingerprint: not known yet (the program has not started)' -f $service.Name) }
+  if ($listening -notcontains $service.Port) { Write-Output $notListening }
   if ($ShowTokens) { $Host.UI.WriteLine((Get-TokenLine $service.Name $service.Token)) }
 }
+if (-not $Status -and -not $ShowTokens) {
+  $command = '& "{0}" connection -ShowTokens' -f (Join-Path $installDir 'rpa.cmd')
+  if ($givenAddress) { $command += ' -Address {0}' -f $givenAddress }
+  if ($services.Count -eq 1) { Write-Output ('The token is hidden in the line (token={0}). For the line to paste, run as an administrator: {1}' -f $hidden, $command) }
+  else { Write-Output ('The tokens are hidden in the lines (token={0}). For the lines to paste, run as an administrator: {1}' -f $hidden, $command) }
+}
+if ($route) {
+  if (-not $outside) { Write-Output ("The line's address is {0}: the one this machine has towards {1}. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>." -f $route.Address, $route.Towards) }
+}
+elseif ($recorded) { Write-Output ("The line's address is {0}, the one the installer was given (with -Address or at its question). To use another, run this again with -Address <that name or address>." -f $recorded) }
+elseif (-not $Status -and -not $givenAddress -and -not $noLine) { Write-Output ("The line's address is this computer's name, {0}. If n8n cannot find it by that name, run this again with -Address <an address n8n can reach>." -f $lineHost) }
+
+if ($Status -and $install.mode -ne 'unattended') {
+  if ($install.autoSignIn -eq $true) { Write-Output ('Mode: automatic sign-in. Windows signs {0} in at every start of this machine.' -f $install.user) }
+  elseif ($install.browser) { Write-Output ('Mode: signed in. The runner and the browser run while {0} is signed in.' -f $install.user) }
+  else { Write-Output ('Mode: signed in. The runner runs while {0} is signed in.' -f $install.user) }
+  Write-Sessions ([string]$install.user)
+}
+
+if ($install.mode -eq 'unattended') {
+  $supervisorDir = Join-Path $dataDir 'supervisor'
+  $stateFile = Join-Path $supervisorDir 'supervisor-state.json'
+  $user = [string]$install.user
+  Write-Output ('Mode: unattended. The RPA Supervisor signs {0} in when n8n connects, and out {1} s after the last connection.' -f $user, $install.idleSeconds)
+
+  $service = $null
+  try { $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='RPA Supervisor'" -ErrorAction Stop } catch { }
+  if (-not $service) { Write-Output 'Supervisor: the service RPA Supervisor is not registered. Run Install-Rpa.ps1 -Unattended again.' }
+  elseif ($service.State -ne 'Running') { Write-Output ("Supervisor: the service RPA Supervisor is {0}. Start it: Start-Service 'RPA Supervisor'" -f $service.State.ToLowerInvariant()) }
+  else { Write-Output 'Supervisor: running' }
+
+  Write-Sessions $user
+
+  # Only SYSTEM and administrators can open the supervisor's folder: a file that is not there (no failure yet) is told
+  # from one that this account may not read.
+  $failure = $null
+  try {
+    $failure = [string]([IO.File]::ReadAllText($stateFile) | ConvertFrom-Json).lastFailure
+    if ($failure) { Write-Output "Supervisor's last failure: $failure" } else { Write-Output "Supervisor's last failure: none recorded" }
+  } catch {
+    # The exception and those inside it: the call's own comes wrapped, and may wrap the system's reason in turn.
+    $chain = @()
+    for ($e = $_.Exception; $e; $e = $e.InnerException) { $chain += $e }
+    $cause = $chain[-1]
+    if (@($chain | Where-Object { $_ -is [IO.FileNotFoundException] -or $_ -is [IO.DirectoryNotFoundException] }).Count -gt 0) { Write-Output "Supervisor's last failure: none recorded" }
+    elseif (@($chain | Where-Object { $_ -is [UnauthorizedAccessException] }).Count -gt 0) { Write-Output ("Supervisor's last failure: {0} can be read by administrators only; run this from an administrator PowerShell." -f $stateFile) }
+    else { Write-Output ("Supervisor's last failure: {0} could not be read: {1}" -f $stateFile, $cause.Message) }
+  }
+  # After a wrong or expired password the supervisor tries no sign-in until it starts again, and still shows as
+  # running. The failure is from this run of the service when the file was written after the service started.
+  if ($failure -and $failure.Contains('No further sign-in is tried until the RPA Supervisor service is restarted.') -and $service -and $service.State -eq 'Running') {
+    $started = $null
+    try { $started = (Get-Process -Id $service.ProcessId -ErrorAction Stop).StartTime } catch { }
+    if (-not $started -or [IO.File]::GetLastWriteTime($stateFile) -ge $started) {
+      Write-Output "Supervisor: sign-ins are blocked until the service is restarted. Store the right password with Install-Rpa.ps1 -Unattended -UserPassword, which restarts it, or fix the cause and run: Restart-Service 'RPA Supervisor'"
+    }
+  }
+  Write-Output ('Supervisor log: {0}' -f (Join-Path $supervisorDir 'supervisor.log'))
+}
+# Whatever the last Windows tool this ran left in $LASTEXITCODE (quser.exe exits with 1 when there is no session).
+exit 0

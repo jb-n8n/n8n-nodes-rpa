@@ -67,6 +67,15 @@ describe('validateScript', () => {
     expect(win(3, s3).violations).toEqual([varInWriteLocator('step "' + s3.steps[3].intent + '"')]);
     expect(win(1, s3).ok).toBe(true); // not the window step: the variable is a plain locator
   });
+  it('refuses a variable condition on the write window click, allows an element condition there', () => {
+    const base = baselineScript(portal.url);
+    const win = (s: Script) => validateScript(s, { ...ctx, policy: { ...policy, writeWindow: { step: 3, maxPosts: 3, hosts: [portal.host] } } });
+    const gated = (when: Step['when']): Script => ({ ...base, steps: base.steps.map((st, j) => (j === 3 ? ({ ...st, when } as Step) : st)) });
+    expect(win(gated({ var: 'mode', equals: 'save' })).violations).toEqual(['steps[3].when may not use a variable on a step that signs in or writes']);
+    expect(win(gated({ var: 'mode', notEquals: 'read' })).violations).toEqual(['steps[3].when may not use a variable on a step that signs in or writes']);
+    expect(win(gated({ hidden: { css: '#busy' } })).ok).toBe(true);
+    expect(validateScript(gated({ var: 'mode', equals: 'save' }), ctx).ok).toBe(true); // no write window: a plain click
+  });
   it('the write window must sit on a top-level click step', () => {
     const at = (step: number) => validateScript(baselineScript(portal.url), { ...ctx, policy: { ...policy, writeWindow: { step, maxPosts: 3, hosts: [portal.host] } } });
     expect(at(3)).toMatchObject({ ok: true });
@@ -168,10 +177,10 @@ describe('validateScript', () => {
     expect(validateScript(withSecret, ctx).violations[0]).toMatch(/contains a credential secret/);
     // startUrl with secret in query
     const s = { ...baselineScript(portal.url), startUrl: `${portal.url}?p=demo-password` };
-    expect(validateScript(s, ctx).violations.some((v) => v.match(/script field startUrl.*contains a credential secret/))).toBe(true);
+    expect(validateScript(s, ctx).violations.some((v) => v.match(/field startUrl of the steps.*contains a credential secret/))).toBe(true);
     // Interrupt css containing secret
     const withInterrupt = { ...baselineScript(portal.url), interrupts: [{ target: { css: 'a[href*="demo-password"]' }, click: { css: '#close' } }] };
-    expect(validateScript(withInterrupt, ctx).violations.some((v) => v.match(/script field interrupts.*contains a credential secret/))).toBe(true);
+    expect(validateScript(withInterrupt, ctx).violations.some((v) => v.match(/field interrupts\[0\]\S* of the steps contains a credential secret/))).toBe(true);
     // Goto with encoded username in query
     const encoded = add(baselineScript(portal.url), { intent: 'Encoded', goto: '/acme/reports?user=' + encodeURIComponent('summit-ops') });
     expect(validateScript(encoded, ctx).violations.some((v) => v.match(/contains a credential secret/))).toBe(true);
@@ -286,6 +295,14 @@ describe('loginBlockEnd', () => {
     const s: Script = { ...base, steps: [base.steps[0], click('a'), click('b'), detect, { intent: 'Read', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}' } }] };
     expect(loginBlockEnd(s)).toBe(0);
     expect(loginBlockEnd({ ...base, steps: [click('a')] })).toBe(-1);
+  });
+  it('only element conditions extend it: a hidden-gated step does, a variable-gated step does not', () => {
+    const base = baselineScript(portal.url);
+    const [signIn, survey, detect] = base.steps;
+    const gated = (when: Step['when']): Step => ({ intent: 'Gated', when, click: { css: '#x' } });
+    expect(loginBlockEnd({ ...base, steps: [signIn, gated({ hidden: { css: '#busy' } }), survey, detect] })).toBe(3);
+    expect(loginBlockEnd({ ...base, steps: [signIn, gated({ var: 'mode', equals: 'x' }), survey, detect] })).toBe(0);
+    expect(loginBlockEnd({ ...base, steps: [signIn, survey, gated({ var: 'mode', notEquals: 'x' }), detect] })).toBe(1);
   });
 });
 

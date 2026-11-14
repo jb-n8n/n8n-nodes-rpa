@@ -1,7 +1,8 @@
 import { canonicalize } from '../sign.js';
 import type { DownloadTemplate } from '../steps/file-check.js';
+import { SECRET_FILL_VALUE } from '../secrets/render.js';
 import { verbOf } from '../steps/parse.js';
-import type { Interrupt, Locator, Step, SubmitTarget } from '../types.js';
+import type { Interrupt, Locator, Step, StepWhen, SubmitTarget } from '../types.js';
 
 // How the change list and the safety flags describe steps, pop-up handlers and locators. Run Steps
 // builds the change list with these; Sign Steps checks it against the same descriptions of the steps it signs.
@@ -60,13 +61,15 @@ function stepAction(step: Step): string {
   let s: string;
   if ('goto' in step) s = `go to ${q(step.goto)}`;
   else if ('signIn' in step) {
-    const { username, next, password, submit, totp } = step.signIn;
+    const { username, next, password, submit, totp, changePassword } = step.signIn;
+    const newPasswordVar = changePassword ? SECRET_FILL_VALUE.exec(changePassword.value)?.[1] : undefined;
     s = `sign in with ${reviewLocator(username)}, ${next ? `next ${reviewLocator(next)}, ` : ''}${reviewLocator(password)}, submit ${reviewLocator(submit)}`
       + (totp
         ? `${totp.via ? `, then click ${totp.via.map(reviewLocator).join(', then ')} if shown` : ''}, code in ${reviewLocator(totp.field)}`
           + `${totp.check ? `, tick ${totp.check.map(reviewLocator).join(', ')}` : ''}, submit ${reviewLocator(totp.submit)}`
-        : '');
-  } else if ('click' in step) s = `click ${reviewLocator(step.click)}`;
+        : '')
+      + (changePassword ? `; if the site asks for a new password, set it from variable ${token(newPasswordVar ?? changePassword.value)}` : '');
+  } else if ('click' in step) s = `${step.modifiers ? `${step.modifiers.map(token).join('+')}+` : ''}click ${reviewLocator(step.click)}`;
   else if ('fill' in step) s = `fill ${reviewLocator(step.fill.field)} with ${q(step.fill.value)}`;
   else if ('select' in step) s = `select ${q([step.select.value].flat().join(', '))} in ${reviewLocator(step.select.field)}`;
   else if ('check' in step) s = `${step.check.checked === false ? 'uncheck' : 'check'} ${reviewLocator(step.check.field)}`;
@@ -91,9 +94,18 @@ function stepAction(step: Step): string {
   else if ('detect' in step) s = `detect ${q(step.detect.name)}: ${Object.entries(step.detect.checks).map(([k, l]) => `${q(k)} ${reviewLocator(l)}`).join('; ')}`;
   else if ('screenshot' in step) s = `screenshot ${step.screenshot.capture}${step.screenshot.element ? ` of ${reviewLocator(step.screenshot.element)}` : ''}`;
   else if ('read' in step) s = `read the ${step.read.what}`;
+  else if ('press' in step) s = `press ${token(step.press.key)}${step.press.target ? ` on ${reviewLocator(step.press.target)}` : ''}`;
+  else if ('hover' in step) s = `hover over ${reviewLocator(step.hover)}`;
   else if ('extractTable' in step) s = `extract table ${reviewLocator(step.extractTable.table)}${step.extractTable.idPattern ? `, ID pattern ${token(step.extractTable.idPattern)}` : ''}`;
   else s = verb;
-  return step.when ? `if ${reviewLocator(step.when.visible)} shows, ${s}` : s;
+  return step.when ? `${describeWhen(step.when)}, ${s}` : s;
+}
+
+/** A step's condition for a reviewer: the element, or the variable's name and the JSON-quoted text it is compared with. */
+function describeWhen(w: StepWhen): string {
+  if ('visible' in w) return `if ${reviewLocator(w.visible)} shows`;
+  if ('hidden' in w) return `if ${reviewLocator(w.hidden)} does not show`;
+  return 'equals' in w ? `if variable ${token(w.var)} is ${q(w.equals)}` : `if variable ${token(w.var)} is not ${q(w.notEquals)}`;
 }
 
 /**

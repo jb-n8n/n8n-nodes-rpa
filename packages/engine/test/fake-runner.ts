@@ -325,6 +325,8 @@ export class FakeRunner {
   clockOffsetMs = 0;
   /** Another application's window holds the foreground (clipboard.read is refused). */
   foregroundElsewhere = false;
+  /** Answers every request of a method with this error (a test's copy of a text the real runner sends). */
+  errorFor: Record<string, { code: number; message: string } | undefined> = {};
   readonly erpUi: 'v1' | 'v2';
   readonly erpChanges: ErpChange[];
   readonly noWindowsMethod: boolean;
@@ -598,6 +600,8 @@ export class FakeRunner {
   }
 
   private async answer(method: string, p: Record<string, unknown>): Promise<unknown> {
+    const forced = this.errorFor[method];
+    if (forced) throw new RpcError(forced.code, forced.message);
     switch (method) {
       case 'hello':
         return { protocol: 1, runner: { version: '0.0.0-fake', os: 'Windows Server 2022 (fake)', session: { ...this.session } } };
@@ -627,7 +631,7 @@ export class FakeRunner {
       case 'app.launch': {
         const run = this.requireRun(p);
         const exe = String((p.app as { exe?: string })?.exe ?? '').split(/[\\/]/).pop() ?? '';
-        if (!this.policy.allowedApps.some((a) => a.exe.toLowerCase() === exe.toLowerCase())) throw new RpcError(E.policy_refused, `app not allowed: ${exe}`);
+        if (!this.policy.allowedApps.some((a) => a.exe.toLowerCase() === exe.toLowerCase())) throw new RpcError(E.policy_refused, `policy_refused: application "${exe}" is not in the runner's allowedApps`);
         if (this.appMissing) throw new RpcError(E.not_found, `not_found: no element matched application executable "${exe}" (no matching window of the run)`);
         run.app = this.app === 'erp' ? new ErpApp(() => this.run?.exportDir, this.erpChangesFor((p.app as { args?: unknown }).args))
           // The web view copies from its helper process: the run's while the helper descends from the app.

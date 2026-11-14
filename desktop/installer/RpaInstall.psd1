@@ -14,6 +14,7 @@
     'Test-RpaAdministrator'
     'Get-RpaMachineFacts'
     'Get-RpaUninstallFacts'
+    'Read-RpaReachableAddress'
     'Invoke-RpaInstallPlan'
     'Invoke-RpaUninstall'
     'Get-RpaUninstallSummary'

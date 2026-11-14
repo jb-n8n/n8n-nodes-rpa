@@ -4,16 +4,18 @@
 // else becomes the flow around them, or a report item. Expressions are kept as text and never evaluated,
 // and no typed value, SecureText or credential asset is ever imported beyond the asset's name as a slot.
 import { IMPORT_EMPTY } from '../messages.js';
+import { CREDENTIAL_FIELD } from '../secrets/credential-field.js';
 import { createMasker } from '../secrets/mask.js';
 import { readZipEntries, type ZipCaps } from '../steps/zip.js';
-import { buildDraft, cleanLabel, describeEvent, MIN_SECRET_LENGTH } from './draft.js';
+import { buildDraft, cleanLabel, clickModifiers, describeEvent, MIN_SECRET_LENGTH } from './draft.js';
 import { stripSecrets, TOTP_OUTPUT_HINT } from './secrets.js';
 import type { Candidate, DesktopDraft, Draft, FlowNode, ImportEvent, ImportItem, ImportOptions, ImportReport, ImportResult, UiPathFlow } from './types.js';
-import { buildDesktopDraft, type DesktopEvent, type DesktopSequence } from './uipath-desktop.js';
+import { buildDesktopDraft, DRAFT_NAMES_SIGN_IN_VALUE, signInValueCheck, type DesktopEvent, type DesktopSequence } from './desktop-draft.js';
 import { readDesktopSelector, type DesktopSelectorRead } from './uipath-desktop-selector.js';
 import { readSelector } from './uipath-selector.js';
 import type { UiaTarget, WindowSel } from '../types.js';
 import { parseXml, type XmlNode } from './xml.js';
+import { browserKeyProblem } from '../steps/browser-keys.js';
 import { canonicalChord } from '../steps/desktop-vocabulary.js';
 
 /** An upload larger than this is refused before anything is read. */
@@ -79,6 +81,12 @@ interface Ctx {
   app?: { window?: WindowSel; exe?: string; name: string };
   aws: boolean;
   excelPath?: string;
+  /**
+   * What this workflow file's arguments and variables start as, by lower-case name: a literal, or null when it is set
+   * another way (an expression, or two different values). Read from the file's own argument defaults and variable
+   * defaults, and from what the invoke passes in.
+   */
+  values?: Map<string, string | null>;
 }
 
 /** A target the Object Repository holds: its selector and element type. */
@@ -217,7 +225,8 @@ const textOf = (v: Val): string => (v === undefined ? '' : 'literal' in v ? v.li
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /**
  * A one-time code activity (a TOTP package's Generate TOTP, Get OTP, Generate One-Time Password), by the
- * words of its name. It is never a step: the sign-in types a fresh code from the Site Login's authenticator secret.
+ * words of its name. It is never a step: the sign-in types a fresh code from the Site Login's authenticator secret, or
+ * from the One-Time Code Workflow when one is set.
  */
 const TOTP_ACTIVITY = /(^|[a-z])(Totp|TOTP|Otp|OTP|OneTimePassword)([A-Z]|$)/;
 /** A TOTP activity's inputs (its secret), never its output. */
@@ -288,7 +297,9 @@ function walkUiPath(data: Buffer | Uint8Array | string, opts: ImportOptions, rep
  * `<name>-<n>`), the flow, and the report. Never throws.
  */
 export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOptions, report: ImportReport): ImportResult {
-  const { sequences, desktop, typedSecrets: desktopSecrets, flow } = walkUiPath(data, opts, report);
+  const { sequences, desktop, typedSecrets: desktopSecrets, flow, startValues, secretNames, secretDefaults } = walkUiPath(data, opts, report);
+  /** Every value the import removed as a secret (typed into a password field, or a secret's default), whatever its length. */
+  const removed = new Set<string>([...desktopSecrets, ...(secretDefaults ?? [])].flatMap((v) => [v, v.trim()]));
   const drafts: Draft[] = [];
   const typedSecrets: string[] = desktopSecrets.filter((v) => v.trim().length >= MIN_SECRET_LENGTH);
   const missing = new Set<number>();
@@ -311,7 +322,13 @@ export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOpt
     const before = report.items.length;
     const stripped = stripSecrets(all, opts, report);
     const secretAt = new Set(report.items.slice(before).filter((i) => i.kind === 'secret').map((i) => i.at));
-    for (const e of all) if ((e.kind === 'fill' || e.kind === 'select') && secretAt.has(e.at) && e.value.trim().length >= MIN_SECRET_LENGTH) typedSecrets.push(e.value);
+    for (const e of all) {
+      if ((e.kind !== 'fill' && e.kind !== 'select') || !secretAt.has(e.at)) continue;
+      for (const v of [e.value].flat()) {
+        if (v.trim()) { removed.add(v); removed.add(v.trim()); }
+        if (v.trim().length >= MIN_SECRET_LENGTH) typedSecrets.push(v);
+      }
+    }
     const parts: ImportEvent[][] = [[]];
     for (const e of stripped) {
       if (e.kind === 'goto' && e.url === BOUNDARY) parts.push([]);
@@ -355,16 +372,13 @@ export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOpt
   }
 
   // Defence in depth for the desktop drafts: none names a Site Login secret or a value typed into a credential field.
-  const slAll = opts.hasSiteLogin ? [opts.secrets?.username, opts.secrets?.password, opts.secrets?.totpSecret] : [];
-  const draftMasker = createMasker([...slAll.filter((s): s is string => typeof s === 'string' && s.length >= MIN_SECRET_LENGTH), ...typedSecrets]);
-  const shortSecrets = slAll.filter((s): s is string => typeof s === 'string' && s.length > 0 && s.length < MIN_SECRET_LENGTH).map((s) => s.trim().toLowerCase());
+  const namesSignInValue = signInValueCheck(opts, typedSecrets);
   const desktopDrafts: DesktopDraft[] = [];
   for (const seq of desktop) {
     const draft = buildDesktopDraft(seq, report);
-    const typed = draft ? draft.script.steps.flatMap((s) => ('fill' in s ? [s.fill.value] : 'select' in s ? [s.select.option] : [])) : [];
-    if (draft && (draftMasker.containsSecret(JSON.stringify(draft.script)) || typed.some((v) => shortSecrets.includes(v.trim().toLowerCase())))) {
+    if (draft && namesSignInValue(draft)) {
       report.steps -= draft.script.steps.length;
-      report.items.push({ at: '', kind: 'error', what: seq.name, reason: 'the desktop draft still named a sign-in value, so it was not returned' });
+      report.items.push({ at: '', kind: 'error', what: seq.name, reason: DRAFT_NAMES_SIGN_IN_VALUE });
       missing.add(seq.number);
       continue;
     }
@@ -384,9 +398,30 @@ export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOpt
   // Defence in depth: nothing the flow or the report carries names a Site Login secret or a value typed into a credential field.
   const sl = opts.hasSiteLogin ? opts.secrets : undefined;
   const slValues = [sl?.username, sl?.password, sl?.totpSecret].filter((s): s is string => typeof s === 'string' && s.length > 0);
-  const masker = createMasker([...slValues.filter((s) => s.length >= MIN_SECRET_LENGTH), ...typedSecrets]);
+  // A secret's default is masked too: it never reaches the flow or the report.
+  const masker = createMasker([...slValues.filter((s) => s.length >= MIN_SECRET_LENGTH), ...typedSecrets, ...(secretDefaults ?? []).filter((v) => v.trim().length >= MIN_SECRET_LENGTH)]);
   const short = slValues.filter((s) => s.length < MIN_SECRET_LENGTH).map((s) => s.trim().toLowerCase());
   const secretMask = (t: string) => (short.includes(t.trim().toLowerCase()) ? '[secret]' : masker.mask(t));
+  // The project's argument and variable defaults become the desktop drafts' start values, under a recording's rules: never
+  // for a secret variable, a name that reads like a secret, or a value of the Site Login or of a password field.
+  // Names are compared without regard to case (UiPath's VB names do not depend on it), and secrets are those known when
+  // the walk ended.
+  const secretLower = new Set(secretNames ?? []);
+  for (const d of desktopDrafts) {
+    const start: Record<string, string> = {};
+    const secret = new Set([...secretLower, ...d.secretVariables.map((v) => v.toLowerCase())]);
+    for (const v of d.variables) {
+      const value = startValues?.get(v);
+      // A value longer than a form field would hold is no start value: the person fills it in.
+      if (typeof value !== 'string' || value.length > MAX_START_VALUE || secret.has(v.toLowerCase())) continue;
+      if (SECRET_LIKE_NAME.test(v)) {
+        report.items.push({ at: '', kind: 'secret', what: v, reason: `${v} reads like a secret, so its value in the project is not a start value: supply it in Run steps from a secret source` });
+      } else if (removed.has(value) || removed.has(value.trim()) || short.includes(value.trim().toLowerCase()) || masker.containsSecret(value)) {
+        report.items.push({ at: '', kind: 'secret', what: v, reason: `${v}'s value in the project is a value of the RPA Site Login or one the import removed as a secret, so it is not a start value: supply it in Run steps from a secret source` });
+      } else start[v] = value;
+    }
+    if (Object.keys(start).length) d.startValues = start;
+  }
   // A credential asset's name appears only as its slot (the credential node's `asset`), never in a name or the report.
   const assets = new Set<string>();
   const collect = (nodes: FlowNode[]) => nodes.forEach((n) => {
@@ -583,10 +618,83 @@ const DROPPED: Record<string, string> = {
   Assign: 'an assignment computes a value inside the bot: n8n expressions do that',
   MultipleAssign: 'an assignment computes a value inside the bot: n8n expressions do that',
 };
+/** DROPPED activities that are housekeeping (logging, comments): the bot does nothing on the site without them. An assignment may feed a later step, so it is not one. */
+const HOUSEKEEPING = new Set(['LogMessage', 'WriteLine', 'Comment', 'CommentOut']);
 const TAG_OF_TYPE: Record<string, string> = { button: 'BUTTON', inputbox: 'INPUT', input: 'INPUT', text: '', dropdown: 'SELECT', combobox: 'SELECT', listbox: 'SELECT', checkbox: 'INPUT', radiobutton: 'INPUT', link: 'A', hyperlink: 'A' };
+/** Properties that hold activities a block runs, for countIn. */
+const NESTED_PROPS = new Set([...BODY_PROPS, 'Then', 'Else', 'Try', 'Finally', 'Catches', 'Default', 'IfExists', 'IfNotExists', 'Entry', 'Exit', 'Transitions', 'Trigger', 'To', 'StartNode', 'Next', 'True', 'False', 'InitialState', 'Condition']);
+/** Elements that only hold activities: countIn counts what is inside them, not them. */
+const STRUCTURE = new Set(['Sequence', 'ActivityAction', 'ActivityFunc', 'Catch', 'FlowStep', 'Transition']);
+/** Browser events a condition may gate (an Enter is a sign-in's submit or no step at all). */
+const GATED_EVENTS: ReadonlySet<ImportEvent['kind']> = new Set(['goto', 'click', 'hover', 'fill', 'select', 'check', 'waitFor', 'press']);
+/** Send Hotkey and Keyboard Shortcuts, classic and modern: key chords. */
+const HOTKEYS = new Set(['SendHotkey', 'NSendHotkey', 'KeyboardShortcuts', 'NKeyboardShortcuts']);
+/** A Keyboard Shortcuts value presses at most this many chords. */
+const MAX_SHORTCUT_CHORDS = 20;
+/** Check App State attributes that may say it waits for something else than its element to appear (names unverified). */
+const CHECK_MODES = ['Mode', 'CheckType', 'WaitFor'];
+const EACH_STEP_CHECKS = 'Each step checks again just before it runs, so a step that makes the element show or go away changes which of the later steps run';
+const CHECK_THE_ORDER = 'Check the order, and remove the steps the run should not do or make the choice in n8n';
 const READ_RANGE = new Set(['ReadRange', 'ExcelReadRange', 'ReadRangeX']);
 const WRITE_RANGE = new Set(['WriteRange', 'ExcelWriteRange', 'WriteRangeX']);
 const EXCEL_SCOPE = new Set(['ExcelApplicationScope', 'ExcelProcessScopeX', 'ExcelApplicationCard']);
+
+/** The element a block's condition looks at, as the steps' `when` can name it; `name` is what it shows as, for the report. */
+type ElementCond = { surface: 'browser'; candidates: Candidate[]; name: string } | { surface: 'desktop'; target: UiaTarget; name: string };
+
+const activities = (n: number): string => (n === 1 ? '1 activity' : `${n} activities`);
+const were = (n: number): string => (n === 1 ? 'was' : 'were');
+
+/** The element an Element Exists or Check App State display name names (`Check App State 'Popup'` → `Popup`). */
+function elementLabel(displayName: string): string {
+  let s = displayName.slice(0, 400).trim().replace(/^(element exists|check app state)\s*/i, '');
+  const close = QUOTES[s[0] ?? ''];
+  if (close && s.length >= 2 && s.endsWith(close)) s = s.slice(1, -1);
+  return cleanLabel(s);
+}
+
+/** What a desktop target shows as: its last condition's name, else its automation id. */
+const targetName = (t: UiaTarget): string => cleanLabel(t.path[t.path.length - 1]?.name ?? t.path[t.path.length - 1]?.automationId ?? '');
+
+/**
+ * Which steps run when, in words: `the steps from its 1 activity under Then run only when X shows, and those from its 2
+ * activities under Else only when it does not`. Branches without activities are left out.
+ */
+function conditionText(label: string, branches: { name: string; n: number; shows: boolean }[]): string {
+  const said = branches.filter((b) => b.n > 0).map((b, i) => (i === 0
+    ? `the steps from its ${activities(b.n)} under ${b.name} run only when ${label} ${b.shows ? 'shows' : 'does not show'}`
+    : `those from its ${activities(b.n)} under ${b.name} only when it ${b.shows ? 'does' : 'does not'}`));
+  return said.length ? said.join(', and ') : 'it holds no activities';
+}
+
+/**
+ * A sentence for a block whose browser activities type a password: the import makes them one sign-in step, which has no
+ * condition. '' otherwise.
+ */
+function signsIn(items: Item[]): string {
+  const typed = items.some((i) => i.t === 'event' && i.event.kind === 'fill' && (i.event.secure || CREDENTIAL_FIELD.test(i.event.hints.join(' '))));
+  return typed ? '. A sign-in among them becomes the sign-in step, which runs every time: every run starts in a new browser, signed out' : '';
+}
+
+/** The UI steps walked items give, in words (no typed value), for a state's report item. */
+function uiNames(items: Item[]): string[] {
+  const out: string[] = [];
+  for (const i of items) {
+    if (i.t === 'event') out.push(describeEvent(i.event.kind === 'select' ? { ...i.event, value: '' } : i.event));
+    else if (i.t === 'desktop') {
+      const e = i.event;
+      const name = cleanLabel(e.label) || ('target' in e && e.target ? targetName(e.target) : '') || 'the element';
+      if (e.kind === 'click') out.push(`${e.double ? 'Double-click' : 'Click'} ${name}`);
+      else if (e.kind === 'fill') out.push(`Type into ${name}`);
+      else if (e.kind === 'select') out.push(`Choose an option in ${name}`);
+      else if (e.kind === 'check') out.push(`${e.checked ? 'Check' : 'Uncheck'} ${name}`);
+      else if (e.kind === 'key') out.push(`Press ${e.chord}`);
+      else if (e.kind === 'read') out.push(`Read ${name}`);
+    } else if (i.t === 'if') append(out, [...uiNames(i.then), ...uiNames(i.else)]);
+    else if (i.t === 'forEach') append(out, uiNames(i.body));
+  }
+  return out;
+}
 
 /**
  * A browser sequence: its events, and the card it belongs to; `continued` when an earlier sequence used the same card.
@@ -594,7 +702,70 @@ const EXCEL_SCOPE = new Set(['ExcelApplicationScope', 'ExcelProcessScopeX', 'Exc
  */
 export interface UiPathSequence { name: string; number: number; events: ImportEvent[]; card?: number; continued?: boolean }
 /** What the walk returns: browser sequences, desktop sequences, literal secrets typed in desktop steps (never imported), and the flow. */
-export interface WalkResult { sequences: UiPathSequence[]; desktop: DesktopSequence[]; typedSecrets: string[]; flow: UiPathFlow }
+export interface WalkResult {
+  sequences: UiPathSequence[]; desktop: DesktopSequence[]; typedSecrets: string[]; flow: UiPathFlow;
+  /** Desktop run variables and the literal value the project starts them with (null: not one literal). */
+  startValues?: Map<string, string | null>;
+  /** Every name found secret by the end of the walk, lower case (VB names do not depend on case). */
+  secretNames?: string[];
+  /** The literal defaults of those secret names, in any file: values the import treats as removed secrets. */
+  secretDefaults?: string[];
+}
+
+/**
+ * A run variable whose name reads like a secret never gets a start value: it stays for the person to supply, from a
+ * secret source for a secret.
+ */
+/** The longest project value that becomes a start value. */
+const MAX_START_VALUE = 1000;
+export const SECRET_LIKE_NAME = /pass|pwd|secret|token|(^|_)(pin|otp|totp)/i;
+
+/**
+ * The literal values a workflow file starts its arguments and variables with, by lower-case name (null: not one literal):
+ * each `x:Members` In or InOut argument's default (the root's `<prefix>:<Class>.<name>` attribute or property element),
+ * unless `bound` (what an invoke passes) has the name, and each `<Variable Default="…">` that is not a SecureString.
+ */
+function fileValues(root: XmlNode, csharp: boolean, bound?: Map<string, string | null>): Map<string, string | null> {
+  const values = new Map<string, string | null>();
+  const set = (name: string, v: string | null) => {
+    const key = name.toLowerCase();
+    if (values.has(key) && values.get(key) !== v) values.set(key, null);
+    else values.set(key, v);
+  };
+  const cls = (root.attrs['x:Class'] ?? '').split('.').pop() ?? '';
+  const members = root.children.find((c) => c.name === 'x:Members');
+  for (const prop of members?.children ?? []) {
+    const name = prop.attrs.Name;
+    if (prop.name !== 'x:Property' || !name || !IDENT.test(name) || !/^(In|InOut)Argument\(/.test(prop.attrs.Type ?? '')) continue;
+    if (bound?.has(name.toLowerCase())) {
+      set(name, bound.get(name.toLowerCase()) ?? null);
+      continue;
+    }
+    let v: Val;
+    if (cls) {
+      const key = Object.keys(root.attrs).find((k) => prefixOf(k) !== '' && local(k) === `${cls}.${name}`);
+      if (key !== undefined) v = attrValue(root.attrs[key], csharp);
+      else {
+        const el = root.children.find((c) => prefixOf(c.name) !== '' && local(c.name) === `${cls}.${name}`);
+        if (el) v = elementValue(el, csharp);
+      }
+    }
+    if (v && 'literal' in v) set(name, v.literal);
+    else if (v) set(name, null);
+  }
+  // Variables anywhere in the file (scopes are not told apart: a name declared twice with different defaults has none).
+  const stack = [...root.children];
+  while (stack.length) {
+    const el = stack.pop()!;
+    if (local(el.name) === 'Variable' && el.attrs.Name && IDENT.test(el.attrs.Name) && !/SecureString/i.test(el.attrs['x:TypeArguments'] ?? '')) {
+      const v = attrValue(el.attrs.Default, csharp);
+      if (v && 'literal' in v) set(el.attrs.Name, v.literal);
+      else if (v) set(el.attrs.Name, null);
+    }
+    append(stack, el.children);
+  }
+  return values;
+}
 
 class Walker {
   private visited = 0;
@@ -616,9 +787,17 @@ class Walker {
   private readonly desktopTypedSecrets: string[] = [];
   /** Each credential lookup's report item and its outputs (lower case), reworded at the end when desktop steps type them. */
   private readonly credentialItems: { item: ImportItem; outputs: string[] }[] = [];
+  /** The desktop run variables steps type or choose, and their literal start values (null: none that is one literal). */
+  private readonly startValues = new Map<string, string | null>();
+  /** Every literal argument or variable default seen, by lower-case name: those of secret names are secrets too. */
+  private readonly seenValues: [string, string][] = [];
   private readonly xmlns: Map<string, string>[] = [];
   /** The variables TOTP activities write their code to, lower case. */
   private readonly totpOutputs = new Set<string>();
+  /** Activities walked so far in each workflow file (Sequences aside), for the counts a block's report item gives. */
+  private readonly walkedIn = new Map<string, number>();
+  /** Each Element Exists the walk could read, by `<file>\0<its output variable, lower case>`, for an If that tests it. */
+  private readonly exists = new Map<string, { cond: ElementCond; item: ImportItem; displayName: string; label: string }>();
 
   constructor(private readonly project: Project, private readonly opts: ImportOptions, private readonly report: ImportReport) {}
 
@@ -643,7 +822,13 @@ class Walker {
         item.reason = 'a UiPath credential is never imported: desktop steps type its user name and password from run variables (see the secret items); browser steps use an RPA Site Login on the Run steps node';
       }
     }
-    return { sequences: this.sequences, desktop: this.desktopSequences, typedSecrets: this.desktopTypedSecrets, flow: { name, nodes } };
+    // Secrets are decided here, at the end of the walk: a name may turn secret after its default was first noted.
+    const secretNames = new Set([...this.secretVars, ...this.totpOutputs, ...this.secretVarNames].map((n) => n.toLowerCase()));
+    const secretDefaults = this.seenValues.filter(([n]) => secretNames.has(n)).map(([, v]) => v);
+    return {
+      sequences: this.sequences, desktop: this.desktopSequences, typedSecrets: this.desktopTypedSecrets, flow: { name, nodes },
+      startValues: this.startValues, secretNames: [...secretNames], secretDefaults,
+    };
   }
 
   /** A workflow file, parsed once within the project's element budget; null (and an error item) when it cannot be read. */
@@ -663,7 +848,12 @@ class Walker {
 
   /** Charges one walk of a workflow file (its elements, and its text in 32-byte units) against MAX_WALK. */
   private charge(key: string, parsed: Parsed): void {
-    this.work += parsed.elements + Math.ceil(this.project.files.get(key)!.text.length / 32);
+    this.spend(parsed.elements + Math.ceil(this.project.files.get(key)!.text.length / 32));
+  }
+
+  /** Charges `units` element visits against MAX_WALK. */
+  private spend(units: number): void {
+    this.work += units;
     if (this.work > MAX_WALK) {
       this.add('', 'error', WHAT, `the project needs more work than an import does (over ${MAX_WALK.toLocaleString('en-US')} element visits once invoked workflows are followed), so it was not imported`);
       throw new Aborted();
@@ -683,8 +873,8 @@ class Walker {
   private arg(el: XmlNode, key: string, ctx: Ctx): Val { return argOf(el, key, ctx.csharp); }
   private lit(el: XmlNode, key: string, ctx: Ctx): string | undefined { return literalOf(el, key, ctx.csharp); }
 
-  private add(at: string, kind: ImportItem['kind'], what: string, reason: string): void {
-    this.report.items.push({ at, kind, what, reason });
+  private add(at: string, kind: ImportItem['kind'], what: string, reason: string, notNeeded = false): void {
+    this.report.items.push({ at, kind, what, reason, ...(notNeeded ? { notNeeded: true as const } : {}) });
   }
 
   private count(): void {
@@ -695,11 +885,14 @@ class Walker {
   }
 
   /** The root Activity's activities (members, settings and namespaces are not activities). */
-  private workflow(key: string, parsed: Parsed, ctx0: Ctx): Item[] {
+  private workflow(key: string, parsed: Parsed, ctx0: Ctx, bound?: Map<string, string | null>): Item[] {
     this.charge(key, parsed);
     const root = parsed.root;
     const editor = root.attrs['sap2010:ExpressionActivityEditor.ExpressionActivityEditor'];
-    const ctx: Ctx = { ...ctx0, names: parsed.names, csharp: editor === 'C#' ? true : editor === 'VB' ? false : ctx0.csharp };
+    const csharp = editor === 'C#' ? true : editor === 'VB' ? false : ctx0.csharp;
+    const values = fileValues(root, csharp, bound);
+    for (const [n, v] of values) if (typeof v === 'string') this.seenValues.push([n, v]);
+    const ctx: Ctx = { ...ctx0, names: parsed.names, csharp, values };
     const kids = content(root).filter((c) => prefixOf(c.name) !== 'x' && prefixOf(c.name) !== 'mc');
     const ns = new Map<string, string>();
     for (const [k, v] of Object.entries(root.attrs)) if (k === 'xmlns' || k.startsWith('xmlns:')) ns.set(k === 'xmlns' ? '' : k.slice(6), v);
@@ -762,34 +955,55 @@ class Walker {
     const name = local(el.name);
     const displayName = displayOf(el);
     const at = this.at(el, ctx);
+    if (name !== 'Sequence') this.walkedIn.set(ctx.file, (this.walkedIn.get(ctx.file) ?? 0) + 1);
 
     if (name in DROPPED) {
-      this.add(at, 'dropped', displayName, DROPPED[name]);
+      this.add(at, 'dropped', displayName, DROPPED[name], HOUSEKEEPING.has(name));
       return [];
     }
     if (TOTP_ACTIVITY.test(name)) return this.totpActivity(el, ctx);
     switch (name) {
       case 'Sequence':
         return this.list(content(el), ctx);
-      case 'If': {
-        const cond = this.arg(el, 'Condition', ctx);
-        const branch = (prop: string) => this.list(this.body(el, new Set([prop])), ctx);
-        return [{ t: 'if', expression: textOf(cond), displayName, then: branch('Then'), else: branch('Else') }];
-      }
+      case 'If':
+        return this.ifActivity(el, ctx);
       case 'ForEach':
-      case 'ForEachRow': {
-        const values = this.arg(el, name === 'ForEach' ? 'Values' : 'DataTable', ctx);
-        return [{ t: 'forEach', expression: textOf(values), displayName, body: this.list(this.body(el), ctx) }];
+      case 'ForEachRow':
+      case 'ParallelForEach': {
+        const values = this.arg(el, name === 'ForEachRow' ? 'DataTable' : 'Values', ctx);
+        const mark = this.report.items.length;
+        const body = this.list(this.body(el), ctx);
+        if (name === 'ParallelForEach') this.insert(mark, at, 'converted', displayName, `${name}: it became an n8n loop over ${textOf(values).slice(0, 200)}: n8n runs the items one after another, not at the same time`);
+        return [{ t: 'forEach', expression: textOf(values), displayName, body }];
       }
-      case 'TryCatch': {
-        const out = this.list(this.body(el, new Set(['Try'])), ctx);
-        const catches = el.children.find((c) => isProperty(c) && propertyName(c) === 'Catches');
-        for (const c of catches ? content(catches) : []) {
-          const type = c.attrs['x:TypeArguments'] ?? 'Exception';
-          this.add(at, 'untranslated', `Catch ${local(type)}`, 'the catch branch was not imported: give the n8n node an error output or the workflow an error workflow');
-        }
-        append(out, this.list(this.body(el, new Set(['Finally'])), ctx));
-        return out;
+      case 'TryCatch':
+        return this.tryCatch(el, ctx);
+      case 'RetryScope': {
+        const mark = this.report.items.length;
+        const { items, n } = this.walkCount(this.body(el), ctx);
+        const check = this.countIn(this.body(el, new Set(['Condition']))).n;
+        this.insert(mark, at, 'converted', displayName, `${name}: its ${activities(n)} ${were(n)} imported once, in order. The steps do not retry them: a step that fails ends the run, and n8n's Retry On Fail setting on the Run steps node runs all the steps again${check ? `. Its check that they worked (${activities(check)}) was not imported` : ''}`);
+        return items;
+      }
+      case 'While':
+      case 'DoWhile':
+      case 'InterruptibleWhile':
+      case 'InterruptibleDoWhile': {
+        const mark = this.report.items.length;
+        const { items, n } = this.walkCount([...this.body(el), ...content(el).filter((c) => local(c.name) !== 'ActivityAction')], ctx);
+        this.insert(mark, at, 'untranslated', displayName, `${name}: the loop was not imported: its ${activities(n)} ${were(n)} imported to run once, in order. To repeat the steps, give the Run steps node one item per repetition: n8n runs the steps once for each item`);
+        return items;
+      }
+      case 'Switch':
+        return this.switchCases(el, ctx);
+      case 'NCheckState':
+        return this.checkState(el, ctx);
+      case 'StateMachine':
+        return this.stateMachine(el, ctx);
+      case 'ElementExists': {
+        const read = this.elementExists(el, ctx);
+        if (read) return read;
+        break;
       }
       case 'Flowchart':
         return this.flowchart(el, ctx);
@@ -962,33 +1176,32 @@ class Walker {
     const isType = name === 'NTypeInto' || name === 'TypeInto' || name === 'TypeSecureText';
     const isSelect = name === 'NSelectItem' || name === 'SelectItem';
     const isCheck = name === 'NCheck' || name === 'Check';
-    const isHotkey = name === 'SendHotkey';
-    if (!isClick && !isType && !isSelect && !isCheck && !isHotkey) {
+    const isHover = name === 'NHover' || name === 'Hover';
+    if (HOTKEYS.has(name)) return this.browserKeys(el, ctx);
+    if (!isClick && !isType && !isSelect && !isCheck && !isHover) {
       const inner = this.body(el).length;
       return this.untranslated(el, ctx, `this activity has no step equivalent in this release${inner ? `: the ${inner === 1 ? '1 activity' : `${inner} activities`} inside ${inner === 1 ? 'was' : 'were'} not imported` : ''}`);
-    }
-    if (isHotkey) {
-      const key = (this.lit(el, 'Key', ctx) ?? '').toLowerCase();
-      if (key === 'enter' || key === 'return') return [this.event({ at, kind: 'enter', label }, ctx)];
-      return this.untranslated(el, ctx, 'a keyboard shortcut is not a step: add a click on what it does');
     }
 
     const target = this.target(el, ctx);
     if (target.desktop) return this.desktopActivity(el, ctx);
+    const held = isClick ? clickModifiers(this.lit(el, 'MouseButton', ctx) ?? '', (this.lit(el, 'KeyModifiers', ctx) ?? '').split(/[\s,+|]+/)) : {};
+    if ('error' in held) return this.untranslated(el, ctx, held.error);
     const what = (e: ImportEvent) => describeEvent(e);
     for (const issue of target.issues) if (target.candidates.length) this.add(at, 'converted', label || displayName, issue);
     const secure = isType && (name === 'TypeSecureText' || el.attrs.SecureText !== undefined || el.children.some((c) => isProperty(c) && propertyName(c) === 'SecureText'));
-    const shape = isClick ? ({ kind: 'click' } as const) : isCheck ? ({ kind: 'check' } as const) : ({ kind: isSelect ? 'select' : 'fill' } as const);
+    const shape = isClick ? ({ kind: 'click' } as const) : isHover ? ({ kind: 'hover' } as const) : isCheck ? ({ kind: 'check' } as const) : ({ kind: isSelect ? 'select' : 'fill' } as const);
     if (!target.candidates.length) {
       // The value is never read for the report: only the step's kind and label.
-      const e = shape.kind === 'click' ? { at, kind: 'click' as const, target: [], label }
+      const e = shape.kind === 'click' || shape.kind === 'hover' ? { at, kind: shape.kind, target: [], label }
         : shape.kind === 'check' ? { at, kind: 'check' as const, target: [], label, checked: true }
           : { at, kind: shape.kind, target: [], label, value: '', hints: [] };
       this.add(at, 'dropped', what(e), `${name}: ${target.problem ?? 'no usable target'}`);
       return [];
     }
 
-    if (isClick) return [this.event({ at, kind: 'click', target: target.candidates, label }, ctx)];
+    if (isClick) return [this.event({ at, kind: 'click', target: target.candidates, label, ...held }, ctx)];
+    if (isHover) return [this.event({ at, kind: 'hover', target: target.candidates, label }, ctx)];
     if (isCheck) {
       const action = (this.lit(el, 'Action', ctx) ?? 'Check').toLowerCase();
       if (action === 'toggle') this.add(at, 'converted', label || displayName, 'Toggle became Check: change the step to unchecked if the box should be cleared');
@@ -1026,6 +1239,43 @@ class Walker {
     }
     hints.push(`${UNRESOLVED}the activity types no text`);
     return [this.event(e, ctx)];
+  }
+
+  /** The chords a Send Hotkey (Key, KeyModifiers) or Keyboard Shortcuts (Shortcuts) presses, canonical; or why not. */
+  private chords(el: XmlNode, ctx: Ctx): { chords: string[] } | { error: string } {
+    if (local(el.name).includes('KeyboardShortcuts')) {
+      // Studio writes the value as a string literal (`["[d(hk)]…"]`); a bare `[d(hk)]…` reads like an expression but is the value itself.
+      const raw = el.attrs.Shortcuts ?? '';
+      return shortcutChords(this.lit(el, 'Shortcuts', ctx) ?? (/^\[[dku]\(/.test(raw) ? raw : ''));
+    }
+    const c = canonicalChord(this.lit(el, 'Key', ctx) ?? '', this.lit(el, 'KeyModifiers', ctx) ?? '');
+    return 'error' in c ? c : { chords: [c.chord] };
+  }
+
+  /**
+   * A Send Hotkey or Keyboard Shortcuts in a browser: a press step per chord, on the activity's target or, without a
+   * selector, the element that has the focus. Enter alone stays the `enter` event (a sign-in's submit). A chord the
+   * press step refuses makes the whole activity not translated, with the step's own reason.
+   */
+  private browserKeys(el: XmlNode, ctx: Ctx): Item[] {
+    const name = local(el.name);
+    const at = this.at(el, ctx);
+    const read = this.chords(el, ctx);
+    if ('error' in read) return this.untranslated(el, ctx, read.error);
+    const problem = read.chords.map((c) => (c === 'Enter' ? null : browserKeyProblem(c))).find((p) => p !== null);
+    if (problem) return this.untranslated(el, ctx, `a press step's key ${problem}`);
+    let target: Candidate[] = [];
+    if (hasSelector(el)) {
+      const t = this.target(el, ctx);
+      if (t.desktop) return this.desktopActivity(el, ctx);
+      if (!t.candidates.length) {
+        this.add(at, 'dropped', displayOf(el), `${name}: ${t.problem ?? 'no usable target'}`);
+        return [];
+      }
+      for (const issue of t.issues) this.add(at, 'converted', displayOf(el), issue);
+      target = t.candidates;
+    }
+    return read.chords.map((key) => this.event(key === 'Enter' ? { at, kind: 'enter', label: intentLabel(el.attrs.DisplayName ?? '') } : { at, kind: 'press', key, target, label: '' }, ctx));
   }
 
   // -------------------------------------------------------------------------------------------------------------------
@@ -1126,7 +1376,7 @@ class Walker {
     const scopeName = displayName;
     if (launch && exe) {
       let args = argsVal && 'literal' in argsVal && argsVal.literal.trim() ? [argsVal.literal.trim()] : undefined;
-      if (args && PASSWORD_FIELD.test(args[0])) {
+      if (args && CREDENTIAL_FIELD.test(args[0])) {
         // A command line that passes a password is never imported.
         if (args[0].trim().length >= 4) this.desktopTypedSecrets.push(args[0]);
         this.add(at, 'secret', displayName, 'the app\'s arguments look like they carry a password or a secret, so they were not imported: pass the sign-in through steps that type run variables instead');
@@ -1173,7 +1423,7 @@ class Walker {
     const label = intentLabel(el.attrs.DisplayName ?? '');
     const scope = ctx.app?.name ?? displayName;
     const item = (event: DesktopEvent): Item => ({ t: 'desktop', event, scope });
-    const skip = (kind: ImportItem['kind'], reason: string): Item[] => { this.add(at, kind, displayName, `${name}: ${reason}`); return []; };
+    const skip = (kind: ImportItem['kind'], reason: string, notNeeded = false): Item[] => { this.add(at, kind, displayName, `${name}: ${reason}`, notNeeded); return []; };
 
     if (/^(CV|N?Image|Ocr|N?FindImage|ClickImage|ClickText|ClickOCRText|HoverImage)/.test(name) || /Image$|OCR/.test(name)) {
       return skip('untranslated', 'the target is found by image, OCR or computer vision, which UI Automation cannot read: rebuild this step on the app\'s elements');
@@ -1182,7 +1432,7 @@ class Walker {
     const isType = name === 'NTypeInto' || name === 'TypeInto' || name === 'TypeSecureText' || name === 'SetText' || name === 'NSetText';
     const isSelect = name === 'NSelectItem' || name === 'SelectItem';
     const isCheck = name === 'NCheck' || name === 'Check';
-    const isHotkey = name === 'SendHotkey';
+    const isHotkey = HOTKEYS.has(name);
     const isRead = name === 'NGetText' || name === 'GetText' || name === 'GetValue' || name === 'GetFullText' || name === 'GetVisibleText';
     if (!isClick && !isType && !isSelect && !isCheck && !isHotkey && !isRead) {
       const inner = this.body(el).length;
@@ -1196,9 +1446,9 @@ class Walker {
     const target = 'target' in t ? t.target : undefined;
 
     if (isHotkey) {
-      const chord = canonicalChord(this.lit(el, 'Key', ctx) ?? '', this.lit(el, 'KeyModifiers', ctx) ?? '');
-      if ('error' in chord) return skip('untranslated', chord.error);
-      return [item({ at, kind: 'key', ...(target ? { target } : {}), label: '', chord: chord.chord })];
+      const read = this.chords(el, ctx);
+      if ('error' in read) return skip('untranslated', read.error);
+      return read.chords.map((chord) => item({ at, kind: 'key', ...(target ? { target } : {}), label: '', chord }));
     }
     if (!target) return skip('dropped', 'the activity has no target the import can read');
     if (isClick) {
@@ -1206,8 +1456,8 @@ class Walker {
       const modifiers = (this.lit(el, 'KeyModifiers', ctx) ?? '').toLowerCase();
       if (button && !/left/.test(button)) return skip('untranslated', `a ${button.replace(/^btn_/, '')}-button click is not a desktop step (desktop steps click with the left button): rebuild this step by hand`);
       if (modifiers && modifiers !== 'none') return skip('untranslated', `a click with ${modifiers} held down is not a desktop step: rebuild this step by hand`);
-      if (name === 'DoubleClick' || (this.lit(el, 'ClickType', ctx) ?? '').toLowerCase().includes('double')) this.add(at, 'converted', label || displayName, 'a double click became a click: desktop steps click once');
-      return [item({ at, kind: 'click', target, label })];
+      const double = name === 'DoubleClick' || (this.lit(el, 'ClickType', ctx) ?? '').toLowerCase().includes('double');
+      return [item({ at, kind: 'click', target, label, ...(double ? { double: true as const } : {}) })];
     }
     if (isCheck) {
       const action = (this.lit(el, 'Action', ctx) ?? 'Check').toLowerCase();
@@ -1224,6 +1474,7 @@ class Walker {
       if (v && 'literal' in v && v.literal !== '') return [item({ at, kind: 'select', target, label, option: v.literal })];
       const varName = v && 'expr' in v ? this.desktopVar(v.expr) : undefined;
       if (varName) {
+        this.noteStart(varName, (v as { expr: string }).expr, ctx);
         this.add(at, 'converted', label || displayName, `the item is the UiPath variable ${varName}: the step chooses {{var.${varName}}}; set ${varName} in Run steps → Variables`);
         return [item({ at, kind: 'select', target, label, option: `{{var.${varName}}}` })];
       }
@@ -1232,7 +1483,7 @@ class Walker {
 
     // Typing. A secure value, a credential's password or a password-like field never carries a value: a run variable.
     const fieldHints = [...t.hints, displayName].join(' ');
-    const passwordField = PASSWORD_FIELD.test(fieldHints);
+    const passwordField = CREDENTIAL_FIELD.test(fieldHints);
     const secureProp = name === 'TypeSecureText' || el.attrs.SecureText !== undefined || el.children.some((c) => isProperty(c) && propertyName(c) === 'SecureText');
     const secret = (varName: string, source: string): Item[] => {
       this.secretVars.add(varName.toLowerCase());
@@ -1276,6 +1527,7 @@ class Walker {
       const varName = this.desktopVar(val.expr);
       if (varName && (this.secretVars.has(val.expr.toLowerCase()) || passwordField || PASSWORD_NAME.test(varName))) return secret(varName, `the password (${val.expr.slice(0, 80)})`);
       if (varName) {
+        this.noteStart(varName, val.expr, ctx);
         this.add(at, 'converted', label || displayName, `the typed text is the UiPath variable ${varName}: the step types {{var.${varName}}}; set ${varName} in Run steps → Variables`);
         return [item({ at, kind: 'fill', target, label, value: `{{var.${varName}}}` })];
       }
@@ -1283,7 +1535,7 @@ class Walker {
       if (passwordField) return skip('untranslated', 'the text typed into this password field is an expression, which is not evaluated and never imported: type a run variable here by hand');
       return skip('untranslated', `the typed text is the expression ${val.expr.slice(0, 200)}, which is not evaluated: map it to a variable in the step by hand`);
     }
-    return skip('dropped', 'the activity types no text');
+    return skip('dropped', 'the activity types no text', true);
   }
 
   /**
@@ -1297,7 +1549,7 @@ class Walker {
       const v = this.arg(el, key, ctx);
       if (v && 'expr' in v && IDENT.test(v.expr)) this.totpOutputs.add(v.expr.toLowerCase());
     }
-    this.add(this.at(el, ctx), 'converted', displayOf(el), `${local(el.name)}: a one-time code is never imported: the sign-in types a fresh code from the RPA Site Login's authenticator secret (TOTP)`);
+    this.add(this.at(el, ctx), 'converted', displayOf(el), `${local(el.name)}: a one-time code is never imported: the sign-in types a fresh code from the RPA Site Login's authenticator secret (TOTP), or from the One-Time Code Workflow when one is set`);
     return [];
   }
 
@@ -1322,36 +1574,367 @@ class Walker {
     }
     const parsed = this.parse(key);
     if (!parsed) return this.untranslated(el, ctx, `${target.path} cannot be read: see the report`);
-    return this.workflow(key, parsed, { ...ctx, file: target.path, stack: [...ctx.stack, key], chain: [...ctx.chain, target.path] });
+    return this.workflow(key, parsed, { ...ctx, file: target.path, stack: [...ctx.stack, key], chain: [...ctx.chain, target.path] }, this.bindings(el, ctx));
   }
 
-  /** A Flowchart, followed from its start node while it is linear; a decision or switch ends it with a report. */
+  /**
+   * What an invoke passes to the invoked workflow's In and InOut arguments, by lower-case name: a literal, the start value
+   * of a variable or argument of the invoking file it names, or null (an expression, which is not evaluated).
+   */
+  private bindings(el: XmlNode, ctx: Ctx): Map<string, string | null> {
+    const out = new Map<string, string | null>();
+    const prop = el.children.find((c) => isProperty(c) && propertyName(c) === 'Arguments');
+    for (const arg of prop?.children ?? []) {
+      const name = arg.attrs['x:Key'];
+      if (!name || !/^(In|InOut)Argument$/.test(local(arg.name))) continue;
+      const v = elementValue(arg, ctx.csharp);
+      out.set(name.toLowerCase(), !v ? null : 'literal' in v ? v.literal : IDENT.test(v.expr) ? ctx.values?.get(v.expr.toLowerCase()) ?? null : null);
+    }
+    return out;
+  }
+
+  /** Notes the start value a run variable has where a step types or chooses it (`expr`, the UiPath name it was). */
+  private noteStart(varName: string, expr: string, ctx: Ctx): void {
+    const v = ctx.values?.get(expr.toLowerCase());
+    if (v === undefined) return;
+    const had = this.startValues.get(varName);
+    this.startValues.set(varName, had === undefined || had === v ? v : null);
+  }
+
+  // -------------------------------------------------------------------------------------------------------------------
+  // Blocks that wrap other activities: their UI activities are imported as if the block were not there, and the block is
+  // reported once, saying what that changes.
+
+  /** The activities in `els`, walked, and how many of them are in this workflow file (Sequences aside). */
+  private walkCount(els: XmlNode[], ctx: Ctx): { items: Item[]; n: number } {
+    const before = this.walkedIn.get(ctx.file) ?? 0;
+    const items = this.list(els, ctx);
+    return { items, n: (this.walkedIn.get(ctx.file) ?? 0) - before };
+  }
+
+  /**
+   * How many activities `els` hold (`n`), and how many of them do more than log or comment (`work`), without walking
+   * them (for a body that is not imported). Charged against MAX_WALK.
+   */
+  private countIn(els: XmlNode[]): { n: number; work: number } {
+    let n = 0;
+    let work = 0;
+    let visits = 0;
+    const stack = [...els];
+    while (stack.length) {
+      const el = stack.pop()!;
+      visits++;
+      const prefix = prefixOf(el.name);
+      if (prefix === 'x' || prefix === 'mc') continue;
+      if (isProperty(el)) {
+        if (NESTED_PROPS.has(propertyName(el)) && local(el.name).split('.').length === 2) append(stack, el.children);
+        continue;
+      }
+      const name = local(el.name);
+      if (!STRUCTURE.has(name)) {
+        n++;
+        if (!HOUSEKEEPING.has(name)) work++;
+      }
+      if (name !== 'CommentOut') append(stack, el.children);
+    }
+    this.spend(visits);
+    return { n, work };
+  }
+
+  /** Adds a report item at `mark`, so that a block's item comes before the items of what it holds. */
+  private insert(mark: number, at: string, kind: ImportItem['kind'], what: string, reason: string): ImportItem {
+    const item: ImportItem = { at, kind, what, reason };
+    this.report.items.splice(mark, 0, item);
+    return item;
+  }
+
+  /** The element an Element Exists or a Check App State looks at, as a browser or a desktop target; or why there is none. */
+  private elementCondition(el: XmlNode, ctx: Ctx): ElementCond | { problem: string } {
+    const at = this.at(el, ctx);
+    if (ctx.desktop) return { problem: 'the element is in SAP GUI for Windows' };
+    if (ctx.app || this.desktopKind(el, ctx) === 'desktop') {
+      const t = this.desktopTarget(el, ctx);
+      if (t.sap) return { problem: 'the element is in SAP GUI for Windows' };
+      if (!t.target) return { problem: t.problem ?? 'the activity has no target the import can read' };
+      for (const issue of t.issues) this.add(at, 'converted', displayOf(el), issue);
+      return { surface: 'desktop', target: t.target, name: targetName(t.target) };
+    }
+    const t = this.target(el, ctx);
+    if (t.desktop) return { problem: 'the element is in a desktop application' };
+    if (!t.candidates.length) return { problem: t.problem ?? 'the selector names no web element' };
+    for (const issue of t.issues) this.add(at, 'converted', displayOf(el), issue);
+    return { surface: 'browser', candidates: t.candidates, name: nameOfCandidate(t.candidates[0]) };
+  }
+
+  /**
+   * The branches' items with the condition on each step, in the order given, or undefined when a branch holds anything
+   * but UI activities of the condition's own kind (browser or desktop) that may carry one, or a step already has one.
+   * Desktop steps can only run when an element shows: a desktop branch for "does not show" must be empty.
+   */
+  private gate(cond: ElementCond, branches: { items: Item[]; shows: boolean }[]): Item[] | undefined {
+    const all = branches.flatMap((b) => b.items);
+    if (cond.surface === 'browser') {
+      if (!all.every((i) => i.t === 'event' && GATED_EVENTS.has(i.event.kind) && !('when' in i.event && i.event.when))) return undefined;
+      // The candidates are shared, as one selector's are between the events that use it.
+      return branches.flatMap((b) => b.items.map((i): Item => {
+        const it = i as Extract<Item, { t: 'event' }>;
+        return { ...it, event: { ...it.event, when: b.shows ? { visible: cond.candidates } : { hidden: cond.candidates } } as ImportEvent };
+      }));
+    }
+    if (!all.every((i) => i.t === 'desktop' && i.event.kind !== 'launch' && i.event.kind !== 'scope' && !('when' in i.event && i.event.when))) return undefined;
+    if (branches.some((b) => !b.shows && b.items.length)) return undefined;
+    return all.map((i): Item => {
+      const it = i as Extract<Item, { t: 'desktop' }>;
+      return { ...it, event: { ...it.event, when: cond.target } as DesktopEvent };
+    });
+  }
+
+  /** An If: an n8n If, or its branches' steps with conditions when it tests an Element Exists' answer. */
+  private ifActivity(el: XmlNode, ctx: Ctx): Item[] {
+    const displayName = displayOf(el);
+    const cond = this.arg(el, 'Condition', ctx);
+    const mark = this.report.items.length;
+    const then = this.walkCount(this.body(el, new Set(['Then'])), ctx);
+    const other = this.walkCount(this.body(el, new Set(['Else'])), ctx);
+    const test = cond && 'expr' in cond ? /^(not\s+|!\s*)?\(?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)?$/i.exec(cond.expr.trim()) : null;
+    const found = test ? this.exists.get(`${ctx.file}\u0000${test[2].toLowerCase()}`) : undefined;
+    if (test && found) {
+      const shows = !test[1];
+      const flat = this.gate(found.cond, [{ items: then.items, shows }, { items: other.items, shows: !shows }]);
+      if (flat) {
+        found.item.kind = 'converted';
+        found.item.reason = `ElementExists: it became the condition of the steps in ${displayName}`;
+        const said = conditionText(found.label, [{ name: 'Then', n: then.n, shows }, { name: 'Else', n: other.n, shows: !shows }]);
+        this.insert(mark, this.at(el, ctx), 'converted', displayName, `If: it tests ${test[2]}, the answer of ${found.displayName}: ${said}. ${EACH_STEP_CHECKS}${signsIn(flat)}`);
+        return flat;
+      }
+    }
+    return [{ t: 'if', expression: textOf(cond), displayName, then: then.items, else: other.items }];
+  }
+
+  /**
+   * An Element Exists whose answer goes to a plain variable, on an element the import can read: no step and no flow node
+   * by itself. An If on that variable makes it its steps' condition; until one does, it is reported as not translated.
+   * Undefined (the activity is handled as before) when the import cannot read it.
+   */
+  private elementExists(el: XmlNode, ctx: Ctx): Item[] | undefined {
+    const out = this.arg(el, 'Exists', ctx);
+    if (!out || !('expr' in out) || !IDENT.test(out.expr)) return undefined;
+    const cond = this.elementCondition(el, ctx);
+    if ('problem' in cond) return undefined;
+    const displayName = displayOf(el);
+    const label = elementLabel(el.attrs.DisplayName ?? '') || cond.name || 'the element';
+    const item: ImportItem = {
+      at: this.at(el, ctx), kind: 'untranslated', what: displayName,
+      reason: `${local(el.name)}: it checks whether ${label} shows and keeps the answer in ${out.expr}, which no If here turns into a condition on its steps (an If on ${out.expr} alone, whose branches hold only UI activities, would): add the check to the steps by hand`,
+    };
+    this.report.items.push(item);
+    this.exists.set(`${ctx.file}\u0000${out.expr.toLowerCase()}`, { cond, item, displayName, label });
+    return [];
+  }
+
+  /**
+   * A Check App State: "Target appears" runs only when its element shows and "Target does not appear" only when it does
+   * not, as conditions on their steps. When the import cannot read the element, or the steps cannot carry the condition,
+   * it is an n8n If whose condition the person fills in: never steps that run unconditionally without saying so.
+   */
+  private checkState(el: XmlNode, ctx: Ctx): Item[] {
+    const name = local(el.name);
+    const displayName = displayOf(el);
+    const at = this.at(el, ctx);
+    const mark = this.report.items.length;
+    const cond = this.elementCondition(el, ctx);
+    const yes = this.walkCount(this.body(el, new Set(['IfExists'])), ctx);
+    const no = this.walkCount(this.body(el, new Set(['IfNotExists'])), ctx);
+    const mode = CHECK_MODES.map((k) => el.attrs[k]).find((v) => v !== undefined && !/^(element|target)?appears?$/i.test(v.trim()));
+    let why: string;
+    if ('problem' in cond) why = `the import cannot read which element it checks (${cond.problem})`;
+    else if (mode !== undefined) why = 'it waits for something other than its element to appear';
+    else {
+      const flat = this.gate(cond, [{ items: yes.items, shows: true }, { items: no.items, shows: false }]);
+      if (flat) {
+        const label = elementLabel(el.attrs.DisplayName ?? '') || cond.name || 'the element';
+        const said = conditionText(label, [{ name: '"Target appears"', n: yes.n, shows: true }, { name: '"Target does not appear"', n: no.n, shows: false }]);
+        this.insert(mark, at, 'converted', displayName, `${name}: ${said}. ${EACH_STEP_CHECKS}${signsIn(flat)}`);
+        return flat;
+      }
+      why = cond.surface === 'desktop' && no.items.length
+        ? 'desktop steps can run only when an element shows, not when it does not'
+        : 'what it holds is more than UI activities in one browser or app';
+    }
+    this.insert(mark, at, 'converted', displayName, `${name}: ${why}, so it became an n8n If: fill in its condition in the workflow; until then the steps under "Target appears" run every time and those under "Target does not appear" never do`);
+    return [{ t: 'if', expression: `${displayName}: the element shows`, displayName, then: yes.items, else: no.items }];
+  }
+
+  /** A Try Catch: its Try (and Finally) imported in order; each Catch reported as not imported, with what it holds. */
+  private tryCatch(el: XmlNode, ctx: Ctx): Item[] {
+    const at = this.at(el, ctx);
+    const mark = this.report.items.length;
+    const tried = this.walkCount(this.body(el, new Set(['Try'])), ctx);
+    const out = tried.items;
+    const catches = el.children.find((c) => isProperty(c) && propertyName(c) === 'Catches');
+    for (const c of catches ? content(catches) : []) {
+      const type = c.attrs['x:TypeArguments'] ?? 'Exception';
+      const k = this.countIn([c]).n;
+      this.add(at, 'untranslated', `Catch ${local(type)}`, `the catch branch${k ? ` (${activities(k)})` : ''} was not imported: give the n8n node an error output or the workflow an error workflow`);
+    }
+    const fin = this.walkCount(this.body(el, new Set(['Finally'])), ctx);
+    append(out, fin.items);
+    const finally_ = fin.n ? `, then the ${activities(fin.n)} in Finally` : '';
+    this.insert(mark, at, 'converted', displayOf(el), `${local(el.name)}: its ${activities(tried.n)} in Try ${were(tried.n)} imported, in order${finally_}. When a step from Try fails, the run stops there: nothing in Catch${fin.n ? ' or Finally' : ''} runs`);
+    return out;
+  }
+
+  /** A Switch: one n8n If per case, each testing the expression against the case, with Default after the last. */
+  private switchCases(el: XmlNode, ctx: Ctx): Item[] {
+    const displayName = displayOf(el);
+    const expr = textOf(this.arg(el, 'Expression', ctx));
+    const quoted = /String$/.test(el.attrs['x:TypeArguments'] ?? '');
+    const mark = this.report.items.length;
+    const isCase = (c: XmlNode) => !isProperty(c) && prefixOf(c.name) !== 'x' && prefixOf(c.name) !== 'mc';
+    // Each case is one more If inside the last: the chain counts against the nesting limit, so the flow stays shallow.
+    const inner = { ...ctx, nesting: ctx.nesting + el.children.filter(isCase).length };
+    if (inner.nesting > MAX_NESTING) {
+      this.add(this.at(el, ctx), 'error', WHAT, `the workflows are nested deeper than ${MAX_NESTING} elements once invoked workflows are followed and a Switch's cases are counted: the rest of this branch was not imported`);
+      return [];
+    }
+    const cases: { key: string; items: Item[] }[] = [];
+    let fallback: Item[] | undefined;
+    for (const c of el.children) {
+      if (isProperty(c)) {
+        if (propertyName(c) === 'Default' && local(c.name).split('.').length === 2) fallback = this.list(this.body(el, new Set(['Default'])), inner);
+        continue;
+      }
+      if (!isCase(c)) continue;
+      cases.push({ key: c.attrs['x:Key'] ?? displayOf(c), items: this.list([c], inner) });
+    }
+    let tail: Item[] = fallback ?? [];
+    for (let i = cases.length - 1; i >= 0; i--) {
+      const { key, items } = cases[i];
+      const value = quoted ? `"${key.replaceAll('"', '""')}"` : key;
+      tail = [{ t: 'if', expression: `${expr} = ${value}`, displayName: cleanLabel(`${displayName}: ${key}`), then: items, else: tail }];
+    }
+    const keys = cases.map((c) => cleanLabel(c.key));
+    const shownKeys = keys.length > 20 ? `${keys.slice(0, 20).join(', ')} and ${keys.length - 20} more` : keys.join(', ');
+    this.insert(mark, this.at(el, ctx), 'converted', displayName, cases.length
+      ? `Switch: each of its cases (${shownKeys}) became an n8n If on ${expr.slice(0, 200)}${fallback ? ', and Default comes after the last one' : ''}: fill in their conditions in the workflow; until then every run takes the first case`
+      : 'Switch: it has no cases: its Default was imported, and runs every time');
+    return tail;
+  }
+
+  /**
+   * A Flowchart, followed from its start node, depth first: each node's activities once, a decision's True path before
+   * its False path and a switch's Default before its cases. A decision or switch is reported (every run now takes all
+   * of its paths); a step that leads back to one on the current path is reported as a loop.
+   */
   private flowchart(el: XmlNode, ctx: Ctx): Item[] {
     // x:Name is unique in a workflow file, so the file's index (built once at parse) serves every Flowchart in it.
     const named = ctx.names;
-    const resolve = (holder: XmlNode | undefined): XmlNode | undefined => {
-      const node = holder ? content(holder)[0] : undefined;
-      if (!node) return undefined;
-      if (local(node.name) === 'Reference' && prefixOf(node.name) === 'x') return named.get(node.text.trim()) ?? named.get(node.attrs.Name ?? '');
-      return node;
-    };
+    const deref = (node: XmlNode | undefined): XmlNode | undefined =>
+      node && local(node.name) === 'Reference' && prefixOf(node.name) === 'x' ? named.get(node.text.trim()) ?? named.get(node.attrs.Name ?? '') : node;
+    const prop = (node: XmlNode, p: string) => node.children.find((c) => isProperty(c) && propertyName(c) === p);
+    const resolve = (holder: XmlNode | undefined): XmlNode | undefined => deref(holder ? content(holder)[0] : undefined);
     const out: Item[] = [];
     const seen = new Set<XmlNode>();
-    let node = resolve(el.children.find((c) => isProperty(c) && propertyName(c) === 'StartNode'));
-    while (node) {
-      if (seen.has(node)) {
+    const onPath = new Set<XmlNode>();
+    const stack: { node: XmlNode; leave?: true }[] = [];
+    const start = resolve(prop(el, 'StartNode'));
+    if (start) stack.push({ node: start });
+    while (stack.length) {
+      const { node, leave } = stack.pop()!;
+      if (leave) { onPath.delete(node); continue; }
+      if (onPath.has(node)) {
         append(out, this.untranslated(node, ctx, 'the Flowchart loops back to an earlier step: rebuild the loop in n8n', 'Flowchart'));
-        break;
+        continue;
       }
+      // Two paths that join: the node's activities are imported once, on the first path that reaches it.
+      if (seen.has(node)) continue;
       seen.add(node);
+      onPath.add(node);
+      stack.push({ node, leave: true });
       const kind = local(node.name);
-      if (kind !== 'FlowStep') {
-        append(out, this.untranslated(node, ctx, 'a Flowchart branch is not imported (only a linear Flowchart is): rebuild it with an If', kind));
-        break;
+      let next: (XmlNode | undefined)[] = [];
+      if (kind === 'FlowStep') {
+        append(out, this.list(content(node), ctx));
+        next = [resolve(prop(node, 'Next'))];
+      } else if (kind === 'FlowDecision') {
+        this.add(this.at(node, ctx), 'untranslated', displayOf(node), `${kind}: the decision was not imported: the activities on its True path, then those on its False path, were imported one after another, so every run does both. ${CHECK_THE_ORDER}`);
+        next = [resolve(prop(node, 'True')), resolve(prop(node, 'False'))];
+      } else if (kind === 'FlowSwitch') {
+        this.add(this.at(node, ctx), 'untranslated', displayOf(node), `${kind}: the choice was not imported: the activities of each of its cases, Default first, were imported one after another, so every run does all of them. ${CHECK_THE_ORDER}`);
+        next = [resolve(prop(node, 'Default')), ...content(node).map(deref)];
+      } else {
+        append(out, this.untranslated(node, ctx, 'a Flowchart node of this kind is not imported: rebuild it with an If', kind));
       }
-      append(out, this.list(content(node), ctx));
-      node = resolve(node.children.find((c) => isProperty(c) && propertyName(c) === 'Next'));
+      for (let i = next.length - 1; i >= 0; i--) if (next[i]) stack.push({ node: next[i]! });
     }
+    return out;
+  }
+
+  /**
+   * A State Machine (the standard project template is one): each state's entry, once, in the order of the states (from
+   * the initial state along the transitions, depth first, then any state no transition reaches), each state its own
+   * report item that names the steps it gave. Transitions, exits and triggers are not imported, and that is reported.
+   */
+  private stateMachine(el: XmlNode, ctx: Ctx): Item[] {
+    const named = ctx.names;
+    const deref = (node: XmlNode | undefined): XmlNode | undefined =>
+      node && local(node.name) === 'Reference' && prefixOf(node.name) === 'x' ? named.get(node.text.trim()) : node;
+    /** A state a property names: `P="{x:Reference name}"`, or an inline State or x:Reference in `<X.P>`. */
+    const stateAt = (node: XmlNode, p: string): XmlNode | undefined => {
+      const m = /^\{x:Reference\s+([^}\s]+)\s*\}$/.exec((node.attrs[p] ?? '').trim());
+      if (m) return named.get(m[1]);
+      const holder = node.children.find((c) => isProperty(c) && propertyName(c) === p);
+      return deref(holder ? content(holder)[0] : undefined);
+    };
+    const transitions = (state: XmlNode): XmlNode[] => {
+      const holder = state.children.find((c) => isProperty(c) && propertyName(c) === 'Transitions');
+      return holder ? content(holder).filter((t) => local(t.name) === 'Transition') : [];
+    };
+    const states: XmlNode[] = [];
+    const seen = new Set<XmlNode>();
+    const visit = (from: XmlNode | undefined) => {
+      const stack = [from];
+      while (stack.length) {
+        const s = stack.pop();
+        if (!s || local(s.name) !== 'State' || seen.has(s)) continue;
+        seen.add(s);
+        states.push(s);
+        const to = transitions(s).map((t) => stateAt(t, 'To'));
+        for (let i = to.length - 1; i >= 0; i--) stack.push(to[i]);
+      }
+    };
+    visit(stateAt(el, 'InitialState'));
+    for (const c of content(el)) visit(deref(c));
+    // A final state (End Process) comes last, whichever transition reaches it first: Studio saves the initial state's
+    // failure transition, to the final state, before its success transition.
+    const isFinal = (st: XmlNode) => (st.attrs.IsFinal ?? '').trim().toLowerCase() === 'true';
+    states.sort((a, b) => Number(isFinal(a)) - Number(isFinal(b)));
+
+    const total = states.length;
+    const names = states.map((s) => displayOf(s));
+    const order = names.length > 20 ? `${names.slice(0, 20).join(', ')} and ${names.length - 20} more` : names.join(', ');
+    this.add(this.at(el, ctx), 'untranslated', displayOf(el), `${local(el.name)}: its transitions were not imported: the entry activities of its ${total === 1 ? 'one state were' : `${total} states were`} imported once each, one after another, in this order: ${order}. The steps never go back to an earlier state, as a state machine does to take the next transaction: check the order, and give the Run steps node one item per transaction in n8n`);
+    const out: Item[] = [];
+    states.forEach((state, i) => {
+      const what = cleanLabel(`State "${displayOf(state)}"`);
+      const item = this.insert(this.report.items.length, this.at(state, ctx), 'converted', what, '');
+      const { items, n } = this.walkCount(this.body(state, new Set(['Entry'])), ctx);
+      const ui = uiNames(items);
+      const listed = ui.length > 10 ? `${ui.slice(0, 10).join(', ')} and ${ui.length - 10} more` : ui.join(', ');
+      item.reason = ui.length ? `state ${i + 1} of ${total}: the steps from its entry (${activities(n)}): ${listed}` : `state ${i + 1} of ${total}: its entry (${activities(n)}) gave no UI steps`;
+      append(out, items);
+      // What only logs or comments is accounted for and not listed as left out, as logging is anywhere else.
+      const exit = this.countIn(this.body(state, new Set(['Exit'])));
+      if (exit.n && !exit.work) this.add(this.at(state, ctx), 'dropped', `${what}: Exit`, `its ${activities(exit.n)} only log or comment, which the steps do not need`, true);
+      else if (exit.n) this.add(this.at(state, ctx), 'untranslated', `${what}: Exit`, `its ${activities(exit.n)} ${were(exit.n)} not imported: the steps run each state's entry only`);
+      for (const t of transitions(state)) {
+        const k = this.countIn(this.body(t, new Set(['Trigger', 'Action'])));
+        const name = cleanLabel(`Transition "${displayOf(t)}"`);
+        if (k.n && !k.work) this.add(this.at(t, ctx), 'dropped', name, `its trigger and action (${activities(k.n)}) only log or comment, which the steps do not need`, true);
+        else if (k.n) this.add(this.at(t, ctx), 'untranslated', name, `its trigger and action (${activities(k.n)}) were not imported: the steps do not move between states`);
+      }
+    });
     return out;
   }
 
@@ -1433,8 +2016,6 @@ function specialKeys(text: string): { text: string; enter: boolean } {
   return { text: out, enter };
 }
 
-/** A field whose selector or display name reads like a password, PIN or secret: what is typed there is never imported. */
-const PASSWORD_FIELD = /pass(word|wort|code)?\b|passwd|pwd|\bpin\b|secret|kennwort|mot de passe/i;
 /** A variable whose name reads like a password. */
 const PASSWORD_NAME = /pass(word|wd)?|pwd|secret|\bpin\b/i;
 
@@ -1467,6 +2048,44 @@ function savePathFile(expr: string, csharp: boolean): string | undefined {
   if (lit === undefined) return undefined;
   const file = lit.split(/[\\/]/).pop() ?? '';
   return file.trim() && !file.includes('{') ? file : undefined;
+}
+
+/**
+ * A Keyboard Shortcuts value (`[d(hk)][d(ctrl)][k(s)][u(ctrl)][u(hk)]`, or `[d(ctrl)]c[u(ctrl)]` with a plain character)
+ * as canonical chords: `[d(x)]` holds a modifier down, `[u(x)]` lets it go, `[k(x)]` or a character presses a key with
+ * the modifiers held (`hk` marks the shortcut and is ignored). A character with no modifier held types text, which is not
+ * a shortcut; the text is never echoed.
+ */
+function shortcutChords(text: string): { chords: string[] } | { error: string } {
+  const held: string[] = [];
+  const chords: string[] = [];
+  for (const m of text.slice(0, 1_000).matchAll(/\[([dku])\(([^()[\]]{1,20})\)\]|([^])/g)) {
+    let key: string;
+    if (m[3] !== undefined) {
+      if (!held.length) return { error: 'it types text, which a Type Into does: only key chords become steps' };
+      key = m[3];
+    } else {
+      const name = m[2].trim().toLowerCase();
+      if (m[1] === 'd') { if (name !== 'hk' && !held.includes(name)) held.push(name); continue; }
+      if (m[1] === 'u') { if (held.includes(name)) held.splice(held.indexOf(name), 1); continue; }
+      key = m[2];
+    }
+    const c = canonicalChord(key, held.join(','));
+    if ('error' in c) return c;
+    chords.push(c.chord);
+    if (chords.length > MAX_SHORTCUT_CHORDS) return { error: `the shortcut presses more than ${MAX_SHORTCUT_CHORDS} keys: add them as steps by hand` };
+  }
+  return chords.length ? { chords } : { error: 'the shortcut presses no key the import can read' };
+}
+
+/** The activity names its element by a selector or a reference (else it acts on whatever has the focus). */
+function hasSelector(el: XmlNode): boolean {
+  if (el.attrs.Selector !== undefined) return true;
+  const prop = el.children.find((c) => isProperty(c) && propertyName(c) === 'Target');
+  const t = prop ? content(prop)[0] : undefined;
+  if (!t) return false;
+  return ['FullSelectorArgument', 'Selector', 'Reference', 'FuzzySelectorArgument', 'SearchSteps', 'CVScreenId', 'ImageBase64'].some((k) => t.attrs[k] !== undefined && t.attrs[k] !== '{x:Null}')
+    || t.children.some((c) => isProperty(c) && ['FullSelectorArgument', 'Selector'].includes(propertyName(c)));
 }
 
 /**

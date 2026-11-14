@@ -69,6 +69,8 @@ const AI_REPAIR = "={{ $('Get pending').all().filter(i => i.json.hash && DateTim
 const EXPRESSIONS: Record<string, (s: Scope) => unknown> = {
   "={{ $('Settings').item.json.name }}": (s) => s.settings.name,
   "={{ $('Settings').item.json.approvalTimeoutHours }}": (s) => s.settings.approvalTimeoutHours,
+  // Template 3's Settings holds the approver once: Sign steps' Approved By and the rejection's approvedBy read it.
+  "={{ $('Settings').item.json.approver }}": (s) => s.settings.approver,
   "={{ $('Get active steps').item.json.steps ?? '' }}": (s) => s.active.steps ?? '',
   "={{ $('Get active steps').item.json.signature }}": (s) => s.active.signature,
   "={{ $('Get active steps').item.json.approvedBy }}": (s) => s.active.approvedBy,
@@ -93,9 +95,16 @@ const EXPRESSIONS: Record<string, (s: Scope) => unknown> = {
   // Supersede older versions: $json is the row Save signed steps wrote (n8n returns updated rows with their id).
   '={{ $json.id }}': (s) => s.json.id,
   "={{ $('Repaired steps received').item.json.steps?.surface === 'desktop' }}": (s) => (s.repaired.steps as IDataObject | undefined)?.surface === 'desktop',
-  "={{ $json.data === undefined ? {} : { data: { approved: $json.data['Decision'] === 'Approve', writeSteps: String($json.data['Write steps'] ?? '') } } }}": (s) => {
+  // Supersede older versions: an approved first version (an import) supersedes every other active row of its name.
+  "={{ $('Repaired steps received').item.json.baseVersion === null ? 2147483647 : $('Repaired steps received').item.json.version }}": (s) =>
+    (s.repaired.baseVersion === null ? 2147483647 : s.repaired.version),
+  // Desktop answer: the form's Decision, and the step numbers of the ticked boxes ("Step 16: Click Save") and the typed field.
+  "={{ $json.data === undefined ? {} : { data: { approved: $json.data['Decision'] === 'Approve and sign', writeSteps: [].concat($json.data['Steps that save, send or submit'] ?? []).map((l) => (/^Step (\\d+):/.exec(String(l)) ?? [])[1]).filter((n) => n).concat(String($json.data['Any other step that saves, sends or submits (its number)'] ?? '')).join(' ').trim() } } }}": (s) => {
     const data = s.json.data as IDataObject | undefined;
-    return data === undefined ? {} : { data: { approved: data.Decision === 'Approve', writeSteps: String(data['Write steps'] ?? '') } };
+    if (data === undefined) return {};
+    const ticked = ([] as unknown[]).concat(data['Steps that save, send or submit'] ?? []).map((l) => /^Step (\d+):/.exec(String(l))?.[1]).filter((n): n is string => Boolean(n));
+    const typed = String(data['Any other step that saves, sends or submits (its number)'] ?? '');
+    return { data: { approved: data.Decision === 'Approve and sign', writeSteps: [...ticked, typed].join(' ').trim() } };
   },
 };
 function resolve(value: unknown, s: Scope): unknown {
@@ -282,7 +291,11 @@ type Decision = 'approve' | 'reject' | 'timeout' | 'pending';
  */
 async function approvalRun(
   table: MemoryTable, repaired: INodeExecutionData, decision: Decision, feed: Feed,
-  o: { now?: number; /** Desktop steps: the approver's Write steps answer on the form. */ writeSteps?: string } = {},
+  o: {
+    now?: number;
+    /** Desktop steps: the boxes the approver ticks on the form ("Step 16: Click Save"). */ ticked?: string[];
+    /** Desktop steps: the numbers typed in the form's field for any other step. */ writeSteps?: string;
+  } = {},
 ) {
   const t = APPROVE;
   const s = emptyScope(o.now);
@@ -292,10 +305,15 @@ async function approvalRun(
   const [pendingRow] = tableNode(t, 'Mark pending', table, s);
   if (decision === 'pending') return { outcome: 'pending' as const };
   // Send-and-wait resumes with its input item when the time limit passes, and with { data: { approved } } on an answer.
-  // Desktop steps get the form (Decision, Write steps), which Desktop answer turns into { data: { approved, writeSteps } }.
+  // Desktop steps get the form (Decision, the candidate writes as tick boxes, a field for any other step), which Desktop
+  // answer turns into { data: { approved, writeSteps } }.
   if (ifNode(t, 'Desktop steps?', s)) {
-    s.json = decision === 'timeout' ? { ...pendingRow }
-      : { data: { Decision: decision === 'approve' ? 'Approve' : 'Reject', 'Write steps': o.writeSteps ?? '', respondedAt: new Date(s.now).toISOString() } };
+    s.json = decision === 'timeout' ? { ...pendingRow } : {
+      data: {
+        Decision: decision === 'approve' ? 'Approve and sign' : 'Reject', 'Steps that save, send or submit': o.ticked ?? [],
+        'Any other step that saves, sends or submits (its number)': o.writeSteps ?? '', respondedAt: new Date(s.now).toISOString(),
+      },
+    };
     s.approval = setNode(t, 'Desktop answer', s);
   } else {
     s.approval = decision === 'timeout' ? { ...pendingRow } : { data: { approved: decision === 'approve', respondedAt: new Date(s.now).toISOString() } };
@@ -345,7 +363,14 @@ const sortedIds = (item: INodeExecutionData) => ((item.json.rows as { id: string
 function scan(items: INodeExecutionData[], extra: unknown[] = [], secrets: Secrets = LEAK_SECRETS): string[] {
   const found = new Set<string>();
   for (const item of items) {
-    for (const label of valueLeaks(item.json, secrets)) found.add(label);
+    // Run Steps names the account a run signed in with (`account`, `details.account`): the user name, on purpose, and
+    // only there. Every other field, the password and the TOTP secret everywhere, must hold none.
+    const { account, ...json } = item.json;
+    const details = json.details && typeof json.details === 'object' ? { ...(json.details as Record<string, unknown>) } : undefined;
+    if (details) delete details.account;
+    if (account !== undefined && account !== secrets.username) found.add('account is not the Site Login user name');
+    for (const label of valueLeaks(details ? { ...json, details } : json, secrets)) found.add(label);
+    if (account !== undefined) for (const label of valueLeaks({ account }, { ...secrets, username: '' })) found.add(label);
     for (const [prop, bin] of Object.entries(item.binary ?? {})) {
       const bytes = Buffer.from(bin.data, 'base64');
       if (bin.mimeType === 'application/zip') for (const label of traceLeaks(bytes, secrets)) found.add(`${label} in trace ${prop}`);
@@ -404,8 +429,9 @@ describe('ACCEPTANCE_SEEDS', () => {
 });
 
 describe('the templates the suite emulates', () => {
-  it('template 2 needs at most 9 working nodes (stickies, the chat model and the destination placeholder not counted)', () => {
-    const working = DATA_FEED.nodes.filter((n) => !['n8n-nodes-base.stickyNote', '@n8n/n8n-nodes-langchain.lmChatAnthropic', 'n8n-nodes-base.noOp'].includes(n.type));
+  it('template 2 needs at most 9 working nodes (stickies, the chat model, the two table creations and the destination placeholder not counted)', () => {
+    // The table creations run once in a branch of their own; the in-memory table needs no creating.
+    const working = DATA_FEED.nodes.filter((n) => !['n8n-nodes-base.stickyNote', '@n8n/n8n-nodes-langchain.lmChatAnthropic', 'n8n-nodes-base.noOp'].includes(n.type) && n.parameters.operation !== 'create');
     expect(working.length).toBeLessThanOrEqual(9);
   });
   it('the eval builds the same Run Steps settings as the data-feed template', () => {
@@ -512,7 +538,8 @@ describe('approving imported desktop steps through template 3 (I1)', () => {
     const feed: Feed = { template: DATA_FEED, site: portal };
     const item = desktopRepaired();
     expect(item.json).toMatchObject({ name: 'erp-1', version: 1, baseVersion: null });
-    const first = await approvalRun(table, item, 'approve', feed, { writeSteps: '16' });
+    // Step 16 ticked on the form; the second approval types the number in the field for any other step.
+    const first = await approvalRun(table, item, 'approve', feed, { ticked: ['Step 16: Click Save'] });
     expect(first).toMatchObject({ outcome: 'active', signed: { writeLine: 'Signed as writes: step 16 (Click Save)' } });
     expect(active(table)).toHaveLength(1);
     // The same project imported and approved again, with the same Write steps (the same signed hash) and then without any.
@@ -521,7 +548,7 @@ describe('approving imported desktop steps through template 3 (I1)', () => {
     expect(active(table)).toHaveLength(1);
     expect(active(table)[0].id).toBe(table.rows.at(-1)!.id);
     const none = await approvalRun(table, desktopRepaired(), 'approve', feed, { writeSteps: '' });
-    expect(none).toMatchObject({ outcome: 'active', signed: { writeLine: 'Signed as writes: none (no step was listed in Write Steps)' } });
+    expect(none).toMatchObject({ outcome: 'active', signed: { writeLine: 'Signed as writes: none' } });
     expect(active(table)).toHaveLength(1);
     expect(JSON.parse(String(active(table)[0].steps)).steps.some((st: IDataObject) => st.write === true)).toBe(false);
     expect(table.rows.map((r) => r.status)).toEqual(['superseded', 'superseded', 'active']);

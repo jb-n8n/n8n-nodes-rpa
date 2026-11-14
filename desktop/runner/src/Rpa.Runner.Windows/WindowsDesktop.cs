@@ -136,7 +136,7 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
         var node = (UiaNode)op.Element;
         var el = node.Element;
         if (op.Action is not (ActionKind.Read or ActionKind.Focus) && !node.IsEnabled)
-            throw new RetryableActionException("the element is disabled");
+            throw RetryableActionException.Disabled();
         switch (op.Action)
         {
             case ActionKind.Click:

@@ -5,7 +5,11 @@
 // comment ends the parse with an `error` item. Typed values only ever reach fill/select events, which stripSecrets checks
 // and drops: never a report item.
 import { IMPORT_UNSUPPORTED_TARGET } from '../messages.js';
-import { cleanLabel } from './draft.js';
+import { MAX_SELECT_VALUES } from '../policy/validate.js';
+import { browserKeyProblem } from '../steps/browser-keys.js';
+import { cleanLabel, clickModifiers } from './draft.js';
+import type { ClickModifier } from '../types.js';
+import { readText } from './read.js';
 import type { Candidate, ImportEvent, ImportItem, ImportReport } from './types.js';
 
 /** Code larger than this is refused before it is read. */
@@ -41,10 +45,10 @@ const R = {
   unique: (m: string) => `.${m}() is not imported: a step finds one element by its locator; make the locator unique (a name, a label or a scope)`,
   method: (m: string) => `.${m}() is not imported`,
   options: (m: string) => `${m} options are not imported: the steps click, type or choose with defaults`,
+  heldOpens: 'a click with keys held that opens a new tab or starts a download is not imported: the popup and download steps click without keys',
   javascript: 'the steps do not run page JavaScript: add a waitFor on what the page shows when it is ready',
   handler: 'event handlers (dialogs, requests, routes) are not imported',
-  hover: 'a hover is not a step: a menu that opens on hover needs a click on the menu',
-  key: 'only Enter is imported: add a step for what this key does',
+  key: 'only keyboard.press() with a key a press step sends is imported: type text with a fill',
   wait: 'each step waits for its element itself, so a fixed or load wait is not needed',
   close: 'the run closes the browser itself when the steps end',
   firstTab: 'it runs on the first tab, but the steps continue in the new tab the popup opened',
@@ -59,6 +63,9 @@ const R = {
   test: 'test settings, hooks and annotations are not imported',
   saved: 'the run keeps the downloaded file itself and checks it against the Expected File',
   viewport: 'the node\'s Viewport option sets the window size',
+  selectForm: 'only options named by their value or label are imported, one option or a list of texts: an { index }, or a list of { value }, { label } or { index } objects, is not',
+  selectNone: 'choosing no option (an empty list) clears the list, which is not a step',
+  selectMany: (n: number) => `a multi-select is imported with at most ${MAX_SELECT_VALUES} options: this one chooses ${n}`,
   upload: 'uploading a file is not a step',
   value: 'the value must be written out as text',
   reassigned: 'the variable is assigned again, so the import cannot tell which element it names: use one const per locator',
@@ -67,6 +74,24 @@ const R = {
 } as const;
 
 const ENTER = new Set(['Enter', 'NumpadEnter']);
+/** Playwright's names for the keys whose press step spelling differs. */
+const STEP_KEY_NAMES: Readonly<Record<string, string>> = {
+  Control: 'Ctrl', ControlOrMeta: 'Ctrl', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', NumpadEnter: 'Enter',
+};
+const STEP_MODIFIERS = ['Ctrl', 'Alt', 'Shift'];
+
+/**
+ * A Playwright key (`Control+a`, `Shift+Tab`, `ArrowDown`) in the press step's spelling (`Ctrl+A`, `Shift+Tab`,
+ * `Down`): modifiers in the order Ctrl, Alt, Shift, a letter in upper case. undefined when a modifier repeats or is not
+ * one of those; browserKeyProblem judges the rest.
+ */
+function stepKey(key: string): string | undefined {
+  const parts = key.split('+').map((p) => STEP_KEY_NAMES[p] ?? p);
+  const last = parts.pop() ?? '';
+  if (parts.some((m) => !STEP_MODIFIERS.includes(m)) || new Set(parts).size !== parts.length) return undefined;
+  const mods = STEP_MODIFIERS.filter((m) => parts.includes(m));
+  return [...mods, /^[a-z]$/.test(last) ? last.toUpperCase() : last].join('+');
+}
 /** Keys a report item may name. Any other key (a letter, a digit, a combination) reads "a key", so a password pressed key by key is never spelled out. */
 const NAMED_KEYS = new Set(['Tab', 'Escape', 'Backspace', 'Delete', 'Home', 'End', 'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Insert']);
 const LOCATOR_METHODS = new Set(['getByRole', 'getByLabel', 'getByText', 'getByTestId', 'getByPlaceholder', 'getByAltText', 'getByTitle', 'locator', 'frameLocator', 'contentFrame', 'first', 'last', 'nth', 'filter', 'and', 'or']);
@@ -536,6 +561,19 @@ function flatten(node: Node): { root: Node; segs: Seg[] } {
 
 const strOf = (n: Node | undefined): string | undefined => (n?.k === 'str' ? n.v : undefined);
 const objOf = (n: Node | undefined): Map<string, Node> | undefined => (n?.k === 'obj' ? n.props : undefined);
+/**
+ * A click's options when they are only `button` and `modifiers` written out as text (what the recorder writes for a
+ * right-click or a Ctrl+click), mapped by clickModifiers; undefined for any other option or shape.
+ */
+function clickOptions(args: Node[]): ReturnType<typeof clickModifiers> | undefined {
+  const props = args.length === 1 ? objOf(args[0]) : undefined;
+  if (!props || [...props.keys()].some((k) => k !== 'button' && k !== 'modifiers')) return undefined;
+  const button = props.get('button');
+  const keys = props.get('modifiers');
+  if (button !== undefined && strOf(button) === undefined) return undefined;
+  if (keys !== undefined && (keys.k !== 'arr' || keys.items.some((m) => strOf(m) === undefined))) return undefined;
+  return clickModifiers(strOf(button) ?? '', keys?.k === 'arr' ? keys.items.map((m) => strOf(m) ?? '') : []);
+}
 
 /** Why a statement that is not an expression of the grammar was not imported. */
 function unparsed(toks: Tok[]): string {
@@ -800,26 +838,19 @@ function otherTarget(code: string): boolean {
   return false;
 }
 
-/** Reads code's bytes or text, refusing more than MAX_PLAYWRIGHT_BYTES before anything is decoded. */
+/** Reads code's bytes or text (readText), refusing more than MAX_PLAYWRIGHT_BYTES before anything is decoded. */
 export function readPlaywrightCode(data: unknown, report: ImportReport): string | undefined {
-  const error = (reason: string) => { report.items.push({ at: '', kind: 'error', what: WHAT, reason }); return undefined; };
-  let text: string;
-  if (typeof data === 'string') {
-    // A string has no more UTF-16 units than UTF-8 bytes, so a long one is refused without measuring it.
-    if (data.length > MAX_PLAYWRIGHT_BYTES || Buffer.byteLength(data, 'utf8') > MAX_PLAYWRIGHT_BYTES) return error(TOO_LARGE);
-    text = data;
-  } else if (data instanceof Uint8Array) {
-    if (data.byteLength > MAX_PLAYWRIGHT_BYTES) return error(TOO_LARGE);
-    text = new TextDecoder('utf-8').decode(data);
-  } else return error(NOT_TEXT);
-  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const read = readText(data, MAX_PLAYWRIGHT_BYTES);
+  if ('text' in read) return read.text;
+  report.items.push({ at: '', kind: 'error', what: WHAT, reason: read.problem === 'tooLarge' ? TOO_LARGE : NOT_TEXT });
+  return undefined;
 }
 
 /**
  * Playwright code (codegen's JavaScript or TypeScript) as import events, with what has no step equivalent added to
  * `report`:
  * - `page.goto(url)` gives goto; `<page><locator chain>.<action>(…)` gives click (dblclick converted), fill, select,
- *   check, enter (`press('Enter')`) or waitFor; the older `page.click(selector)` shapes too.
+ *   check, enter (`press('Enter')`), hover or waitFor; the older `page.click(selector)` shapes too.
  * - `const p = page.waitForEvent('download' | 'popup')` marks the next click as a download or popup; `const p1 = await
  *   p` binds a popup's page, whose statements are followed from then on (the first page's are reported). The older
  *   `Promise.all([page.waitForEvent(…), …click()])` shape works the same way.
@@ -842,10 +873,10 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
   let reported = 0;
   let overflow = '';
   let overflowCount = 0;
-  const item = (at: string, kind: ImportItem['kind'], what: string, reason: string) => {
+  const item = (at: string, kind: ImportItem['kind'], what: string, reason: string, notNeeded = false) => {
     if (reported >= MAX_ITEMS) { if (!overflowCount) overflow = at; overflowCount++; return; }
     reported++;
-    report.items.push({ at, kind, what, reason });
+    report.items.push({ at, kind, what, reason, ...(notNeeded ? { notNeeded: true as const } : {}) });
   };
   if (split.tests > 1) item(`line ${split.testLine}`, 'converted', 'Tests', `the code has ${split.tests} tests: their steps were imported one after another`);
 
@@ -856,8 +887,22 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
   let marking: Promised | undefined;
   let lastField = '';
 
-  const click = (at: string, b: Built) => {
-    const e: Extract<ImportEvent, { kind: 'click' }> = { at, kind: 'click', target: targetOf(b), label: b.label };
+  /**
+   * A press of `key` (Playwright's spelling) as a press event in the step's spelling, or a report item with the step's own
+   * reason. A key that is not a named one is never spelled out in the report.
+   */
+  const pressKey = (at: string, key: string | undefined, argCount: number, target: Candidate[], label: string) => {
+    const what = key !== undefined && NAMED_KEYS.has(key) ? `Press ${key}` : 'Press a key';
+    if (key === undefined) return item(at, 'untranslated', what, R.value);
+    if (argCount > 1) return item(at, 'untranslated', what, R.options('press'));
+    const chord = stepKey(key);
+    const problem = chord === undefined ? browserKeyProblem('') : browserKeyProblem(chord);
+    if (chord === undefined || problem) return item(at, 'untranslated', what, `a press step's key ${problem}`);
+    events.push({ at, kind: 'press', key: chord, target, label });
+  };
+
+  const click = (at: string, b: Built, modifiers?: ClickModifier[]) => {
+    const e: Extract<ImportEvent, { kind: 'click' }> = { at, kind: 'click', target: targetOf(b), label: b.label, ...(modifiers ? { modifiers } : {}) };
     if (marking) { if (marking.kind === 'download') e.download = true; else e.popup = true; marking.clicked = true; marking = undefined; }
     events.push(e);
   };
@@ -873,10 +918,16 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
     switch (name) {
       case 'click':
       case 'dblclick':
-      case 'tap':
-        if (args.length) return item(at, 'untranslated', what, R.options(name));
+      case 'tap': {
+        // A click may hold keys (`modifiers`) or name its button; any other option, and any option on a double click or
+        // a tap, is not imported.
+        const held = !args.length ? {} : name === 'click' ? clickOptions(args) : undefined;
+        if (!held) return item(at, 'untranslated', what, R.options(name));
+        if ('error' in held) return item(at, 'untranslated', what, held.error);
+        if (held.modifiers && marking) return item(at, 'untranslated', what, R.heldOpens);
         if (name !== 'click') item(at, 'converted', what, `a ${name === 'tap' ? 'tap' : 'double click'} became a single click: check that one click does the same`);
-        return click(at, b);
+        return click(at, b, held.modifiers);
+      }
       case 'fill':
       case 'type':
       case 'pressSequentially': {
@@ -891,9 +942,21 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
       case 'selectOption': {
         let v: Node | undefined = args[0];
         if (v?.k === 'arr' && v.items.length === 1) v = v.items[0];
+        if (args.length > 2) return item(at, 'untranslated', what, R.selectForm);
+        // A list of texts is a multi-select: the step's select with an array value, exactly those options.
+        if (v?.k === 'arr') {
+          if (!v.items.length) return item(at, 'untranslated', what, R.selectNone);
+          const texts = v.items.map(strOf);
+          if (v.items.some((x) => x.k === 'obj')) return item(at, 'untranslated', what, R.selectForm);
+          if (texts.some((t) => t === undefined)) return item(at, 'untranslated', what, R.value);
+          if (texts.length > MAX_SELECT_VALUES) return item(at, 'untranslated', what, R.selectMany(texts.length));
+          events.push({ at, kind: 'select', target: targetOf(b), label: b.label, value: texts as string[], hints: b.hints });
+          lastField = b.label;
+          return;
+        }
         const props = objOf(v);
         const chosen = v?.k === 'str' ? v.v : props && props.size === 1 ? strOf(props.get('label') ?? props.get('value')) : undefined;
-        if (chosen === undefined || args.length > 2) return item(at, 'untranslated', what, 'only one option, by its value or label, is imported');
+        if (chosen === undefined) return item(at, 'untranslated', what, v && v.k !== 'obj' ? R.value : R.selectForm);
         events.push({ at, kind: 'select', target: targetOf(b), label: b.label, value: chosen, hints: b.hints });
         lastField = b.label;
         return;
@@ -912,7 +975,7 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
       case 'press': {
         const key = value();
         if (key !== undefined && ENTER.has(key) && args.length === 1) { events.push({ at, kind: 'enter', label: b.label || lastField }); return; }
-        return item(at, 'untranslated', key !== undefined && NAMED_KEYS.has(key) ? `Press ${key}` : 'Press a key', R.key);
+        return pressKey(at, key, args.length, targetOf(b), b.label);
       }
       case 'waitFor': {
         const props = objOf(args[0]);
@@ -924,7 +987,10 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
         events.push({ at, kind: 'waitFor', target: targetOf(b), label: b.label });
         return;
       }
-      case 'hover': return item(at, 'untranslated', what, R.hover);
+      case 'hover':
+        if (args.length) return item(at, 'untranslated', what, R.options(name));
+        events.push({ at, kind: 'hover', target: targetOf(b), label: b.label });
+        return;
       case 'setInputFiles': return item(at, 'untranslated', what, R.upload);
       default: return item(at, 'untranslated', what, R.method(name));
     }
@@ -973,13 +1039,15 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
       }
       case 'keyboard': {
         const key = strOf(second?.args?.[0]);
-        if (segs.length === 2 && second.name === 'press' && key !== undefined && ENTER.has(key)) { events.push({ at, kind: 'enter', label: lastField }); return; }
-        return item(at, 'untranslated', second?.name === 'press' && key !== undefined && NAMED_KEYS.has(key) ? `Press ${key}` : 'Use the keyboard', R.key);
+        if (segs.length === 2 && second.name === 'press' && key !== undefined && ENTER.has(key) && second.args?.length === 1) { events.push({ at, kind: 'enter', label: lastField }); return; }
+        if (segs.length === 2 && second.name === 'press') return pressKey(at, key, second.args?.length ?? 0, [], '');
+        return item(at, 'untranslated', 'Use the keyboard', R.key);
       }
       case 'close': return item(at, 'untranslated', 'Close the page', R.close);
-      case 'setViewportSize': return item(at, 'dropped', 'Viewport change', R.viewport);
+      case 'setViewportSize': return item(at, 'dropped', 'Viewport change', R.viewport, true);
     }
-    if (WAITS.has(first.name)) return item(at, 'dropped', shape, first.name === 'waitForFunction' ? R.javascript : R.wait);
+    // A JavaScript wait waits for something the steps cannot see: it is left out. A fixed or load wait is not needed.
+    if (WAITS.has(first.name)) return first.name === 'waitForFunction' ? item(at, 'dropped', shape, R.javascript) : item(at, 'dropped', shape, R.wait, true);
     if (PAGE_JAVASCRIPT.has(first.name)) return item(at, 'untranslated', shape, R.javascript);
     if (HANDLERS.has(first.name)) return item(at, 'untranslated', shape, R.handler);
     if (first.name === 'waitForEvent') {
@@ -1131,7 +1199,7 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
     }
     if (binding?.kind === 'locator') return locatorStatement(at, segs, binding.built);
     if (binding?.kind === 'reassigned') return item(at, 'untranslated', shape, R.reassigned);
-    if (binding?.kind === 'download') return item(at, 'dropped', 'Save the download', R.saved);
+    if (binding?.kind === 'download') return item(at, 'dropped', 'Save the download', R.saved, true);
     if (binding?.kind === 'scaffold') {
       if (segs.length === 1 && segs[0].name === 'close') return;
       return item(at, 'untranslated', shape, R.unknown);
@@ -1156,6 +1224,6 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
     }
     out.push(e);
   });
-  if (focus) report.items.push({ at: focusAt, kind: 'dropped', what: `Clicks into a field before typing (${focus})`, reason: 'typing into a field focuses it, so the click before it is not needed' });
+  if (focus) report.items.push({ at: focusAt, kind: 'dropped', notNeeded: true, what: `Clicks into a field before typing (${focus})`, reason: 'typing into a field focuses it, so the click before it is not needed' });
   return out;
 }

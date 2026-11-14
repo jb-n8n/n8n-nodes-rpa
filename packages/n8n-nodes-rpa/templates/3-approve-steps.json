@@ -3,8 +3,8 @@
   "nodes": [
     {
       "parameters": {
-        "content": "### Approve repaired steps (grey: leave as is)\nCalled by **RPA: 2 Data feed** or **RPA: 5 Import a bot** with a Repaired steps item. The approver gets the evidence, the change list, red safety flags and before/after screenshots, then an Approve / Reject email. **Mark pending** writes a `pending` row that expires after `approvalTimeoutHours`; while it is unexpired the feed reports a changed site instead of repairing again. Approve: **Sign steps** signs exactly the steps that were proven and **Save signed steps** sets the row `active`, **Supersede older versions** sets every other `active` row of the same name with this version or a lower one to `superseded` (so approving a desktop import again, always version 1, leaves one active row), and **Email signed steps** confirms what was signed, for desktop steps with the steps signed as writes. Reject or a refused signature: `rejected`. No answer in time: `expired`, and the next run repairs again. Desktop steps (imported from UiPath, not replayed) get a form instead of the buttons: **Decision** and **Write steps**, the numbers (from the numbered change list) of the steps that save, post or submit; **Sign steps** marks exactly those as writes before it signs. The runner refuses a write only on the controls and keys its policy lists, so an unlisted step can still save through any other control.",
-        "height": 400,
+        "content": "### Approve repaired steps (grey: leave as is)\nCalled by **RPA: 2 Data feed**, or by **RPA: 5 Import a bot** when its Settings say `approval` `by email`, with a Repaired steps item. It creates the Data Tables when they are missing. **Mark pending** writes a `pending` row that expires after `approvalTimeoutHours`; while it is unexpired the feed reports a changed site instead of repairing again. Browser steps: a review email with the evidence, the change list, red safety flags and the screenshots, then an Approve / Reject email. Desktop steps (imported from UiPath or a recording, or from a step document; not replayed): one email with the numbered steps and a **Review and decide** button, to a form with **Decision** and the steps that save, send or submit as tick boxes, none ticked to start with; **Sign steps** signs exactly the ticked steps as writes. The runner refuses a write only on the controls and keys its policy lists, so an unticked step can still save through any other control. Approve: **Sign steps** signs exactly the steps that were reviewed, **Save signed steps** sets the row `active`, **Supersede older versions** sets every other `active` row of the same name with this version or a lower one to `superseded` (An approved import becomes the version that runs under its name, also when a higher version was active. An import gets the next version of its name.), and **Email signed steps** confirms what was signed. Reject or a refused signature: `rejected`; a configuration fault (a missing credential, a short signing key) also ends there, so check the error on **Sign steps** before the feed runs again. No answer in time: `expired`, and the next run repairs again. Approve one Repaired steps item per version.",
+        "height": 560,
         "width": 520,
         "color": 7
       },
@@ -12,12 +12,12 @@
       "name": "About this workflow",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [-80, -500]
+      "position": [-80, -800]
     },
     {
       "parameters": {
-        "content": "### Set once (green)\nPick the SMTP credential on **Email repaired steps**, **Ask for approval**, **Ask for approval (desktop steps)** and **Email signed steps**, and the **RPA Site Login** and **RPA Step Signing** credentials on **Sign steps** (the same ones as Run steps in workflow 2; desktop signatures bind the app, never a Site Login). Use one approver address in **Email repaired steps**, **Ask for approval**, **Ask for approval (desktop steps)** and **Email signed steps** (To), **Sign steps** (Approved By and Approver Allowlist) and **Record rejection**.\n\nConfiguration faults (a missing credential, a short signing key) also end in **Record rejection**: check the error on **Sign steps** before the feed runs again. Approve one Repaired steps item per version.",
-        "height": 400,
+        "content": "### Set once (green)\n1. Pick the SMTP credential on **Email repaired steps**, **Ask for approval**, **Ask for approval (desktop steps)** and **Email signed steps**.\n2. Pick **RPA Step Signing** and **RPA Site Login** on **Sign steps** (the ones Run steps uses).\n3. Type the approver's address in **Settings → approver**.\n4. Type the same address in **Sign steps → Approver Allowlist**.\n5. Publish this workflow.",
+        "height": 260,
         "width": 460,
         "color": 4
       },
@@ -25,7 +25,7 @@
       "name": "Set once",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [480, -500]
+      "position": [480, -560]
     },
     {
       "parameters": { "inputSource": "passthrough" },
@@ -41,34 +41,94 @@
         "resource": "email",
         "operation": "send",
         "fromEmail": "n8n-rpa@localhost",
-        "toEmail": "approver@example.com",
-        "subject": "=Review: steps v{{ $json.version }} for {{ $json.name }}",
+        "toEmail": "={{ $('Settings').item.json.approver }}",
+        "subject": "=1 of 2, review: steps version {{ $json.version }} for {{ $json.name }}",
         "emailFormat": "html",
-        "html": "=<!-- Every value below comes from the run (page text, model output): each is HTML-escaped so it cannot restyle or hide parts of this email. -->\n<h2>Steps v{{ String($json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} are ready for review</h2>\n<p style=\"color:#b00020\"><b>Safety flags:</b> {{ String($json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}</p>\n<p><b>Evidence:</b> {{ String($json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}</p>\n<p><b>What changed:</b><br>{{ String($json.changeList ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]).split('\\n').join('<br>') }}</p>\n<p>Steps hash: <code>{{ String($json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}</code>. {{ ({ 'before,after': 'Screenshots before and after the change are attached.', 'after': 'A screenshot after the change is attached (a first run has no before).', 'before': 'A screenshot before the change is attached.' })[String($json.attachmentNames ?? '')] ?? 'No screenshots are attached.' }} A second email asks for your decision.</p>",
+        "html": "=<!-- Every value below comes from the run (page text, model output): each is shown as text, with look-alikes for <, > and & and a zero-width space in each address, so it cannot restyle or hide parts of this email and mail programs do not make a link of it. -->\n<h2>Steps version {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($json.version) }} for {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($json.name) }} are ready for review</h2>\n<p style=\"color:#b00020\"><b>Safety flags (what these steps do besides reading pages):</b> {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($json.safetyLine) }}</p>\n{{ String($json.leftOutList ?? '') ? '<p style=\"color:#b00020\"><b>Left out by the import (the source does these, the steps do not):</b><br>' + ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($json.leftOutList, true).split('\\n').join('<br>') + '</p>' : '' }}\n{{ ((r, n, e) => (Array.isArray(r) && r.length > 0 && r.length === n ? '<p><b>The steps</b> (what each one does, built from the step; a description that names another action or site is in red):</p><ol>' + r.map((x) => '<li>' + e(x.text) + (typeof x.describedAs === 'string' ? (x.quiet === true ? ' <i style=\"color:#7e8186\">(the author calls it: ' + e(x.describedAs) + ')</i>' : ' <b style=\"color:#b00020\">(described differently as: ' + e(x.describedAs) + ')</b>') : '') + (Array.isArray(x.marks) && x.marks.length ? ' <i>· ' + e(x.marks.map((m) => String(m).replace(/, starts as [\\s\\S]*$/, '')).join('; ')) + '</i>' : '') + (Array.isArray(x.each) && x.each.length ? '<ul>' + x.each.map((y) => '<li>On each page: ' + e(y.text) + (typeof y.describedAs === 'string' ? (y.quiet === true ? ' <i style=\"color:#7e8186\">(the author calls it: ' + e(y.describedAs) + ')</i>' : ' <b style=\"color:#b00020\">(described differently as: ' + e(y.describedAs) + ')</b>') : '') + (Array.isArray(y.marks) && y.marks.length ? ' <i>· ' + e(y.marks.join('; ')) + '</i>' : '') + '</li>').join('') + '</ul>' : '') + '</li>').join('') + '</ol>' : ''))($json.reviewSteps, Array.isArray($json.steps?.steps) ? $json.steps.steps.length : -1, ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))) }}\n<p><b>Evidence{{ String($json.evidenceLine ?? '').startsWith('Not replayed:') ? '' : ' (as reported by the run)' }}:</b> {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($json.evidenceLine) }}</p>\n{{ ((j, e) => (Array.isArray(j.reviewSteps) && j.reviewSteps.length > 0 && Array.isArray(j.steps?.steps) && j.reviewSteps.length === j.steps.steps.length && Array.isArray(j.changes) && j.changes.length > 0 && j.changes.every((c) => c && c.was === null) ? '' : '<p><b>What changed' + (String(j.evidenceLine ?? '').startsWith('Not replayed:') ? ' (as written; these steps were never run)' : ' (as reported by the run)') + ':</b><br>' + (Array.isArray(j.reviewChanges) && Array.isArray(j.changes) && j.reviewChanges.length === j.changes.length ? j.reviewChanges.map((x) => e(x.change) + ': ' + (x.change === 'Removed' ? e(x.was) : (x.step ? 'step ' + e(x.step) + (x.onEachPage ? ', on each page' : '') + ', ' : '') + e(x.text) + (typeof x.describedAs === 'string' ? (x.quiet === true ? ' <i style=\"color:#7e8186\">(the author calls it: ' + e(x.describedAs) + ')</i>' : ' <b style=\"color:#b00020\">(described differently as: ' + e(x.describedAs) + ')</b>') : '') + (typeof x.was === 'string' ? ' <i style=\"color:#7e8186\">(was: ' + e(x.was) + ')</i>' : ''))).join('<br>') : e(j.changeList, true).split('\\n').join('<br>')) + '</p>'))($json, ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))) }}\n<p>Steps hash: <code>{{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($json.hash) }}</code>. {{ ({ 'before,after': 'Screenshots before and after the change are attached.', 'after': 'A screenshot after the change is attached (a first run has no before).', 'before': 'A screenshot before the change is attached.' })[String($json.attachmentNames ?? '')] ?? 'No screenshots are attached.' }} The next email has the Approve and Reject buttons.</p>",
         "options": { "fileAttachments": "={{ $json.attachmentNames }}" }
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000304",
       "name": "Email repaired steps",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
-      "position": [220, 0]
+      "position": [880, 120]
     },
     {
       "parameters": {
         "assignments": {
           "assignments": [
             { "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003a1", "name": "name", "value": "={{ $('Repaired steps received').item.json.name }}", "type": "string" },
-            { "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003a2", "name": "approvalTimeoutHours", "value": 72, "type": "number" }
+            { "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003a2", "name": "approvalTimeoutHours", "value": 72, "type": "number" },
+            { "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003a3", "name": "approver", "value": "approver@example.com", "type": "string" }
           ]
         },
+        "includeOtherFields": true,
         "options": {}
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000305",
       "name": "Settings",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [440, 0],
-      "notes": "name comes from the Repaired steps item, so one approval workflow serves every feed on the same Site Login. Change approvalTimeoutHours here."
+      "position": [220, 0],
+      "notes": "name comes from the Repaired steps item, so one approval workflow serves every feed on the same Site Login. Change approvalTimeoutHours and approver here (approver also goes into Sign steps → Approver Allowlist, typed). The item and its screenshots pass through for the review email."
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "playwright_steps",
+        "columns": {
+          "column": [
+            { "name": "name", "type": "string" },
+            { "name": "version", "type": "number" },
+            { "name": "steps", "type": "string" },
+            { "name": "hash", "type": "string" },
+            { "name": "signature", "type": "string" },
+            { "name": "approvedBy", "type": "string" },
+            { "name": "approvedAt", "type": "string" },
+            { "name": "status", "type": "string" },
+            { "name": "expiresAt", "type": "string" }
+          ]
+        },
+        "options": { "createIfNotExists": true }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000320",
+      "name": "Create steps table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [660, -280],
+      "notes": "Creates playwright_steps and playwright_runs when they are missing, as templates 2 and 5 do. This branch runs first: it is the top one."
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "playwright_runs",
+        "columns": {
+          "column": [
+            { "name": "name", "type": "string" },
+            { "name": "code", "type": "string" },
+            { "name": "message", "type": "string" },
+            { "name": "guidance", "type": "string" },
+            { "name": "file", "type": "string" },
+            { "name": "account", "type": "string" },
+            { "name": "lane", "type": "string" },
+            { "name": "version", "type": "number" },
+            { "name": "hash", "type": "string" },
+            { "name": "confirmed", "type": "boolean" },
+            { "name": "rowCount", "type": "number" },
+            { "name": "durationMs", "type": "number" },
+            { "name": "llmTokens", "type": "number" },
+            { "name": "executionId", "type": "string" }
+          ]
+        },
+        "options": { "createIfNotExists": true }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000321",
+      "name": "Create run log table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [880, -280]
     },
     {
       "parameters": {
@@ -106,7 +166,7 @@
       "name": "Mark pending",
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
-      "position": [660, 0],
+      "position": [1100, -280],
       "notes": "Update-in-place by hash: the same repaired steps proposed again reuse their row."
     },
     {
@@ -129,17 +189,17 @@
       "name": "Desktop steps?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [880, 0],
-      "notes": "Desktop steps are approved with a form that also asks which steps are writes (Write Steps on Sign steps)."
+      "position": [660, 40],
+      "notes": "Desktop steps: one email with a form that also asks which steps are writes (Write Steps on Sign steps). Browser steps: the review email with the screenshots, then the Approve / Reject email."
     },
     {
       "parameters": {
         "resource": "email",
         "operation": "sendAndWait",
         "fromEmail": "n8n-rpa@localhost",
-        "toEmail": "approver@example.com",
-        "subject": "=Approve steps v{{ $('Repaired steps received').item.json.version }} for {{ $('Repaired steps received').item.json.name }}?",
-        "message": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nEvidence: {{ String($('Repaired steps received').item.json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nSafety flags: {{ String($('Repaired steps received').item.json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nHash: {{ String($('Repaired steps received').item.json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nReview digest: {{ String($('Repaired steps received').item.json.digest ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n\nApprove only if the change list in the previous email matches what you expect. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.",
+        "toEmail": "={{ $('Settings').item.json.approver }}",
+        "subject": "=2 of 2, approve steps version {{ $('Repaired steps received').item.json.version }} for {{ $('Repaired steps received').item.json.name }}?",
+        "message": "=Steps version {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.version) }} for {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.name) }}{{ String($('Repaired steps received').item.json.leftOutList ?? '') ? '\\nLeft out by the import (the source does these, the steps do not):\\n' + ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.leftOutList, true) : '' }}{{ ((r, n, e) => (Array.isArray(r) && r.length > 0 && r.length === n ? '\\nThe steps (what each one does, built from the step):\\n' + r.map((x, k) => (k + 1) + '. ' + e(x.text) + (typeof x.describedAs === 'string' ? (x.quiet === true ? ' (the author calls it: ' + e(x.describedAs) + ')' : ' ⚠ (described differently as: ' + e(x.describedAs) + ')') : '') + (Array.isArray(x.marks) && x.marks.length ? ' (' + e(x.marks.map((m) => String(m).replace(/, starts as [\\s\\S]*$/, '')).join('; ')) + ')' : '') + (Array.isArray(x.each) && x.each.length ? x.each.map((y) => '\\n   On each page: ' + e(y.text) + (typeof y.describedAs === 'string' ? (y.quiet === true ? ' (the author calls it: ' + e(y.describedAs) + ')' : ' ⚠ (described differently as: ' + e(y.describedAs) + ')') : '') + (Array.isArray(y.marks) && y.marks.length ? ' (' + e(y.marks.join('; ')) + ')' : '')).join('') : '')).join('\\n') : ''))($('Repaired steps received').item.json.reviewSteps, Array.isArray($('Repaired steps received').item.json.steps?.steps) ? $('Repaired steps received').item.json.steps.steps.length : -1, ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))) }}\nEvidence{{ String($('Repaired steps received').item.json.evidenceLine ?? '').startsWith('Not replayed:') ? '' : ' (as reported by the run)' }}: {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.evidenceLine) }}\nSafety flags: {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.safetyLine) }}{{ ((j, e, el) => (Array.isArray(j.reviewSteps) && j.reviewSteps.length > 0 && Array.isArray(j.steps?.steps) && j.reviewSteps.length === j.steps.steps.length && Array.isArray(j.changes) && j.changes.length > 0 && j.changes.every((c) => c && c.was === null) ? '' : '\\nWhat changed' + (String(j.evidenceLine ?? '').startsWith('Not replayed:') ? ' (as written; these steps were never run)' : ' (as reported by the run)') + ':\\n' + (Array.isArray(j.reviewChanges) && Array.isArray(j.changes) && j.reviewChanges.length === j.changes.length ? j.reviewChanges.map((x) => e(x.change) + ': ' + (x.change === 'Removed' ? e(x.was) : (x.step ? 'step ' + e(x.step) + (x.onEachPage ? ', on each page' : '') + ', ' : '') + e(x.text) + (typeof x.describedAs === 'string' ? (x.quiet === true ? ' (the author calls it: ' + e(x.describedAs) + ')' : ' ⚠ (described differently as: ' + e(x.describedAs) + ')') : '') + (typeof x.was === 'string' ? ' (was: ' + e(x.was) + ')' : ''))).join('\\n') : el(j.changeList))))($('Repaired steps received').item.json, ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b'))), ((s) => ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))(s, true))) }}\n\nApprove: these exact steps are signed and n8n runs them with the stored login, without asking again, until the site changes. Reject: nothing is signed; the version in use, if any, stays in use. The two values below identify what you are approving; you do not need to compare them by hand. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.\nHash: {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.hash) }}\nReview digest: {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.digest) }}",
         "approvalOptions": { "values": { "approvalType": "double", "approveLabel": "Approve", "disapproveLabel": "Reject" } },
         "options": {
           "limitWaitTime": {
@@ -159,36 +219,32 @@
         "resource": "email",
         "operation": "sendAndWait",
         "fromEmail": "n8n-rpa@localhost",
-        "toEmail": "approver@example.com",
-        "subject": "=Approve desktop steps v{{ $('Repaired steps received').item.json.version }} for {{ $('Repaired steps received').item.json.name }}?",
-        "message": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nEvidence: {{ String($('Repaired steps received').item.json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nSafety flags: {{ String($('Repaired steps received').item.json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nHash: {{ String($('Repaired steps received').item.json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nReview digest: {{ String($('Repaired steps received').item.json.digest ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n\nThe steps, numbered as Write steps counts them:\n{{ String($('Repaired steps received').item.json.changeList ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n\nApprove only if the change list in the previous email matches what you expect. These desktop steps were not replayed. The import never marks a step as a write: in Write steps, list the numbers of the steps that save, post or submit (the safety flags name the candidates), for example 16. Leave it empty if no step writes. Listed steps are signed as writes, so the desktop runner lets them use the write controls and gated keys of its policy. The runner refuses a write only on those: leaving a step unlisted does not stop it from saving unless its control is in the runner policy. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.",
+        "toEmail": "={{ $('Settings').item.json.approver }}",
+        "subject": "=Approve desktop steps version {{ $('Repaired steps received').item.json.version }} for {{ $('Repaired steps received').item.json.name }}?",
+        "message": "=Desktop steps version {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.version) }} for {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.name) }}, for your approval.\n{{ ((steps, e) => ['Opens ' + e($('Repaired steps received').item.json.steps?.app?.exe) + ' on the desktop runner.'].concat(steps.map((s, i) => (s.expectFile ? i + 1 : 0)).filter((i) => i).map((i) => 'Returns a file to n8n: step ' + i + '.'), ['Not tried by the import: read every step before you approve.']).join('\\n') + (String($('Repaired steps received').item.json.leftOutList ?? '') ? '\\n\\n⚠ Left out by the import:\\n' + ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.leftOutList, true) : '') + '\\n\\nThe steps:\\n' + ((r) => (Array.isArray(r) && r.length === steps.length ? r.map((x, i) => (i + 1) + '. ' + e(x.text) + (typeof x.describedAs === 'string' ? (x.quiet === true ? ' (the author calls it: ' + e(x.describedAs) + ')' : ' ⚠ (described differently as: ' + e(x.describedAs) + ')') : '') + (Array.isArray(x.marks) && x.marks.length ? ' (' + e(x.marks.map((m) => String(m).replace(/, starts as [\\s\\S]*$/, '')).join('; ')) + ')' : '')).join('\\n') : steps.map((s, i) => (i + 1) + '. ' + e(((field, isVar, file) => (s.fill ? (file ? 'Save ' + file[1] + ' into the run\\'s export folder' : isVar(s.fill.value) ? 'Type into ' + field : 'Type \"' + String(s.fill.value) + '\" into ' + field) : s.select ? (isVar(s.select.option) ? 'Choose an item in ' + field : 'Choose \"' + String(s.select.option) + '\" in ' + field) : s.key ? 'Press ' + String(s.key.key) + (field ? ' in ' + field : '') : s.check ? (s.check.checked === false ? 'Uncheck ' : 'Check ') + field : String(s.intent ?? '')))(((t) => (t && t.uia && Array.isArray(t.uia.path) && t.uia.path.length ? String(t.uia.path[t.uia.path.length - 1].name ?? t.uia.path[t.uia.path.length - 1].automationId ?? '') : ''))(s.fill?.field ?? s.select?.field ?? s.key?.target ?? s.check?.field) || String(s.intent ?? ''), (v) => /\\x7b\\x7b\\s*var\\./.test(String(v ?? '')), s.fill ? /^\\x7b\\x7b\\$exportDir\\x7d\\x7d[\\\\/](.+)$/.exec(String(s.fill.value ?? '')) : null)) + ((m) => (m.length ? ' (' + e(m.join('; ')) + ')' : ''))(Array.from(new Set((JSON.stringify(Object.assign({}, s, { intent: undefined })).match(/\\x7b\\x7bvar\\.([A-Za-z_][A-Za-z0-9_]*)\\x7d\\x7d/g) ?? []).map((v) => v.slice(6, -2)))).map((v) => ([].concat($('Repaired steps received').item.json.secretVariables ?? []).includes(v) ? 'secret variable ' : 'variable ') + v).concat(s.expectFile ? ['returns a file'] : [], s.read && s.read.as ? ['gives its text to n8n as ' + s.read.as] : []))).join('\\n')))($('Repaired steps received').item.json.reviewSteps))(Array.isArray($('Repaired steps received').item.json.steps?.steps) ? $('Repaired steps received').item.json.steps.steps : [], ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))) }}\n\nClick Review and decide, tick the steps that save, send or submit (none is ticked for you), then approve or reject. Ticked steps are allowed to save or send. Allow this app… in the recorder protects the ticked buttons it recorded that have an id of their own, not the standard buttons of Windows dialogs (such as Save in a Save As dialog, OK or Yes), so leave such a step ticked: an unticked step is stopped when it presses a protected button, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape in a window that holds one. While the policy of the app protects no button, nothing is stopped.\nApprove and sign: these exact steps are signed, the ticked steps as writes, and n8n runs them on the desktop runner without asking again, until you approve another version. Reject: nothing is signed; the version in use, if any, stays in use. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.\n\nDetails of every step (how each one finds its control):{{ String($('Repaired steps received').item.json.leftOutList ?? '') ? '\\nLeft out by the import (the source does these, the steps do not):\\n' + ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.leftOutList, true) : '' }}\nEvidence: {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.evidenceLine) }}\nSafety flags: {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.safetyLine) }}\n{{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.changeList, true) }}\nThe two values below identify what you are approving; you do not need to compare them by hand.\nHash: {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.hash) }}\nReview digest: {{ ((s, lines) => String(s ?? '').replace(lines ? /[&<>]|\\\\(?=n)/g : /[&<>\\r\\n\\u2028\\u2029]|\\\\(?=n)/g, (c) => ({ '&': '\\uff06', '<': '\\u2039', '>': '\\u203a', '\\\\': '\\uff3c' })[c] ?? ' ').replace(/\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s\\u2039\\u203a]*|\\b(?:[a-z0-9-]+\\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\\b)[a-z]{2,}\\b[^\\s\\u2039\\u203a]*/gi, (u) => u.split('://').join(':\\u200b//').split('.').join('.\\u200b')))($('Repaired steps received').item.json.digest) }}",
         "options": {
           "messageButtonLabel": "Review and decide",
           "responseFormTitle": "Approve desktop steps",
-          "responseFormDescription": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}. Write steps: the numbers of the steps that save, post or submit, from the numbered list in the email (candidates: {{ ($('Repaired steps received').item.json.safetyFlags ?? []).filter((f) => String(f).startsWith('candidate write: step ')).map((f) => 'step ' + /^candidate write: step (\\d+)/.exec(String(f))[1]).join(', ') || 'none' }}). The runner refuses a write only on the controls and keys its policy lists: an unlisted step can still save through any other control.",
+          "responseFormDescription": "=Steps version {{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}. Tick the steps that save, send or submit, from the numbered list in the email; none is ticked for you. Ticked steps are allowed to save or send. Allow this app… in the recorder protects the ticked buttons it recorded that have an id of their own, not the standard buttons of Windows dialogs (such as Save in a Save As dialog, OK or Yes), so leave such a step ticked: an unticked step is stopped when it presses a protected button, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape in a window that holds one. While the policy of the app protects no button, nothing is stopped.",
           "limitWaitTime": {
             "values": { "limitType": "afterTimeInterval", "resumeAmount": "={{ $('Settings').item.json.approvalTimeoutHours }}", "resumeUnit": "hours" }
           }
         },
         "responseType": "customForm",
-        "formFields": {
-          "values": [
-            { "fieldLabel": "Decision", "fieldType": "dropdown", "fieldOptions": { "values": [{ "option": "Approve" }, { "option": "Reject" }] }, "requiredField": true },
-            { "fieldLabel": "Write steps", "placeholder": "16" }
-          ]
-        }
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.stringify([{ fieldLabel: 'Decision', fieldType: 'dropdown', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true }].concat(((c) => c.length ? [{ fieldLabel: 'Steps that save, send or submit', fieldType: 'checkbox', fieldOptions: { values: c.map((o) => ({ option: o })) } }] : [])(($('Repaired steps received').item.json.safetyFlags ?? []).map((f) => /^candidate write: step (\\d+) \\((.*)\\) may save, post or submit/.exec(String(f))).filter((m) => m).map((m) => 'Step ' + m[1] + ': ' + m[2].split(',').join(';').split('<').join('\\u2039').split('>').join('\\u203a'))), [{ fieldLabel: 'Any other step that saves, sends or submits (its number)', fieldType: 'text', placeholder: '7, 9' }])).split('$').join('\\\\u0024') }}"
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000317",
       "name": "Ask for approval (desktop steps)",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [1100, 120],
-      "notes": "The button is a signed link sent only to the approver's mailbox, to a form: Decision and Write steps. Without an answer it resumes after approvalTimeoutHours with no data."
+      "notes": "One email: the numbered steps and a button, a signed link sent only to the approver's mailbox, to a form: Decision, and the candidate writes as tick boxes (none ticked) with a field for other step numbers. Without an answer it resumes after approvalTimeoutHours with no data."
     },
     {
       "parameters": {
         "mode": "raw",
-        "jsonOutput": "={{ $json.data === undefined ? {} : { data: { approved: $json.data['Decision'] === 'Approve', writeSteps: String($json.data['Write steps'] ?? '') } } }}",
+        "jsonOutput": "={{ $json.data === undefined ? {} : { data: { approved: $json.data['Decision'] === 'Approve and sign', writeSteps: [].concat($json.data['Steps that save, send or submit'] ?? []).map((l) => (/^Step (\\d+):/.exec(String(l)) ?? [])[1]).filter((n) => n).concat(String($json.data['Any other step that saves, sends or submits (its number)'] ?? '')).join(' ').trim() } } }}",
         "options": {}
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000318",
@@ -196,7 +252,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [1320, 120],
-      "notes": "The form answer in the shape Ask for approval gives: data.approved, plus data.writeSteps. No answer: no data, so Timed out? is true."
+      "notes": "The form answer in the shape Ask for approval gives: data.approved, plus data.writeSteps (the numbers of the ticked steps and of the typed ones). No answer: no data, so Timed out? is true."
     },
     {
       "parameters": {
@@ -261,14 +317,14 @@
       "parameters": {
         "operation": "signSteps",
         "approved": "={{ $('Timed out?').item.json.data.approved }}",
-        "approverId": "approver@example.com",
+        "approverId": "={{ $('Settings').item.json.approver }}",
         "approverAllowlist": "approver@example.com",
         "writeSteps": "={{ $('Timed out?').item.json.data.writeSteps ?? '' }}"
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000311",
       "name": "Sign steps",
       "type": "n8n-nodes-rpa.playwright",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [1980, 80],
       "onError": "continueErrorOutput",
       "notes": "Outputs: the active or rejected record (0), error (1)."
@@ -346,7 +402,7 @@
           "conditions": [
             { "keyName": "name", "condition": "eq", "keyValue": "={{ $('Settings').item.json.name }}" },
             { "keyName": "status", "condition": "eq", "keyValue": "active" },
-            { "keyName": "version", "condition": "lte", "keyValue": "={{ $('Repaired steps received').item.json.version }}" },
+            { "keyName": "version", "condition": "lte", "keyValue": "={{ $('Repaired steps received').item.json.baseVersion === null ? 2147483647 : $('Repaired steps received').item.json.version }}" },
             { "keyName": "id", "condition": "neq", "keyValue": "={{ $json.id }}" }
           ]
         },
@@ -365,17 +421,17 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [2640, -80],
-      "notes": "Every other active row of the same name with this version or a lower one becomes superseded (its id is not the row Save signed steps just wrote), so only the steps just approved are active. A desktop import is always version 1, so approving it again retires the earlier approval. A higher version approved meanwhile stays active."
+      "notes": "Every other active row of the same name with this version or a lower one becomes superseded (its id is not the row Save signed steps just wrote), so only the steps just approved are active. An approved first version (an import) replaces every other active row of its name, whatever its version, so a hand fix imported under the name of a running bot is what runs next. For a repair (it has a base version), a higher version approved meanwhile stays active."
     },
     {
       "parameters": {
         "resource": "email",
         "operation": "send",
         "fromEmail": "n8n-rpa@localhost",
-        "toEmail": "approver@example.com",
-        "subject": "=Signed: steps v{{ $('Sign steps').item.json.version }} for {{ $('Sign steps').item.json.name }} are active",
+        "toEmail": "={{ $('Settings').item.json.approver }}",
+        "subject": "=Signed: steps version {{ $('Sign steps').item.json.version }} for {{ $('Sign steps').item.json.name }} are active",
         "emailFormat": "text",
-        "text": "=Steps v{{ $('Sign steps').item.json.version }} for {{ $('Sign steps').item.json.name }} are signed and active (hash {{ $('Sign steps').item.json.hash }}), approved by {{ $('Sign steps').item.json.approvedBy }} at {{ $('Sign steps').item.json.approvedAt }}.\n{{ $('Sign steps').item.json.writeLine ?? '' }}",
+        "text": "=Steps version {{ $('Sign steps').item.json.version }} for {{ $('Sign steps').item.json.name }} are signed and active, approved by {{ $('Sign steps').item.json.approvedBy }} at {{ $('Sign steps').item.json.approvedAt }}.\n{{ ((s, r) => (s.writeLine ? s.writeLine + '.' + ((n) => (s.hash !== r.hash && n.length ? ' The hash changed because ' + (n.length === 1 ? 'step ' + n[0] + ' was marked as a write.' : 'steps ' + n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1] + ' were marked as writes.') : ''))((s.writeSteps ?? []).map((x) => x.step)) + '\\n' : ''))($('Sign steps').item.json, $('Repaired steps received').item.json) }}\nReference: hash {{ $('Sign steps').item.json.hash }}, review digest {{ $('Repaired steps received').item.json.digest }}.",
         "options": {}
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000319",
@@ -399,7 +455,7 @@
         },
         "columns": {
           "mappingMode": "defineBelow",
-          "value": { "status": "rejected", "approvedBy": "approver@example.com", "approvedAt": "={{ $now.toISO() }}" },
+          "value": { "status": "rejected", "approvedBy": "={{ $('Settings').item.json.approver }}", "approvedAt": "={{ $now.toISO() }}" },
           "matchingColumns": [],
           "schema": [
             { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
@@ -418,10 +474,11 @@
     }
   ],
   "connections": {
-    "Repaired steps received": { "main": [[{ "node": "Email repaired steps", "type": "main", "index": 0 }]] },
-    "Email repaired steps": { "main": [[{ "node": "Settings", "type": "main", "index": 0 }]] },
-    "Settings": { "main": [[{ "node": "Mark pending", "type": "main", "index": 0 }]] },
-    "Mark pending": { "main": [[{ "node": "Desktop steps?", "type": "main", "index": 0 }]] },
+    "Repaired steps received": { "main": [[{ "node": "Settings", "type": "main", "index": 0 }]] },
+    "Settings": { "main": [[{ "node": "Create steps table", "type": "main", "index": 0 }, { "node": "Desktop steps?", "type": "main", "index": 0 }]] },
+    "Create steps table": { "main": [[{ "node": "Create run log table", "type": "main", "index": 0 }]] },
+    "Create run log table": { "main": [[{ "node": "Mark pending", "type": "main", "index": 0 }]] },
+    "Email repaired steps": { "main": [[{ "node": "Ask for approval", "type": "main", "index": 0 }]] },
     "Ask for approval": { "main": [[{ "node": "Timed out?", "type": "main", "index": 0 }]] },
     "Timed out?": { "main": [[{ "node": "Record expiry", "type": "main", "index": 0 }], [{ "node": "Repaired steps to sign", "type": "main", "index": 0 }]] },
     "Repaired steps to sign": { "main": [[{ "node": "Sign steps", "type": "main", "index": 0 }]] },
@@ -429,7 +486,7 @@
     "Save signed steps": { "main": [[{ "node": "Supersede older versions", "type": "main", "index": 0 }, { "node": "Email signed steps", "type": "main", "index": 0 }]] },
     "Signed?": { "main": [[{ "node": "Save signed steps", "type": "main", "index": 0 }], [{ "node": "Record rejection", "type": "main", "index": 0 }]] },
     "Desktop steps?": {
-      "main": [[{ "node": "Ask for approval (desktop steps)", "type": "main", "index": 0 }], [{ "node": "Ask for approval", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Ask for approval (desktop steps)", "type": "main", "index": 0 }], [{ "node": "Email repaired steps", "type": "main", "index": 0 }]]
     },
     "Ask for approval (desktop steps)": { "main": [[{ "node": "Desktop answer", "type": "main", "index": 0 }]] },
     "Desktop answer": { "main": [[{ "node": "Timed out?", "type": "main", "index": 0 }]] }

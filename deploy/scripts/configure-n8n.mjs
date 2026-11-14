@@ -26,18 +26,17 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+// Shared with `npx n8n-nodes-rpa setup`: the API client, the redaction and the URL checks.
+import {
+  browserCredentialData, createClient, createRedactor, findCredential, MIN_BROWSER_TOKEN_LENGTH, parseBrowserUrl, parseN8nUrl,
+} from '../../packages/n8n-nodes-rpa/setup/n8n-api.mjs';
 
 const CREDENTIAL_NAME = 'RPA Browser';
-// Stored identifiers (never renamed): the credential type and the mode value of Browser Server.
+// Stored identifier (never renamed): the credential type.
 const CREDENTIAL_TYPE = 'playwrightBrowserApi';
-const BROWSER_SERVER_MODE = 'playwright';
 const NODE_PACKAGE = 'n8n-nodes-rpa';
-const TEMPLATE_FILES = ['0-connection-check.json', '1-create-tables.json', '2-data-feed.json', '3-approve-steps.json', 'hello-world.json'];
+const TEMPLATE_FILES = ['0-connection-check.json', '2-data-feed.json', '3-approve-steps.json', 'hello-world.json'];
 const DEFAULT_TEMPLATES = fileURLToPath(new URL('../../packages/n8n-nodes-rpa/templates/', import.meta.url));
-const MIN_TOKEN_LENGTH = 32; // the gate refuses a shorter token
-const PAGE_LIMIT = 250; // the public API's maximum
-const MAX_PAGES = 400;
-const TIMEOUT_MS = 30_000;
 const USAGE = [
   'Usage: node deploy/scripts/configure-n8n.mjs --n8n-url <url> --endpoint <ws-url> [--templates <dir>] [--project-id <id>]',
   '  with N8N_API_KEY and RPA_BROWSER_TOKEN exported, never typed inline (shell history):',
@@ -49,29 +48,15 @@ const USAGE = [
   '  --project-id  the n8n project to create the credential and the workflows in (default: the API key owner\'s personal project)',
 ].join('\n');
 
-const secrets = [];
-/** Replaces every secret, and its URL-encoded and JSON-escaped forms, with ***. */
-function redact(text) {
-  let out = String(text);
-  for (const s of secrets) {
-    for (const form of new Set([s, encodeURIComponent(s), JSON.stringify(s).slice(1, -1)])) out = out.split(form).join('***');
-  }
-  return out;
-}
+const { add: addSecret, redact } = createRedactor();
 const say = (line = '') => process.stdout.write(`${redact(line)}\n`);
 const warn = (line) => process.stderr.write(`${redact(line)}\n`);
 
 class UsageError extends Error {}
 
-/** localhost, 127.0.0.0/8 or ::1: http:// there never leaves the machine. */
-function isLoopback(hostname) {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  return host === 'localhost' || host.endsWith('.localhost') || host === '::1' || /^127(\.\d{1,3}){3}$/.test(host);
-}
-
 function readConfig(argv, env) {
   // Registered first, so that no message below can print them.
-  for (const s of [env.N8N_API_KEY, env.RPA_BROWSER_TOKEN]) if (s) secrets.push(s);
+  for (const s of [env.N8N_API_KEY, env.RPA_BROWSER_TOKEN]) addSecret(s);
   let values;
   try {
     ({ values } = parseArgs({
@@ -89,26 +74,18 @@ function readConfig(argv, env) {
   }
   if (values.help) return { help: true };
 
-  const n8nUrl = values['n8n-url'];
-  let n8n;
-  try { n8n = n8nUrl && /^https?:\/\/[^\s'"]+$/.test(n8nUrl) ? new URL(n8nUrl) : null; } catch { n8n = null; }
-  if (!n8n) throw new UsageError(`--n8n-url must be n8n's http(s) base URL, for example https://n8n.example.com.\n${USAGE}`);
-  if (n8n.username || n8n.password) throw new UsageError('--n8n-url must not carry a user or password: the API key goes in N8N_API_KEY.');
-  if (n8n.search || n8n.hash) throw new UsageError('--n8n-url must not carry a query or fragment.');
+  const n8n = parseN8nUrl(values['n8n-url'], '--n8n-url');
+  if (n8n.problem) throw new UsageError(`${n8n.problem}\n${USAGE}`);
   const projectId = values['project-id'];
   if (projectId !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(projectId)) throw new UsageError('--project-id must be an n8n project id (letters, digits, _ and -).');
-  let endpoint;
-  try { endpoint = new URL(values.endpoint ?? ''); } catch { endpoint = null; }
-  if (!endpoint || (endpoint.protocol !== 'ws:' && endpoint.protocol !== 'wss:')) {
-    throw new UsageError(`--endpoint must be the browser service's ws:// or wss:// address (the browser_endpoint output).\n${USAGE}`);
-  }
-  if (endpoint.username || endpoint.password || endpoint.search) throw new UsageError('--endpoint must not carry a user, password or query: the token goes in RPA_BROWSER_TOKEN.');
+  const endpoint = parseBrowserUrl(values.endpoint, '--endpoint', "the browser service's ws:// or wss:// address (the browser_endpoint output)");
+  if (endpoint.problem) throw new UsageError(`${endpoint.problem}\n${USAGE}`);
 
   const apiKey = env.N8N_API_KEY ?? '';
   if (!apiKey.trim()) throw new UsageError(`N8N_API_KEY is not set. Create an API key in n8n (Settings -> n8n API), as the owner or an admin, and export it.\n${USAGE}`);
   const token = env.RPA_BROWSER_TOKEN ?? '';
   if (!token) throw new UsageError(`RPA_BROWSER_TOKEN is not set. Read the gate token into it (the n8n_settings notes show how), never paste it into a flag.\n${USAGE}`);
-  if (token.length < MIN_TOKEN_LENGTH) throw new UsageError(`RPA_BROWSER_TOKEN is shorter than ${MIN_TOKEN_LENGTH} characters; the browser service refuses such a token.`);
+  if (token.length < MIN_BROWSER_TOKEN_LENGTH) throw new UsageError(`RPA_BROWSER_TOKEN is shorter than ${MIN_BROWSER_TOKEN_LENGTH} characters; the browser service refuses such a token.`);
 
   const templatesDir = values.templates ?? DEFAULT_TEMPLATES;
   const missing = TEMPLATE_FILES.filter((f) => !existsSync(join(templatesDir, f)));
@@ -120,89 +97,48 @@ function readConfig(argv, env) {
     return { file, template: t };
   });
 
-  const base = `${n8n.origin}${n8n.pathname.replace(/\/+$/, '')}/api/v1`;
-  return { help: false, base, plaintext: n8n.protocol === 'http:' && !isLoopback(n8n.hostname), endpoint: endpoint.href, apiKey, token, templates, projectId };
-}
-
-/** One public API call. Never throws on an HTTP status; throws only on a network failure (message redacted). */
-async function api(cfg, method, path, body) {
-  let res;
-  try {
-    res = await fetch(`${cfg.base}${path}`, {
-      method,
-      headers: { 'X-N8N-API-KEY': cfg.apiKey, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      redirect: 'error', // never replay the API key to another host
-    });
-  } catch (err) {
-    throw new Error(redact(`${method} ${cfg.base}${path} failed: ${err.cause?.code ?? err.cause?.message ?? err.message}`));
-  }
-  const text = await res.text();
-  let json = null;
-  try { json = text ? JSON.parse(text) : null; } catch { json = null; }
-  return { status: res.status, json, text };
-}
-
-/** The server's error message, redacted and cut short; never the raw body of a credential request. */
-function reason(r) {
-  const message = typeof r.json?.message === 'string' ? r.json.message : r.text;
-  return redact(`HTTP ${r.status}${message ? `: ${message.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`);
-}
-
-/** Every item of a paginated list (cursor pagination), or the failing response. */
-async function listAll(cfg, path, filter = {}) {
-  const items = [];
-  let cursor = null;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const query = new URLSearchParams({ ...filter, limit: String(PAGE_LIMIT), ...(cursor ? { cursor } : {}) });
-    const r = await api(cfg, 'GET', `${path}?${query}`);
-    if (r.status !== 200 || !Array.isArray(r.json?.data)) return { ok: false, response: r };
-    items.push(...r.json.data);
-    cursor = r.json.nextCursor;
-    if (!cursor) return { ok: true, items };
-  }
-  return { ok: false, response: { status: 0, json: { message: `more than ${MAX_PAGES} pages` }, text: '' } };
+  const client = createClient({ base: n8n.base, apiKey, redact });
+  return { help: false, base: n8n.base, plaintext: n8n.plaintext, endpoint: endpoint.href, token, templates, projectId, ...client };
 }
 
 const project = (cfg) => (cfg.projectId ? { projectId: cfg.projectId } : {});
 
 async function configureCredential(cfg) {
   // The schema endpoint answers 404 for a type n8n has not loaded: the community package is not installed (yet).
-  const schema = await api(cfg, 'GET', `/credentials/schema/${CREDENTIAL_TYPE}`);
+  const schema = await cfg.api('GET', `/credentials/schema/${CREDENTIAL_TYPE}`);
   if (schema.status === 404) {
     return { fatal: `n8n does not know the credential type ${CREDENTIAL_TYPE}: install the ${NODE_PACKAGE} community package on the main instance and every worker, restart n8n, then run this again.` };
   }
-  if (schema.status === 401) return { fatal: `n8n refused the API key (${reason(schema)}). Check N8N_API_KEY.` };
-  if (schema.status !== 200) return { fatal: `Could not read the ${CREDENTIAL_TYPE} credential schema (${reason(schema)}). Is this n8n 2.41 or later with the public API on?` };
-  const data = { mode: BROWSER_SERVER_MODE, wsUrl: cfg.endpoint, token: cfg.token, privateNetwork: new URL(cfg.endpoint).protocol === 'ws:' };
+  if (schema.status === 401) return { fatal: `n8n refused the API key (${cfg.reason(schema)}). Check N8N_API_KEY.` };
+  if (schema.status !== 200) return { fatal: `Could not read the ${CREDENTIAL_TYPE} credential schema (${cfg.reason(schema)}). Is this n8n 2.41 or later with the public API on?` };
+  const data = browserCredentialData(cfg.endpoint, cfg.token);
   const known = Object.keys(schema.json?.properties ?? {});
   const unknown = Object.keys(data).filter((k) => !known.includes(k));
   if (unknown.length) return { fatal: `The installed ${NODE_PACKAGE} has no credential field ${unknown.join(', ')}: update the package, or this script.` };
 
-  const list = await listAll(cfg, '/credentials');
+  const list = await cfg.listAll('/credentials');
   if (!list.ok) {
     const r = list.response;
     const why = r.status === 403 || r.status === 404
       ? 'the API key may not list credentials (scope credential:list, the owner or an admin only)'
-      : `listing credentials failed (${reason(r)})`;
+      : `listing credentials failed (${cfg.reason(r)})`;
     return { failed: `Credential "${CREDENTIAL_NAME}" not created: ${why}, so this script cannot tell whether it exists already. Rerun with an owner or an admin API key, or create it in n8n: Mode Browser Server, Endpoint URL ${cfg.endpoint}, Private Network Endpoint ${data.privateNetwork ? 'on' : 'off'}, Token = RPA_BROWSER_TOKEN.` };
   }
   // With --project-id, only a credential shared with that project counts (the list item's shared[].id).
   const inProject = (c) => !cfg.projectId || (Array.isArray(c?.shared) && c.shared.some((p) => p?.id === cfg.projectId));
-  const existing = list.items.find((c) => c?.name === CREDENTIAL_NAME && inProject(c));
-  if (existing && existing.type !== CREDENTIAL_TYPE) {
-    return { failed: `A credential named "${CREDENTIAL_NAME}" (id ${existing.id}) exists with type ${existing.type}, not ${CREDENTIAL_TYPE}. Rename it in n8n, then run this again.` };
+  const { existing, conflict } = findCredential(list.items, CREDENTIAL_NAME, CREDENTIAL_TYPE, inProject);
+  if (conflict) {
+    return { failed: `A credential named "${CREDENTIAL_NAME}" (id ${conflict.id}) exists with type ${conflict.type}, not ${CREDENTIAL_TYPE}. Rename it in n8n, then run this again.` };
   }
   if (existing) return { line: `exists   credential "${CREDENTIAL_NAME}" (id ${existing.id}); its endpoint and token were left as they are` };
-  const created = await api(cfg, 'POST', '/credentials', { name: CREDENTIAL_NAME, type: CREDENTIAL_TYPE, data, ...project(cfg) });
-  if (created.status !== 200 && created.status !== 201) return { failed: `Credential "${CREDENTIAL_NAME}" not created: ${reason(created)}` };
+  const created = await cfg.api('POST', '/credentials', { name: CREDENTIAL_NAME, type: CREDENTIAL_TYPE, data, ...project(cfg) });
+  if (created.status !== 200 && created.status !== 201) return { failed: `Credential "${CREDENTIAL_NAME}" not created: ${cfg.reason(created)}` };
   return { line: `created  credential "${CREDENTIAL_NAME}" (id ${created.json?.id ?? '?'}): Browser Server, ${cfg.endpoint}` };
 }
 
 async function importTemplates(cfg) {
-  const list = await listAll(cfg, '/workflows', cfg.projectId ? { projectId: cfg.projectId } : {});
-  if (!list.ok) return { lines: [], failed: [`Templates not imported: listing workflows failed (${reason(list.response)}).`] };
+  const list = await cfg.listAll('/workflows', cfg.projectId ? { projectId: cfg.projectId } : {});
+  if (!list.ok) return { lines: [], failed: [`Templates not imported: listing workflows failed (${cfg.reason(list.response)}).`] };
   const names = new Set(list.items.map((w) => w?.name));
   const lines = [];
   const failed = [];
@@ -214,8 +150,8 @@ async function importTemplates(cfg) {
     // Only the keys POST /workflows accepts; credentials are left for the user to pick.
     const nodes = template.nodes.map(({ credentials: _credentials, ...node }) => node);
     const body = { name: template.name, nodes, connections: template.connections, settings: template.settings ?? { executionOrder: 'v1' }, ...project(cfg) };
-    const r = await api(cfg, 'POST', '/workflows', body);
-    if (r.status !== 200 && r.status !== 201) failed.push(`Workflow "${template.name}" (${file}) not imported: ${reason(r)}`);
+    const r = await cfg.api('POST', '/workflows', body);
+    if (r.status !== 200 && r.status !== 201) failed.push(`Workflow "${template.name}" (${file}) not imported: ${cfg.reason(r)}`);
     else {
       names.add(template.name);
       lines.push(`created  workflow "${template.name}" (id ${r.json?.id ?? '?'})`);
@@ -260,8 +196,7 @@ async function main() {
   say();
   say('Next, in n8n:');
   say(`1. Open "RPA: 0 Connection check", pick the "${CREDENTIAL_NAME}" credential on the RPA node, replace the URL in "Site to check" with your login page, and run it. The screenshot proves the browser service reaches the site.`);
-  say('2. Run "RPA: 1 Create tables (run once)" once: it creates the two Data Tables.');
-  say(`3. In "RPA: 2 Data feed", "RPA: 3 Approve steps" and "RPA: Hello world", pick the credentials on each node (the sticky notes list them). The imported workflows are inactive.`);
+  say(`2. In "RPA: 2 Data feed", "RPA: 3 Approve steps" and "RPA: Hello world", pick the credentials on each node (the sticky notes list them). The imported workflows are inactive; the data feed creates the two Data Tables on its first run.`);
   if (failures.length) {
     say();
     for (const f of failures) warn(`NOT DONE: ${f}`);

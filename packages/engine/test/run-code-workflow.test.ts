@@ -196,6 +196,18 @@ describe('signIn with a code from the workflow', () => {
     } finally { await session.close(); }
   });
 
+  it('a rejected password is login_failed on the signIn step, and the provider is never asked for a code', async () => {
+    const provider = vi.fn<CodeProvider>(async () => totp(SEED));
+    const ctx = await atLogin({ secrets: { ...NO_SEED, password: 'wrong-pass-123' }, codeProvider: provider });
+    try {
+      const r = await runSteps(ctx, WORKFLOW_STEPS);
+      if (r.ok) throw new Error('expected failure');
+      expect(r.failure).toMatchObject({ index: 0, message: 'detected:login_failed: the site sent the sign-in page back' });
+      expect(classifyFailure({ violations: [], failure: r.failure })).toBe('login_failed');
+      expect(provider).not.toHaveBeenCalled();
+    } finally { await session.close(); }
+  });
+
   it('source "seed" (and no source) keeps the TOTP secret path and never calls the provider', async () => {
     const provider = vi.fn<CodeProvider>(async () => wrongCode());
     for (const steps of [withSource(SIGN_IN_STEPS, 'seed'), SIGN_IN_STEPS]) {

@@ -1,24 +1,28 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
+import { NO_MODEL } from '../nodes/Playwright/operations/common.js';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import {
   NodeHelpers, Workflow, type INodeCredentialDescription, type INodeParameters, type INodeProperties, type INodePropertyOptions, type INodeType, type INodeTypes,
 } from 'n8n-workflow';
-import { parseScript } from 'n8n-rpa-engine';
+import { networkSentence, parseScript, VALUE_NOT_TAKEN, valueNotTaken } from 'n8n-rpa-engine';
 import { INPUTS_EXPRESSION, nodeInputs, nodeOutputs, OUTPUTS_EXPRESSION } from '../nodes/Playwright/description/io.js';
 import { OPERATIONS, properties, SUBTITLE, URL_HINT } from '../nodes/Playwright/description/index.js';
 import { ALL_OPERATIONS, ID_PATTERN_OPTION, QUICK_OPERATIONS } from '../nodes/Playwright/description/options.js';
 import { STEPS_PLACEHOLDER, UNSIGNED_NOTICE } from '../nodes/Playwright/description/runSteps.js';
-import { GUIDANCE } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, SAYS_WHAT_TO_DO, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
+import { runnerAppNotAllowed, secretAppNotListed, secretHostNotListed } from '../../engine/src/messages.js';
+import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut } from '../nodes/Playwright/execute.js';
 import { COMPILERS, quickFieldNames, type QuickOp } from '../nodes/Playwright/operations/quick.js';
-import { executeRunSteps, readRunStepsParams } from '../nodes/Playwright/operations/runSteps.js';
+import { executeRunSteps, STEPS_EMPTY_NEEDS_REPAIR } from '../nodes/Playwright/operations/runSteps.js';
+import { readRunStepsParams } from '../nodes/Playwright/operations/runStepsParams.js';
 import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { fakeEngine } from './fake-engine.js';
 import { harness } from './harness.js';
 
 const node = new Playwright();
 const d = node.description;
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 const AI_REPAIR_EXPRESSION = "={{ $('Get pending').all().filter(i => i.json.hash && DateTime.fromISO(i.json.expiresAt) > $now).length === 0 }}";
 const MAIN = { type: 'main', displayName: '' };
 const MODEL = { type: 'ai_languageModel', displayName: 'Model', maxConnections: 1, required: false };
@@ -38,7 +42,7 @@ const SPEC_OPERATIONS = [
   { value: 'extract', action: 'Extract a table or list from a page' },
   { value: 'fillForm', action: 'Fill in and submit a form' },
   { value: 'download', action: 'Download a file from a page' },
-  { value: 'runSteps', action: 'Run a list of browser steps' },
+  { value: 'runSteps', action: 'Run a list of browser or desktop steps' },
   { value: 'signSteps', action: 'Sign a repaired step list' },
   { value: 'importSteps', action: 'Import steps from a recording, code or a UiPath bot' },
 ];
@@ -121,17 +125,44 @@ describe('Run Steps and Sign Steps fields', () => {
     return p;
   };
   it('Run Steps shows Steps, Start URL, Require Signed Steps, Signature, Approved By and AI Repair; Goal only with AI Repair on', () => {
-    const always = d.properties
-      .filter((p) => p.displayOptions?.show?.operation?.includes('runSteps'))
-      .filter((p) => Object.keys(p.displayOptions?.show ?? {}).every((k) => k === 'operation'))
-      .map((p) => p.name);
-    expect(always).toEqual(['steps', 'startUrl', 'requireSignedSteps', 'signature', 'approvedBy', 'aiRepair', 'options']);
+    // As n8n shows a Run Steps node of each version with nothing else set: the Parameters tab, then the Settings tab.
+    const shown = (typeVersion: number, settings: boolean) => {
+      const nodeTypes = { getByName: () => node, getByNameAndVersion: () => node, getKnownTypes: () => ({}) } as unknown as INodeTypes;
+      const n = { id: 'n1', name: 'RPA', type: 'n8n-nodes-rpa.playwright', typeVersion, position: [0, 0] as [number, number], parameters: { operation: 'runSteps' } };
+      const loaded = new Workflow({ nodes: [n], connections: {}, active: false, nodeTypes }).getNode('RPA')!;
+      return d.properties
+        .filter((p) => p.name !== 'operation' && p.type !== 'notice' && p.type !== 'hidden' && !!p.isNodeSetting === settings)
+        .filter((p) => NodeHelpers.displayParameter(loaded.parameters, p, loaded, d))
+        .filter((p) => !p.displayOptions?.show?.aiRepair)
+        .map((p) => p.name);
+    };
+    expect(shown(1, false)).toEqual(['runsOn', 'steps', 'startUrl', 'requireSignedSteps', 'signature', 'approvedBy', 'aiRepair', 'options']);
+    expect(shown(1, true)).toEqual([]);
+    // Version 2: Signature and Approved By, which the import sets, are on the node's Settings tab; the Redis switch is new.
+    expect(shown(2, false)).toEqual(['runsOn', 'steps', 'startUrl', 'requireSignedSteps', 'aiRepair', 'shareAcrossWorkers', 'options']);
+    expect(shown(2, true)).toEqual(['signature', 'approvedBy']);
     expect(field('requireSignedSteps')).toMatchObject({ displayName: 'Require Signed Steps', type: 'boolean', default: true, noDataExpression: true });
     expect(field('aiRepair')).toMatchObject({ displayName: 'AI Repair', type: 'boolean', default: false });
     expect(field('goal').displayOptions?.show).toEqual({ operation: ['runSteps'], aiRepair: [true] });
     expect(field('unsignedNotice')).toMatchObject({ type: 'notice', displayName: UNSIGNED_NOTICE, displayOptions: { show: { operation: ['runSteps'], requireSignedSteps: [false] } } });
     expect(UNSIGNED_NOTICE).toBe('Unsigned steps run as written. Only turn this off for steps you typed here.');
     expect(field('steps')).toMatchObject({ displayName: 'Steps (JSON)', type: 'json', default: '' });
+  });
+  it('Import Steps hides Start URL, AI Repair, Goal and ID Pattern for an RPA Recording only', () => {
+    const field = (name: string) => {
+      const p = d.properties.find((x) => x.name === name && x.displayOptions?.show?.operation?.includes('importSteps'));
+      if (!p) throw new Error(`no Import Steps property "${name}"`);
+      return p;
+    };
+    const importOnly = { show: { operation: ['importSteps'] } };
+    const notRecording = { show: { operation: ['importSteps'] }, hide: { source: ['recording'] } };
+    expect(field('startUrl').displayOptions).toEqual(notRecording);
+    expect(field('aiRepair').displayOptions).toEqual(notRecording);
+    expect(field('idPattern').displayOptions).toEqual(notRecording);
+    expect(field('goal').displayOptions).toEqual({ show: { operation: ['importSteps'], aiRepair: [true] }, hide: { source: ['recording'] } });
+    // What every other field of the operation shows is as before: the source, the name and the notice for all sources.
+    expect(field('source').displayOptions).toEqual(importOnly);
+    expect(field('stepsName').displayOptions).toEqual(importOnly);
   });
   it('Expected File shows only with AI Repair and lists the six file types', () => {
     const f = field('expectedFile');
@@ -145,12 +176,25 @@ describe('Run Steps and Sign Steps fields', () => {
     expect(field('steps').placeholder).toBe(STEPS_PLACEHOLDER);
     expect(parseScript(JSON.parse(STEPS_PLACEHOLDER)).steps).toHaveLength(3);
   });
-  it('Sign Steps shows Approved (hint "Off records a rejection"), Approved By, Approver Allowlist and Write Steps', () => {
+  it('Sign Steps shows Approved (hint "Off records a rejection"), Approver, Approval Form Page, Approved By, Approver Allowlist, Write Steps and Check Only', () => {
     const sign = d.properties.filter((p) => p.displayOptions?.show?.operation?.includes('signSteps') && p.name !== 'options').map((p) => p.name);
-    expect(sign).toEqual(['signInputNotice', 'approved', 'approverId', 'approverAllowlist', 'writeSteps']);
+    expect(sign).toEqual(['signInputNotice', 'approved', 'approverFrom', 'approvalFormPage', 'approverId', 'approverAllowlist', 'writeSteps', 'checkOnly']);
+    // Check Only hides nothing: the template sets it with an expression, and n8n drops a field an expression's value hides.
+    expect(field('checkOnly')).toMatchObject({ displayName: 'Check Only', type: 'boolean', default: false, hint: 'On signs and records nothing', displayOptions: { show: { operation: ['signSteps'] } } });
+    expect(d.properties.filter((p) => p.displayOptions?.show?.checkOnly !== undefined || p.displayOptions?.hide?.checkOnly !== undefined)).toEqual([]);
+    // Approved By stays the default, so a node saved before the choice existed keeps working as it did.
+    expect(field('approverFrom')).toMatchObject({ displayName: 'Approver', type: 'options', default: 'approvedBy' });
+    expect((field('approverFrom').options as { value: string }[]).map((o) => o.value)).toEqual(['approvedBy', 'formSignIn']);
+    // Which page is the approval is security configuration: a literal, as the allowlist.
+    expect(field('approvalFormPage')).toMatchObject({ displayName: 'Approval Form Page', type: 'string', default: 'Review and approve', noDataExpression: true });
     expect(field('writeSteps')).toMatchObject({ displayName: 'Write Steps', type: 'string', default: '', placeholder: '7, 9', hint: 'Desktop steps only. Leave empty when no step saves, posts or submits.' });
     expect(field('approved')).toMatchObject({ displayName: 'Approved', type: 'boolean', default: false, hint: 'Off records a rejection' });
     expect(field('approverId').displayName).toBe('Approved By');
+    // Optional in the editor: with one address on the allowlist, an empty Approved By is that address (signSteps.ts).
+    expect(field('approverId').required).not.toBe(true);
+    expect(field('approverId').description).toBe(
+      'Who decided: an address on the Approver Allowlist. Leave it empty when the allowlist holds one address: that address is recorded. With more than one, it is required. Not used when Approver is who signed in to n8n.',
+    );
     expect(field('approverAllowlist').displayName).toBe('Approver Allowlist');
   });
   it('declares the Run Steps and Sign Steps options with their names, operations and limits', () => {
@@ -164,7 +208,7 @@ describe('Run Steps and Sign Steps fields', () => {
     for (const name of ['deliverUnconfirmed', 'maxActions', 'maxTokens']) expect(option(name).displayOptions?.show).toEqual({ '/operation': ['runSteps'], '/aiRepair': [true] });
     expect(option('maxItems').displayOptions?.show).toEqual({ '/operation': ALL_OPERATIONS }); // every operation, quick ones included
     expect(option('timeout')).toMatchObject({ displayName: 'Timeout (Seconds)', default: 30 });
-    expect(option('maxSeconds')).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 300 } });
+    expect(option('maxSeconds')).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 600 } });
     expect(option('viewport')).toMatchObject({ type: 'fixedCollection', default: { size: { width: 1280, height: 800 } } });
     expect(option('allowedHosts').displayName).toBe('Also Allow These Sites');
     expect(option('totalPattern').displayName).toBe('Stated Total Pattern (Regex)');
@@ -183,11 +227,27 @@ describe('Run Steps and Sign Steps fields', () => {
       hint: 'Not sure? Paste one real ID into regex101.com and describe its shape: digits \\d, letters [A-Z], repeats {4}.',
     });
   });
-  it('marks every literal-only parameter noDataExpression (Require Signed Steps, Approver Allowlist, Allow Private Network, Allow Unsigned Writes, Deliver Unconfirmed Rows, Login Breaker Reset Key)', () => {
+  it('marks every literal-only parameter noDataExpression (Require Signed Steps, Approver Allowlist, Allow Private Network, Allow Unsigned Writes, Deliver Unconfirmed Rows, Login Breaker Reset Key, One-Time Code Workflow)', () => {
     expect(field('requireSignedSteps').noDataExpression).toBe(true);
     expect(field('approverAllowlist').noDataExpression).toBe(true); // literal-only at run time too (signSteps.ts literalRaw)
-    for (const name of ['allowPrivateNetwork', 'allowUnsignedWrites', 'deliverUnconfirmed', 'breakerResetKey']) expect(option(name).noDataExpression, name).toBe(true);
+    for (const name of ['allowPrivateNetwork', 'allowUnsignedWrites', 'deliverUnconfirmed', 'breakerResetKey', 'codeWorkflowId']) expect(option(name).noDataExpression, name).toBe(true);
     expect(option('breakerResetKey').description).toMatch(/not an expression/);
+  });
+  it('the options a new user sets say the common case first: Start URL, Variables, Login Breaker Reset Key', () => {
+    expect(field('startUrl').description).toBe(
+      "Browser steps only: where the run starts when the steps do not say, and the site it may visit. Required without a Site Login; with one, it must be one of the credential's Sites the Browser May Open.",
+    );
+    expect(option('variables').description).toBe(
+      'Values for {{var.name}} in the steps. In Run Steps, a password or another secret goes in an RPA Secret Variables credential instead: a value here is masked only where a secret fill or a desktop step types it.',
+    );
+    expect(option('breakerResetKey').description).toBe(
+      "With a Site Login, a failed login stops further logins until its username, password or TOTP Secret is changed, which gets one try. If the login was right, or the account is unlocked now, change this value (for example to today's date) to allow the next login. Type it, not an expression: a login that fails stays blocked for the rest of the execution.",
+    );
+  });
+  it('Allow Unsigned Writes says what it hands over', () => {
+    expect(option('allowUnsignedWrites').description).toBe(
+      'Whether unsigned steps may sign in, submit a form or download through a form. With this on, whoever can set the steps drives the Site Login and, on a login page that copies typed values into the page, can read its password out through step outcomes. Turn it on only when everyone who can set the steps is trusted with that credential. Must be set directly, not with an expression.',
+    );
   });
   it('the option shapes are the ones readRunStepsParams reads (if this fails, align operations/runSteps.ts with the description)', () => {
     const params = {
@@ -270,11 +330,11 @@ describe('dynamic inputs and outputs', () => {
     const resolvedFalse = await run(false, AI_REPAIR_EXPRESSION);
     expect(resolvedFalse).toHaveLength(2);
     expect(resolvedFalse[1]).toEqual([]);
-    expect(JSON.stringify(resolvedFalse[0])).toContain('Steps is empty. Add steps, or turn on AI Repair to build them from the Goal.');
+    expect(JSON.stringify(resolvedFalse[0])).toContain(STEPS_EMPTY_NEEDS_REPAIR);
 
     const resolvedTrue = await run(true, AI_REPAIR_EXPRESSION); // no chat model connected
     expect(resolvedTrue).toHaveLength(2);
-    expect(JSON.stringify(resolvedTrue[0])).toContain('AI repair is on but no chat model is connected. Connect one to the Model input.');
+    expect(JSON.stringify(resolvedTrue[0])).toContain(NO_MODEL);
 
     expect(await run(false, false)).toHaveLength(1);
     expect(engine.calls).toEqual([]);
@@ -283,16 +343,25 @@ describe('dynamic inputs and outputs', () => {
 
 describe('credentials', () => {
   const shown = (operation: string) => (d.credentials ?? []).filter((c) => NodeHelpers.displayParameter({ operation }, c, null, d)).map((c) => c.name);
-  it('Browser on every operation except Sign Steps; Site Login on Run, Sign and Import Steps; Step Signing only on Run and Sign Steps; Redis on Run and Import Steps; Desktop Runner only on Run Steps', () => {
-    expect(shown('runSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightScriptSigningApi', 'playwrightRedisApi', 'rpaDesktopRunnerApi']);
+  it('Browser on every operation except Sign Steps; Site Login on Run, Sign and Import Steps; Step Signing on Run and Sign Steps, and on Import Steps only to pass on; Redis on Run and Import Steps; Desktop Runner on Run Steps, and on Import Steps only to pass on; Secret Variables only on Run Steps', () => {
+    expect(shown('runSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightScriptSigningApi', 'playwrightRedisApi', 'rpaDesktopRunnerApi', 'rpaSecretVariablesApi']);
     expect(shown('signSteps')).toEqual(['playwrightSiteLoginApi', 'playwrightScriptSigningApi']);
-    expect(shown('importSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightRedisApi']); // no signing key: Sign Steps signs
+    // Step Signing and Desktop Runner only to pass on to the workflow file: Sign Steps signs, and the import never reads them.
+    expect(shown('importSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightRedisApi', 'playwrightScriptSigningApi', 'rpaDesktopRunnerApi']);
+    const passOn = (d.credentials ?? []).filter((c) => c.displayOptions?.show?.operation?.includes('importSteps') && !c.displayOptions.show.operation.includes('runSteps'));
+    expect(passOn.map((c) => c.displayName)).toEqual(['RPA Step Signing (only passed on to the workflow file)', 'RPA Desktop Runner (only passed on to the workflow file)']);
+    // n8n reads a credential through the first entry of its type: for Step Signing and Desktop Runner that entry is not
+    // shown on Import Steps, so a read there fails instead of handing the import a key it must not hold.
+    for (const type of ['playwrightScriptSigningApi', 'rpaDesktopRunnerApi']) {
+      const first = (d.credentials ?? []).find((c) => c.name === type)!;
+      expect(NodeHelpers.displayParameter({ operation: 'importSteps' }, first, null, d), type).toBe(false);
+    }
     expect(shown('screenshot')).toEqual(['playwrightBrowserApi']); // quick operations take no Site Login
   });
   it('no credential is marked required (runtime checks per operation: Run Steps needs RPA Browser or RPA Desktop Runner by the steps\' surface)', () => {
     expect((d.credentials ?? []).map((c) => [c.name, c.required])).toEqual([
       ['playwrightBrowserApi', false], ['playwrightSiteLoginApi', false], ['playwrightScriptSigningApi', false], ['playwrightRedisApi', false],
-      ['rpaDesktopRunnerApi', false],
+      ['rpaDesktopRunnerApi', false], ['rpaSecretVariablesApi', false], ['playwrightScriptSigningApi', false], ['rpaDesktopRunnerApi', false],
     ]);
   });
 });
@@ -306,20 +375,70 @@ describe('wording and guidance', () => {
   });
   it('GUIDANCE is the guidance table, verbatim', () => {
     expect(GUIDANCE).toEqual({
-      login_failed: 'The site rejected the username or password. The login breaker is now open: fix the RPA Site Login credential, then change Options → Login Breaker Reset Key.',
+      login_failed: 'The site rejected the username or password. Correct them in the RPA Site Login credential, or, when its Username and Password are expressions, in the data they read: the next run tries once more. If they were right, type a new value (any text, such as today\'s date) in Options → Login Breaker Reset Key.',
       account_locked: 'The site says the account is locked. Unlock it with the site owner, then change Options → Login Breaker Reset Key.',
-      auth_blocked: 'The site asked for a second factor the node cannot answer. A person has to sign in.',
+      auth_blocked: 'The site asked for a second factor that this run could not answer; the message says which. A push message or a hardware key needs a person to sign in.',
       site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
       browser_unavailable: 'The browser server could not be reached or was rejected. Check the RPA Browser credential (README: Where the browser runs).',
-      drift_detected: 'The page no longer matches the steps: an element was not found or matched more than one. Fix the locator, or use Run Steps with AI repair.',
+      drift_detected: 'A step did not find what it expected; the message says which step, what it looked for and, for a browser control that is not there, what the page shows instead. Correct that step, or record it again, and approve the new version. Browser steps can also repair themselves with AI Repair.',
       not_found: 'The page or the data was not found.',
       incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
-      script_untrusted: 'The steps are not signed by the Step Signing key, or the signature does not match their name, version, start site, Site Login, approver or the expected version. Nothing ran.',
-      policy_violation: 'The steps or the page tried something not allowed: an unlisted or private site, a write, a password field, or a secret outside sign-in. The run stopped.',
-      locked_out: 'An earlier login failed and the breaker is open. Check the account, then change Options → Login Breaker Reset Key.',
+      script_untrusted: 'Nothing ran: the steps are not signed, or their signature does not fit this node (another Step Signing key, Site Login, name, version or start site), or their row was changed after they were approved. Approve the steps again after reading every step, or set the node up as it was when they were signed.',
+      policy_violation: 'The run tried something its rules do not allow and stopped; the message says what was refused. If that was meant, change the rule that refused it where it is kept: in the RPA Site Login, the RPA Secret Variables credential, this node\'s Options, or the desktop runner\'s policy on the Windows machine. For a desktop step that saves or sends, the rule is its mark as a write, set when its steps are approved.',
+      locked_out: 'Correct the username or password in the RPA Site Login credential, or, when its Username and Password are expressions, in the data they read, and run again: a changed login gets one try. If the login was right, or the account is unlocked now, type a new value (any text) in Options → Login Breaker Reset Key.',
       busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
-      runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, or its Windows session is locked or signed out. Check the RPA Desktop Runner credential and the runner machine.',
+      password_change_failed: 'The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
+      runner_unavailable: 'n8n could not use the desktop runner; the message says why. Check the RPA Desktop Runner credential, then run rpa status on the runner machine.',
     });
+  });
+  it('the guidance for a cause the message names: the code workflow, no TOTP Secret, an unlisted login page, a password changed in this execution', () => {
+    expect(CODE_WORKFLOW_GUIDANCE).toBe('The One-Time Code Workflow gave no code; the message says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.');
+    expect(NO_TOTP_SECRET_GUIDANCE).toBe(
+      'The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in its TOTP Secret. To take the code from a workflow instead, set Options → One-Time Code Workflow (steps you wrote also need "source": "workflow" in the sign-in step).',
+    );
+    expect(LOGIN_PAGE_GUIDANCE).toBe(
+      'The sign-in stopped at an address that is not listed as a login page. Add the address the message names to Pages Where the Password May Be Typed in the RPA Site Login, then run again.',
+    );
+    expect(PASSWORD_CHANGED_GUIDANCE).toBe('A run changed this Site Login\'s password earlier in this execution. Store the new password where the Site Login reads it, then run again.');
+    const notListed = 'Sign in: signIn refused: the username field\'s form posts to example.com/login, which is not listed in the Site Login under Pages Where the Password May Be Typed.';
+    expect(guidanceFor('policy_violation', notListed)).toBe(LOGIN_PAGE_GUIDANCE);
+    expect(guidanceFor('policy_violation', 'Blocked: the page tried to open cdn.other.com, which is not allowed.')).toBe(GUIDANCE.policy_violation);
+    expect(guidanceFor('locked_out', SITE_LOGIN_PASSWORD_CHANGED)).toBe(PASSWORD_CHANGED_GUIDANCE);
+    // IB-10: the engine's sentences for a site the browser could not reach, and for a value a field did not take.
+    expect(guidanceFor('site_down', networkSentence('page.goto: net::ERR_NAME_NOT_RESOLVED at http://sandbox:8080/acme/login'))).toBe(SITE_ADDRESS_GUIDANCE);
+    expect(guidanceFor('site_down', 'Open: page.goto: net::ERR_CONNECTION_REFUSED at http://a/')).toBe(SITE_ADDRESS_GUIDANCE);
+    expect(guidanceFor('site_down', 'HTTP 503 at the start page')).toBe(GUIDANCE.site_down);
+    expect(guidanceFor('policy_violation', `Step 2 (Type into From): ${valueNotTaken('"From"', '"x"', 'locator.fill: Error: Malformed value')}`)).toBe(VALUE_NOT_TAKEN_GUIDANCE);
+    for (const g of [SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE]) expect(g).not.toMatch(/[<>]/);
+    // IW-4: a desktop step that pressed a protected button or key without its write mark. The runner's refusals of that
+    // kind (its source, the only place the words are made) all say "needs write: true"; the guidance names the step.
+    const runner = readFileSync(new URL('../../../desktop/runner/src/Rpa.Runner.Core/RunnerService.cs', import.meta.url), 'utf8');
+    const writeRefusals = [...runner.matchAll(/PolicyRefused\(\$?"([^"]*write: true[^"]*)"\)/g)].map((m) => m[1]);
+    expect(writeRefusals.length).toBeGreaterThanOrEqual(4);
+    for (const r of writeRefusals) expect(r).toContain('needs write: true');
+    const refused = 'Step 9 (Click Post): the target is a declared write control and needs write: true';
+    expect(runner).toContain('is a declared write control and needs write: true');
+    expect(guidanceFor('policy_violation', refused)).toBe(writeMarkGuidance('9'));
+    expect(writeMarkGuidance('9')).toContain('tick step 9 under "Which of these steps save, send or submit?"');
+    expect(guidanceFor('policy_violation', 'the key Enter could reach a declared write control of this run and needs write: true (only Tab, arrows, Home, End, PageUp, PageDown and Escape do not)')).toBe(writeMarkGuidance());
+    expect(writeMarkGuidance()).not.toMatch(/[<>]|undefined/);
+    // W6-13: a message that already says what to do gets no guidance after it. Pinned to the engine's builders, the only
+    // place those words are made: each builder's text has one of the words, and the general guidance stays for the rest.
+    for (const said of [secretHostNotListed('sandbox:8080'), secretAppNotListed('ErpDemo.exe'), runnerAppNotAllowed('ErpDemo.exe')]) {
+      expect(SAYS_WHAT_TO_DO.some((w) => said.includes(w)), said).toBe(true);
+      expect(guidanceFor('policy_violation', `Type the PIN: ${said}`)).toBe('');
+    }
+    expect(secretHostNotListed('sandbox:8080')).toContain('List it there only if the value is meant for it.');
+    expect(secretAppNotListed('ErpDemo.exe')).toContain('Add ErpDemo.exe there, or remove the credential from this node.');
+    expect(runnerAppNotAllowed('ErpDemo.exe')).toContain('On the Windows machine, allow it');
+    expect(guidanceFor('login_failed', secretHostNotListed('a'))).toBe(GUIDANCE.login_failed);
+    // errors.ts matches the engine's text by its words (the node never loads the engine to read a constant).
+    expect(VALUE_NOT_TAKEN).toBe(' did not take the value ');
+    expect(guidanceFor('locked_out', siteLoginLockedOut('example.com'))).toBe(GUIDANCE.locked_out);
+    // No message names a version: the history of the breaker is in the changelog.
+    for (const text of [...Object.values(GUIDANCE), CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, LOGIN_PAGE_GUIDANCE, PASSWORD_CHANGED_GUIDANCE]) {
+      expect(text, text).not.toMatch(/\d+\.\d+\.\d+/);
+    }
   });
 });
 
@@ -330,7 +449,7 @@ describe('quick operations', () => {
   const SPEC: [string, string][] = [
     ['screenshot', 'Take a screenshot of a page'], ['getPage', 'Get the text, HTML or title of a page'], ['pdf', 'Save a page as PDF'],
     ['extract', 'Extract a table or list from a page'], ['fillForm', 'Fill in and submit a form'], ['download', 'Download a file from a page'],
-    ['runSteps', 'Run a list of browser steps'], ['signSteps', 'Sign a repaired step list'],
+    ['runSteps', 'Run a list of browser or desktop steps'], ['signSteps', 'Sign a repaired step list'],
     ['importSteps', 'Import steps from a recording, code or a UiPath bot'],
   ];
 

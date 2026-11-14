@@ -1,0 +1,28 @@
+{
+  "name": "sandbox-rows",
+  "startUrl": "http://sandbox:8080/acme/login",
+  "steps": [
+    {
+      "intent": "Sign in with an authentication code",
+      "signIn": {
+        "username": { "label": "user ID" },
+        "password": { "label": "Password", "exact": true },
+        "submit": { "role": "button", "name": "Sign in", "exact": true },
+        "totp": { "field": { "label": "Authentication code", "exact": true }, "submit": { "role": "button", "name": "Verify", "exact": true } }
+      }
+    },
+    { "intent": "Click Service", "click": { "role": "link", "name": "Service", "exact": true, "within": { "role": "navigation" } } },
+    { "intent": "Click Recalls & Stop-Sales", "click": { "role": "link", "name": "Recalls & Stop-Sales" }, "expect": { "heading": "Recalls & Stop-Sales" } },
+    {
+      "intent": "Page through with Next page, at most 10 pages, 1 step on each",
+      "paginate": {
+        "next": { "text": "Next page" },
+        "until": "absent",
+        "max": 10,
+        "each": [
+          { "intent": "Read the notices table on this page", "extractTable": { "table": { "role": "table" }, "idPattern": "N26-\\d{4}" } }
+        ]
+      }
+    }
+  ]
+}

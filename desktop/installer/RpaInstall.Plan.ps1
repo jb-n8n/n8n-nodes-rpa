@@ -12,11 +12,11 @@
 #
 # Who is not trusted: the bot user (and anything running as it) and every other standard user. The bot user can create
 # files in the data directory and change what is in logs\. So the installer refuses a link or junction where it expects
-# the data directory, logs\, policy-backups\, policy.json or a token, refuses one of those that someone other than
-# Administrators or SYSTEM owns (logs\ it takes over instead) and a file of those names that has a second name (a
-# hard link), passes /L to every icacls call, and removes folders through handles (Remove-RpaTree), which removes a
-# link or junction inside as the link itself and does not enter it. A data directory that is there when the user of
-# the install is new to it (a first install, another -User) is used only when everything in it belongs to
+# the data directory, logs\, policy-backups\, policy-changes\, policy.json or a token, refuses one of those that someone
+# other than Administrators or SYSTEM owns (logs\ it takes over instead) and a file of those names that has a second
+# name (a hard link), passes /L to every icacls call, and removes folders through handles (Remove-RpaTree), which
+# removes a link or junction inside as the link itself and does not enter it. A data directory that is there when the
+# user of the install is new to it (a first install, another -User) is used only when everything in it belongs to
 # Administrators, to SYSTEM or to that user, which must have been there already.
 #
 # Secrets: New-RpaSecret returns a new secret to its caller. No other function returns one in plain text, and none
@@ -29,6 +29,11 @@ $script:TaskPath = '\RPA\'
 # The data directory's files the bot user may read and never change, and the step that writes each when it is missing.
 $script:DataFiles = [ordered]@{ 'policy.json' = 'write policy'; 'token' = 'write token'; 'browser-token' = 'write browser-token' }
 $script:SignInSteps = @('store sign-in password', 'turn on automatic sign-in', 'keep the desktop unlocked')
+# What the browser package (rpa-browser-windows-x64.zip, unpacked into the package folder) adds to the package: the
+# files an install with the browser needs, below the package folder. browser\VERSION is the version it was built for.
+$script:BrowserFiles = @('browser\VERSION', 'browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
+# With -Unattended the runner and the browser listen on 127.0.0.1 at their port plus this, behind the RPA Supervisor.
+$script:InnerPortOffset = 10000
 
 # An IPv4 or IPv6 address, or a range in CIDR form (10.0.0.0/24). Nothing else: no name, no keyword, no list.
 function Test-RpaAddress([string]$Text) {
@@ -80,8 +85,8 @@ function Get-RpaDataLinkRefusal($Entries) {
 # that account was there before the run, else nothing. A link and a file with a second name are refused, the first of
 # them by name, and so is the first entry that could not be read (a folder that cannot be listed: what is in it is not
 # known). Everything else must belong to Administrators, to SYSTEM or to that account (its logs, certificates and
-# exports), and in policy-backups\ to Administrators or SYSTEM only; what does not is refused once, with the number
-# of entries and the first of them.
+# exports), and in policy-backups\ and policy-changes\ to Administrators or SYSTEM only; what does not is refused once,
+# with the number of entries and the first of them.
 function Get-RpaDataEntryRefusals([string]$DataDir, $Entries, [string]$OwnSid) {
   $refusals = @()
   if (-not $Entries) { return $refusals }
@@ -103,12 +108,126 @@ function Get-RpaDataEntryRefusals([string]$DataDir, $Entries, [string]$OwnSid) {
   $refusals
 }
 
+# What -Unattended changes, in words, for the installer to show before it changes anything: one line for each of its
+# steps in -Steps and for what the bot user then has to know. -BrowserPort is 0 with -NoBrowser. No secret goes in.
+function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserPort, [int]$IdleSeconds, [string[]]$Steps) {
+  $ports = '{0}' -f $RunnerPort
+  $inner = 'The runner listens on 127.0.0.1 only, at port {0}.' -f ($RunnerPort + $script:InnerPortOffset)
+  if ($BrowserPort) {
+    $ports = '{0} and {1}' -f $RunnerPort, $BrowserPort
+    $inner = 'The runner and the browser listen on 127.0.0.1 only,'
+  }
+  $lines = @(
+    '-Unattended changes how this machine works:'
+    ('  - The service RPA Supervisor (RpaSupervisor.exe, running as SYSTEM, started with Windows) listens on port {0}.' -f $ports)
+    ('    When n8n connects, it signs {0} in through a Remote Desktop connection from this machine to itself,' -f $User)
+    ('    and signs it out again {0} s after the last connection. {1}' -f $IdleSeconds, $inner)
+  )
+  if ($BrowserPort) { $lines += '    at port {0} and {1}.' -f ($RunnerPort + $script:InnerPortOffset), ($BrowserPort + $script:InnerPortOffset) }
+  if ($Steps -contains 'turn off automatic sign-in') {
+    $lines += '  - Automatic sign-in of {0} is turned off, and the settings -AutoSignIn changed go back to what they were.' -f $User
+  }
+  if ($Steps -contains 'keep the automatic sign-in password for the supervisor') {
+    $lines += '  - The password of {0} stays the same: the one stored for automatic sign-in is stored for the RPA Supervisor' -f $User
+    $lines += '    instead, so no program of {0} loses data it protects with that password.' -f $User
+  }
+  $lines += '  - {0} is added to the group Remote Desktop Users, unless it is a member already.' -f $User
+  if ($Steps -contains 'turn on Remote Desktop') {
+    $lines += '  - Remote Desktop is turned on (it is off now). The installer turns on no firewall rule for Remote Desktop: the RPA'
+    $lines += '    Supervisor connects from this machine to itself. Where a firewall rule that is on already, or a firewall that'
+    $lines += '    is off, lets connections to port 3389 in, Remote Desktop can then be reached from the network.'
+    $lines += '    Uninstall-Rpa.ps1 turns it off again.'
+  }
+  if ($Steps -contains "store the bot user's password for the supervisor") {
+    $lines += '  - The password of {0} is stored on this machine for the RPA Supervisor. An administrator of this machine' -f $User
+    $lines += '    can read it.'
+  }
+  if ($Steps -contains 'point the firewall rules at the supervisor' -or $Steps -contains 'point the firewall rule at the supervisor') {
+    if ($BrowserPort) {
+      $lines += '  - The firewall rules for port {0} let connections in to the RPA Supervisor instead of the runner and the' -f $ports
+      $lines += '    browser.'
+    } else { $lines += '  - The firewall rule for port {0} lets connections in to the RPA Supervisor instead of the runner.' -f $ports }
+  }
+  if ($Steps -contains 'sign the bot user out') {
+    $lines += '  - {0} is signed out now (every session of {0}), so that the RPA Supervisor can sign it in for each run.' -f $User
+  }
+  $lines += '  - While someone is signed in as {0}, at the console or over Remote Desktop, runs are refused.' -f $User
+  $lines += '  Uninstall-Rpa.ps1 puts these settings back to what they were.'
+  $lines
+}
+
+# What adding the browser to an install, or removing it, changes, in words, for the installer to show before it changes
+# anything: the browser's port and firewall rule, its files, task, token and certificate, and who can act as the bot
+# user through it. -AllowFrom is what the firewall rules let in (nothing without rules). No secret goes in.
+function Get-RpaBrowserChangeNotice([bool]$Add, [string]$User, [int]$BrowserPort, $AllowFrom, [bool]$Unattended, [string]$DataDir, [string[]]$Steps) {
+  if ($Add) {
+    $rule = 'No firewall rule is added for it (-NoFirewall).'
+    if ($AllowFrom) {
+      $from = 'any address'
+      if (@($AllowFrom) -notcontains 'any') { $from = @($AllowFrom) -join ', ' }
+      $rule = 'The firewall rule RPA-Browser-In lets {0} in to it.' -f $from
+    }
+    $listens = 'It listens on port {0}.' -f $BrowserPort
+    if ($Unattended) { $listens = 'The RPA Supervisor listens on port {0} too, and passes connections to the browser at 127.0.0.1 port {1}.' -f $BrowserPort, ($BrowserPort + $script:InnerPortOffset) }
+    return @(
+      '-WithBrowser adds the RPA browser to this install:'
+      '  - The browser (Node.js, Playwright and a Chromium browser) is installed, and the scheduled task \RPA\RPA Browser'
+      ('    starts it when {0} signs in.' -f $User)
+      ('  - {0} {1}' -f $listens, $rule)
+      ('  - A browser token and a certificate are made in {0}.' -f $DataDir)
+      ('  - Whoever holds the browser token and can reach port {0} acts as {1} through the browser. It can read the' -f $BrowserPort, $User)
+      ("    files {0} can read, the runner's token among them." -f $User)
+    )
+  }
+  $what = 'Its scheduled task \RPA\RPA Browser and its files are removed.'
+  if ($Steps -contains 'remove the browser firewall rule') { $what = 'Its scheduled task \RPA\RPA Browser, its firewall rule RPA-Browser-In and its files are removed.' }
+  $lines = @(
+    '-NoBrowser removes the RPA browser from this install:'
+    ('  - {0}' -f $what)
+    ('  - Its token and certificate are removed from {0}. The RPA Browser credential in n8n then stops working.' -f $DataDir)
+  )
+  if ($Unattended) { $lines += '  - The RPA Supervisor no longer listens on port {0}.' -f $BrowserPort }
+  $lines
+}
+
+# Whether Install-Rpa.ps1 was given no sign-in mode: none of -Unattended (also not -Unattended:$false), -AutoSignIn
+# and -UserPassword. A first install for a new local bot user on Windows Server is then an unattended install.
+function Test-RpaNoModeGiven([hashtable]$Parameters) {
+  -not $Parameters.Unattended -and -not $Parameters.UnattendedGiven -and -not $Parameters.AutoSignIn -and $null -eq $Parameters.UserPassword
+}
+
+# Why the install cannot have the browser that -WithBrowser or the install asks for, or nothing: the package folder
+# (-Facts.PackageDir) lacks the browser files, or holds them for another version. -Kept says that the browser is there
+# because the install has it (no -WithBrowser), which -NoBrowser would remove.
+function Get-RpaBrowserFilesRefusal([hashtable]$Facts, [bool]$Kept) {
+  $folder = [string]$Facts.PackageDir
+  $version = [string]$Facts.PackageVersion
+  if ($Facts.BrowserFiles -ne 'present') {
+    if ($Kept) { return ('This install has the browser, and its files are not in {0}: run Get-Rpa.ps1 -WithBrowser, unpack rpa-browser-windows-x64.zip into that folder (Expand-Archive <path of the zip> -DestinationPath "{0}") and run this again, or remove the browser with -NoBrowser.' -f $folder) }
+    return ('The browser files are not in {0}: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder (Expand-Archive <path of the zip> -DestinationPath "{0}") and run this again.' -f $folder)
+  }
+  if ([string]$Facts.BrowserVersion -eq $version) { return $null }
+  if ($Kept) { return ('This install has the browser, and the browser files in {0} are of version {1}, and the package is version {2}: unpack the rpa-browser-windows-x64.zip of version {2} into that folder, or remove the browser with -NoBrowser.' -f $folder, $Facts.BrowserVersion, $version) }
+  'The browser files in {0} are of version {1}, and the package is version {2}: unpack the rpa-browser-windows-x64.zip of version {2} into that folder.' -f $folder, $Facts.BrowserVersion, $version
+}
+
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
-# BrowserPort, NoBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, AutoSignIn, Force); -Facts
-# is what Get-RpaMachineFacts returns. With a refusal there are no steps: the installer changes nothing. Questions are
-# what the installer has confirmed with YES before the first step (with -Force they are warnings). AllowFrom in the
-# result is what the firewall rules let in: addresses and ranges, or the one word any, or nothing without rules;
-# PublicNetwork says whether the rules also apply on networks Windows treats as Public.
+# BrowserPort, NoBrowser, WithBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, Address,
+# AutoSignIn, Unattended, UnattendedGiven, IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a
+# refusal there are no steps: the installer changes nothing. Questions are what the installer has confirmed with YES before the
+# first step (with -Force they are warnings). AllowFrom in the result is what the firewall rules let in: addresses and
+# ranges, or the one word any, or nothing without rules; PublicNetwork says whether the rules also apply on networks
+# Windows treats as Public. Notice is what -Unattended changes, in lines to show and confirm before the first step, when
+# an earlier run has not set it up already; without a sign-in mode its first two lines say that the install is
+# unattended for that reason. Unattended and IdleSeconds are the mode and idle time the install gets: an upgrade keeps
+# them from the record unless -Unattended or -IdleSeconds is given. Browser says whether the install has the browser:
+# -WithBrowser adds it, an upgrade without -WithBrowser or -NoBrowser keeps what the install has (as it keeps the
+# sign-in mode), and -NoBrowser leaves it out, or removes it from an install that has it. Install-Rpa.ps1 hands it on
+# to Invoke-RpaInstallPlan as NoBrowser. BrowserNotice is what adding the browser to an install, or removing it from
+# one, changes, in lines to show and confirm before the first step (a first install has no such lines). Address is the
+# name or address n8n reaches this machine at, for the connection lines: -Address, or on an upgrade the one the install
+# records. AskAddress says whether Install-Rpa.ps1 may ask for one behind a NAT (Read-RpaReachableAddress): when there
+# is none, and neither -Force nor -Unattended was given.
 function Get-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -116,7 +235,9 @@ function Get-RpaInstallPlan {
   )
   $user = [string]$Parameters.User
   $hasPassword = $null -ne $Parameters.UserPassword
-  $browser = -not $Parameters.NoBrowser
+  $upgrade = [bool]$Facts.Installed
+  $installedBrowser = $upgrade -and [bool]$Facts.InstalledBrowser
+  $browser = [bool]$Parameters.WithBrowser -or ($installedBrowser -and -not $Parameters.NoBrowser)
   # powershell -File hands a,b over as one string, so every -AllowFrom value is split at its commas.
   $given = @($Parameters.AllowFrom | ForEach-Object { ([string]$_).Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   $any = [bool]$Parameters.AllowFromAnyAddress
@@ -126,9 +247,33 @@ function Get-RpaInstallPlan {
   $noRulesRecorded = [bool]$Facts.Installed -and (@($Facts.InstalledAllowFrom) -contains 'none')
   if ($noRulesRecorded -and $given.Count -eq 0 -and -not $any -and -not $includePublic) { $firewall = $false }
   $autoSignIn = [bool]$Parameters.AutoSignIn
-  $upgrade = [bool]$Facts.Installed
   $runnerPort = [int]$Parameters.RunnerPort
   $browserPort = [int]$Parameters.BrowserPort
+  # An install that an earlier run made with -Unattended.
+  $wasUnattended = $upgrade -and [string]$Facts.InstalledMode -eq 'unattended'
+  # An upgrade keeps the recorded mode, as it keeps automatic sign-in: only -Unattended:$false goes back to the
+  # signed-in mode. The idle time stays what the install recorded unless -IdleSeconds is given.
+  $unattended = [bool]$Parameters.Unattended -or ($wasUnattended -and -not $Parameters.UnattendedGiven)
+  # Without a mode, a first install for a new local bot user on Windows Server is unattended; on Windows 10 or 11 it is
+  # refused, with the sentence that names -AutoSignIn.
+  $defaultMode = (Test-RpaNoModeGiven $Parameters) -and -not $upgrade -and -not $Facts.UserExists -and -not $Facts.UserIsDomain -and [bool]$Facts.IsServer
+  if ($defaultMode) { $unattended = $true }
+  $idleSeconds = [int]$Parameters.IdleSeconds
+  if ($wasUnattended -and -not $Parameters.IdleSecondsGiven -and $null -ne $Facts.InstalledIdleSeconds) { $idleSeconds = [int]$Facts.InstalledIdleSeconds }
+  # An install with automatic sign-in for this same bot user moves to -Unattended with the password it has: the one
+  # stored for automatic sign-in (or -UserPassword), so that no program of the bot user loses what it protects with it.
+  $convert = $unattended -and $upgrade -and [bool]$Facts.InstalledAutoSignInForUser -and [bool]$Facts.UserExists
+  # The way back, -Unattended:$false -AutoSignIn for the same bot user, keeps the password the same way: the one stored
+  # for the RPA Supervisor (or -UserPassword) becomes the automatic sign-in password before the supervisor goes.
+  $back = $autoSignIn -and -not $unattended -and $upgrade -and [bool]$Facts.InstalledSupervisorSecret -and [bool]$Facts.InstalledForUser -and [bool]$Facts.UserExists
+  # The password an earlier run with -Unattended stored for this same user stays, while install.json records it.
+  $secretKept = $unattended -and $wasUnattended -and [bool]$Facts.InstalledForUser -and [bool]$Facts.UserExists -and [bool]$Facts.InstalledSupervisorSecret
+  # The data directory an install with -Unattended for this same bot user left behind (Uninstall-Rpa.ps1 without
+  # -RemoveData keeps it, with the supervisor's folder, and the bot user; it removes install.json and the stored
+  # password). Nobody knows the password the installer generated, so that user cannot be signed in unattended again,
+  # and an install without a mode would end signed in by hand.
+  $afterUnattended = -not $upgrade -and [bool]$Facts.UserExists -and $Facts.SupervisorDirState -and [bool]$Facts.SupervisorDirState.Exists -and
+    [bool](@($Facts.EarlierUsers) | Where-Object { $_ -and $_.Sid -eq [string]$Facts.UserSid })
   # A local user that does not exist is created, on a first install and on an upgrade (someone removed it since).
   $createUser = -not $Facts.UserExists -and -not $Facts.UserIsDomain
   # Automatic sign-in that an earlier run turned on for this same user stays as it is.
@@ -158,6 +303,12 @@ function Get-RpaInstallPlan {
   }
 
   if ($refusals.Count -eq 0) {
+    if ($Parameters.WithBrowser -and $Parameters.NoBrowser) {
+      $refusals.Add('-WithBrowser and -NoBrowser cannot be used together: -WithBrowser adds the browser, -NoBrowser leaves it out or removes it. Choose one.')
+    } elseif ($browser) {
+      $filesRefusal = Get-RpaBrowserFilesRefusal $Facts (-not $Parameters.WithBrowser)
+      if ($filesRefusal) { $refusals.Add($filesRefusal) }
+    }
     if ($browser -and $runnerPort -eq $browserPort) {
       $refusals.Add(('-RunnerPort and -BrowserPort are both {0}. Give each its own port.' -f $runnerPort))
     } else {
@@ -169,6 +320,25 @@ function Get-RpaInstallPlan {
         $process = $null
         if ($Facts.PortsInUse) { $process = $Facts.PortsInUse[$port] }
         if ($process) { $refusals.Add(('Port {0} is in use by {1}. Choose another with -RunnerPort or -BrowserPort.' -f $port, $process)) }
+      }
+      # Behind the RPA Supervisor the runner and the browser listen on their port + 10000, which must be free too (on
+      # an upgrade of an unattended install, the installed ones hold those of the ports that stay).
+      if ($unattended) {
+        $inner = @()
+        foreach ($service in @(@{ Name = 'RunnerPort'; What = 'the runner'; Port = $runnerPort; Installed = $Facts.InstalledRunnerPort }, @{ Name = 'BrowserPort'; What = 'the browser'; Port = $browserPort; Installed = $Facts.InstalledBrowserPort })) {
+          if ($service.Name -eq 'BrowserPort' -and -not $browser) { continue }
+          if ($service.Port + $script:InnerPortOffset -gt 65535) {
+            $refusals.Add(('-{0} {1} is too high for -Unattended: {2} then listens on port {1} + {3} on 127.0.0.1, so the highest is {4}.' -f $service.Name, $service.Port, $service.What, $script:InnerPortOffset, (65535 - $script:InnerPortOffset)))
+          } elseif (-not ($wasUnattended -and $service.Installed -eq $service.Port)) { $inner += $service.Port + $script:InnerPortOffset }
+        }
+        if ($browser -and ($browserPort -eq $runnerPort + $script:InnerPortOffset -or $runnerPort -eq $browserPort + $script:InnerPortOffset)) {
+          $refusals.Add(('-RunnerPort {0} and -BrowserPort {1} do not work together with -Unattended: the runner and the browser then also listen on {2} and {3}, and all four ports must differ.' -f $runnerPort, $browserPort, ($runnerPort + $script:InnerPortOffset), ($browserPort + $script:InnerPortOffset)))
+        }
+        foreach ($port in $inner) {
+          $process = $null
+          if ($Facts.PortsInUse) { $process = $Facts.PortsInUse[$port] }
+          if ($process) { $refusals.Add(('Port {0} is in use by {1}. With -Unattended the runner and the browser listen on their port + {2} on 127.0.0.1; choose another -RunnerPort or -BrowserPort.' -f $port, $process, $script:InnerPortOffset)) }
+        }
       }
     }
 
@@ -185,15 +355,71 @@ function Get-RpaInstallPlan {
       $refusals.Add(('Automatic sign-in is set up for {0}. Uninstall with -RemoveData first, then install for {1}.' -f $Facts.InstalledAutoSignInUser, $user))
     } else {
       # An existing user's password is never changed, so automatic sign-in can only store one that is given.
-      if ($autoSignIn -and $Facts.UserExists -and -not $hasPassword -and -not $signInKept) {
-        $refusals.Add(('-AutoSignIn for the existing user {0} needs -UserPassword. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again.' -f $user))
+      if ($back -and -not $hasPassword) {
+        if ($Facts.SupervisorPassword -eq 'wrong') {
+          $refusals.Add(('Windows does not accept the password stored for the RPA Supervisor of {0} any more, so -AutoSignIn cannot keep it. Give the password of {0} with -UserPassword, or install for a new bot user with -User.' -f $user))
+        } elseif ($Facts.SupervisorPassword -ne 'ok') {
+          $refusals.Add(('The RPA Supervisor of {0} has no stored password that the installer can read, so -AutoSignIn cannot keep it. Give the password of {0} with -UserPassword, or install for a new bot user with -User.' -f $user))
+        }
+      }
+      elseif ($autoSignIn -and $Facts.UserExists -and -not $hasPassword -and -not $signInKept) {
+        $refusals.Add(('-AutoSignIn for the existing user {0} needs -UserPassword. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again. A new password makes what the programs of {0} protected with the old one unreadable (the entries of an authenticator application, the certificate of the runner), so where such data exists a new bot user (-User) is the safer way. After a new password the runner cannot read its certificate: remove it and put the new fingerprint into the n8n credential (docs/install/windows.md, section 10).' -f $user))
       }
       if ($autoSignIn -and $Facts.UserExists -and $hasPassword -and $Facts.UserPasswordWrong) {
         $refusals.Add(('The password given for {0} is not correct.' -f $user))
       }
     }
-    if ($createUser -and -not $autoSignIn -and -not $hasPassword) {
+    $afterUnattendedRefusal = ('{0} was the bot user of an install with -Unattended. Uninstall-Rpa.ps1 removed the password stored for it, and the password the installer generated is not known to anyone, so this install cannot sign {0} in unattended. Either set a new password for {0} and run this again with -Unattended -UserPassword <that password> (the runner then cannot read its certificate: remove it and put the new fingerprint into the n8n credential, docs/install/windows.md, section 10); or run Uninstall-Rpa.ps1 -RemoveData, remove {0} and install again, which makes new tokens and Connection Lines. To have a person sign {0} in instead, add -Unattended:$false.' -f $user)
+    # Without a mode, that install would end in another mode than the machine had: it stops and says why.
+    if ($afterUnattended -and (Test-RpaNoModeGiven $Parameters)) { $refusals.Add($afterUnattendedRefusal) }
+    # With -Unattended a user the installer creates gets a random password, which is stored for the RPA Supervisor.
+    if ($createUser -and -not $autoSignIn -and -not $unattended -and -not $hasPassword) {
       $refusals.Add(('Give -UserPassword for the new user {0}, or use -AutoSignIn to have a random password stored for automatic sign-in.' -f $user))
+    }
+
+    if ($Parameters.IdleSecondsGiven -and -not $unattended) { $refusals.Add('-IdleSeconds is for -Unattended only.') }
+    if ($unattended) {
+      # Not tested on a desktop edition, which also allows one interactive session at a time.
+      if (-not $Facts.IsServer) {
+        $refusals.Add('-Unattended is for Windows Server 2019 or later. It was not tested on Windows 10 or 11, so the installer does not set it up there. Install without -Unattended, and have the bot user signed in (-AutoSignIn, or by hand).')
+      }
+      if ($autoSignIn -and -not $Parameters.Unattended) {
+        $refusals.Add('This install was made with -Unattended, which an upgrade keeps. To use -AutoSignIn instead, run the installer with -Unattended:$false -AutoSignIn.')
+      } elseif ($autoSignIn) {
+        $refusals.Add('-Unattended and -AutoSignIn cannot be used together: -AutoSignIn keeps the bot user signed in, -Unattended signs it in only for the runs. Choose one.')
+      }
+      # The RPA Supervisor connects to the standard Remote Desktop port.
+      if ($Facts.RemoteDesktopPort -and [int]$Facts.RemoteDesktopPort -ne 3389) {
+        $refusals.Add(('-Unattended needs Remote Desktop on port 3389, where the RPA Supervisor connects, and this machine sets it to port {0} (PortNumber of RDP-Tcp).' -f $Facts.RemoteDesktopPort))
+      }
+      # The RPA Supervisor signs in a local user of this machine only.
+      if ($Facts.UserIsDomain) {
+        $refusals.Add(('-Unattended needs a local user of this machine as the bot user; {0} is a domain user.' -f $user))
+      }
+      # Windows would sign the bot user in by itself, and the supervisor refuses a session it did not create.
+      elseif ($upgrade -and $Facts.InstalledAutoSignInUser -and $Facts.InstalledAutoSignInForUser -and -not $convert) {
+        $refusals.Add(('Automatic sign-in is set up for {0}, and with -Unattended nobody may be signed in by Windows itself. Run Uninstall-Rpa.ps1 first, which turns automatic sign-in off, then install with -Unattended.' -f $Facts.InstalledAutoSignInUser))
+      }
+      elseif ($convert -and -not $hasPassword -and $Facts.AutoSignInPassword -eq 'missing') {
+        $refusals.Add(('Automatic sign-in of {0} has no stored password that the installer can read, so -Unattended cannot keep it. Give the password of {0} with -UserPassword, or install for a new bot user with -User.' -f $user))
+      }
+      elseif ($convert -and -not $hasPassword -and $Facts.AutoSignInPassword -eq 'wrong') {
+        $refusals.Add(('Windows does not accept the password stored for automatic sign-in of {0} any more, so -Unattended cannot keep it. Give the password of {0} with -UserPassword, or install for a new bot user with -User.' -f $user))
+      }
+      elseif ($afterUnattended -and -not $hasPassword) { $refusals.Add($afterUnattendedRefusal) }
+      elseif ($Facts.UserExists -and -not $hasPassword -and -not $secretKept -and -not $convert) {
+        $refusals.Add(('-Unattended for the existing user {0} needs -UserPassword: the RPA Supervisor signs {0} in with it. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again. A new password makes what the programs of {0} protected with the old one unreadable (the entries of an authenticator application, the certificate of the runner), so where such data exists a new bot user (-User) is the safer way. After a new password the runner cannot read its certificate: remove it and put the new fingerprint into the n8n credential (docs/install/windows.md, section 10).' -f $user))
+      }
+      elseif ($Facts.UserExists -and $hasPassword -and $Facts.UserPasswordWrong -and -not $autoSignIn) {
+        $refusals.Add(('The password given for {0} is not correct.' -f $user))
+      }
+      # The supervisor signs in through the Remote Desktop service, and depends on it: a disabled one cannot start.
+      if ($Facts.RemoteDesktopServiceDisabled) {
+        $refusals.Add('-Unattended needs the Remote Desktop service (TermService), which is disabled on this machine: set it to start (Set-Service TermService -StartupType Manual) and run the installer again.')
+      }
+      # The service's folder: it writes its log and state there as SYSTEM, and refuses to start in one it cannot trust.
+      $supervisorRefusal = Get-RpaPathRefusal $Facts.SupervisorDir $Facts.SupervisorDirState $true
+      if ($supervisorRefusal) { $refusals.Add($supervisorRefusal) }
     }
 
     if ($firewall) {
@@ -213,7 +439,8 @@ function Get-RpaInstallPlan {
       }
       if ($allowFrom -and -not $publicNetwork -and $Facts.PublicNetwork) {
         if ($upgrade) {
-          $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.')
+          if ($browser) { $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.') }
+          else { $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rule is for Domain and Private networks, so it lets nothing in on that network.') }
         } else {
           $refusals.Add("This machine's network is Public, and -AllowFromAnyAddress does not open the ports on a Public network. Use -AllowFrom <n8n address>, or add -IncludePublicNetwork, or use -NoFirewall.")
         }
@@ -235,6 +462,9 @@ function Get-RpaInstallPlan {
       # The policy tool keeps its backups here and trusts the folder; the bot user could have made it first.
       $backupsRefusal = Get-RpaPathRefusal $Facts.PolicyBackupsDir $Facts.PolicyBackupsState $true
       if ($backupsRefusal) { $refusals.Add($backupsRefusal) }
+      # The same for the folder it copies a change file into before it applies it.
+      $changesRefusal = Get-RpaPathRefusal $Facts.PolicyChangesDir $Facts.PolicyChangesState $true
+      if ($changesRefusal) { $refusals.Add($changesRefusal) }
       # The bot user keeps its own files in the data directory (logs, the certificates, exports), so an upgrade for
       # the same user does not judge who owns them; a link, or a file with a second name, is refused on every run.
       # Whenever the user of the install is new to the data directory (a first install, a user this run creates, an
@@ -254,9 +484,18 @@ function Get-RpaInstallPlan {
       $refusals.Add(('The scheduled task folder {0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $script:TaskPath, $Facts.TaskFolderOwner))
     }
 
-    if ($upgrade -and $Facts.RunnerRunning) {
-      $text = 'The runner is running; a run in progress will fail. Use -Force to continue.'
-      if ($Parameters.Force) { $warnings.Add($text) } else { $refusals.Add($text) }
+    # Nobody signed in, and no run holds the runner: the RPA Supervisor's session of the bot user stays for the idle
+    # time after the last connection (the installer's own check of the runner is one), and the runner with it.
+    if ($upgrade -and $Facts.RunnerRunning -and $Facts.RunnerIdle -and $Facts.InstalledMode -eq 'unattended') {
+      $idleSeconds = 15
+      if ($null -ne $Facts.InstalledIdleSeconds) { $idleSeconds = [int]$Facts.InstalledIdleSeconds }
+      if (-not ($Parameters.Force -or $convert)) { $refusals.Add(('No run is in progress: the bot user is still signed in from the last connection to the runner, and the RPA Supervisor signs that session out by itself {0} s after that connection ended. Run this again then, or add -Force.' -f $idleSeconds)) }
+    } elseif ($upgrade -and $Facts.RunnerRunning) {
+      $text = 'The runner is running; a run in progress will fail.'
+      # A move from automatic sign-in always finds the runner running (Windows signed the bot user in), and signs the
+      # bot user out anyway, which its notice says: a refusal here would hide that notice and its question behind
+      # -Force.
+      if ($Parameters.Force -or $convert) { $warnings.Add($text) } else { $refusals.Add($text + ' Use -Force to continue.') }
     }
     # A mistyped -User would otherwise move the install to that name, or create a user of that name, without a word.
     if ($userChanged) {
@@ -272,6 +511,12 @@ function Get-RpaInstallPlan {
     if ($autoSignIn -and $Facts.UserExists -and $Facts.UserPasswordExpires) {
       $warnings.Add(("{0}'s password expires; automatic sign-in stops working when it does." -f $user))
     }
+    if ($convert -and -not $hasPassword -and $Facts.AutoSignInPasswordProblem) {
+      $warnings.Add(('The password stored for automatic sign-in of {0} could not be checked: {1}' -f $user, $Facts.AutoSignInPasswordProblem))
+    }
+    if ($unattended -and $Facts.UserExists -and $Facts.UserPasswordExpires) {
+      $warnings.Add(("{0}'s password expires; when it does, the RPA Supervisor cannot sign {0} in until a new one is stored with Install-Rpa.ps1 -Unattended -UserPassword." -f $user))
+    }
     if ($Facts.UserExists -and $Facts.UserAdminUnknown) {
       $warnings.Add(('Could not check whether {0} is an administrator. The bot user must be a standard user.' -f $user))
     }
@@ -282,6 +527,17 @@ function Get-RpaInstallPlan {
       $warnings.Add(('{0} is not a list that Administrators or SYSTEM own, so the installer does not read it. An earlier uninstall keeps there what it could not put back; without it, a setting that is still changed is recorded as it is now, and a later uninstall leaves it that way. Check the file and remove it.' -f $Facts.Leftovers.File))
     }
   }
+
+  # The name or address n8n reaches this machine at, for the connection lines (install.json keeps it): -Address, else
+  # what the install records. Without either, an install that may ask (not -Force, not -Unattended) asks behind a NAT
+  # (Read-RpaReachableAddress); with -Force or -Unattended rpa connection says what to do instead.
+  $address = $null
+  $givenAddress = ([string]$Parameters.Address).Trim()
+  if ($givenAddress) {
+    if (Get-ConnectionHost $givenAddress) { $address = $givenAddress }
+    else { $refusals.Add(('-Address: {0} is not a host name, an IPv4 address or an IPv6 address.' -f $givenAddress)) }
+  }
+  elseif ($upgrade -and $Facts.InstalledAddress) { $address = [string]$Facts.InstalledAddress }
 
   if ($refusals.Count -eq 0) {
     # An upgrade replaces the program files and keeps the user, the policy and both tokens (and the certificates,
@@ -301,21 +557,84 @@ function Get-RpaInstallPlan {
       if ($Facts.DataFiles) { $state = $Facts.DataFiles[$name] }
       if (-not $state -or -not $state.Exists -or ($replaceTokens -and $tokens -contains $name)) { $steps.Add($script:DataFiles[$name]) }
     }
+    # An upgrade without the browser, of an install that had it (or that still holds its token): its firewall rule,
+    # task, token and certificate go (its program files go with the copy). An install that never had it lists none.
+    $browserToken = $Facts.DataFiles -and $Facts.DataFiles['browser-token'] -and $Facts.DataFiles['browser-token'].Exists
+    $removeBrowser = -not $browser -and $upgrade -and ($installedBrowser -or $browserToken)
     if ($firewall) {
       $steps.Add('add the runner firewall rule')
-      if ($browser) { $steps.Add('add the browser firewall rule') } elseif ($upgrade) { $steps.Add('remove the browser firewall rule') }
+      if ($browser) { $steps.Add('add the browser firewall rule') } elseif ($removeBrowser) { $steps.Add('remove the browser firewall rule') }
     }
     $steps.Add('register the runner task')
-    if ($browser) { $steps.Add('register the browser task') } elseif ($upgrade) { $steps.Add('remove the browser task') }
+    if ($browser) { $steps.Add('register the browser task') } elseif ($removeBrowser) { $steps.Add('remove the browser task') }
+    if ($removeBrowser) { $steps.Add('remove the browser token and certificate') }
     $steps.Add('write install.json')
+    if ($back -and -not $hasPassword) { $steps.Add('keep the supervisor password for automatic sign-in') }
     if ($autoSignIn) {
       if (-not $signInKept) { foreach ($step in $script:SignInSteps) { $steps.Add($step) } }
       elseif ($hasPassword) { $steps.Add('store sign-in password') }
     }
+    # An install with -Unattended:$false over one with -Unattended: the service, the stored password, the group
+    # membership and Remote Desktop go back to what they were, from the records in install.json; also when a run
+    # before tried that and could not put everything back. After automatic sign-in, which may take its password.
+    if ($upgrade -and $Facts.InstalledUnattendedChanges -and -not $unattended) { $steps.Add('put back what -Unattended changed') }
+    # After install.json, so that the uninstaller knows about each of them even when one fails. The service starts
+    # once its folder, the group membership, Remote Desktop and the password are there.
+    # Moving from automatic sign-in: the password is stored for the supervisor while Windows still has it, then
+    # automatic sign-in goes off, and its console session is signed out before the supervisor's first sign-in.
+    if ($unattended) {
+      if ($convert) {
+        if ($hasPassword) { $steps.Add("store the bot user's password for the supervisor") }
+        else { $steps.Add('keep the automatic sign-in password for the supervisor') }
+        $steps.Add('turn off automatic sign-in')
+      }
+      $steps.Add('allow the bot user to sign in through Remote Desktop')
+      if ($Facts.RemoteDesktopDenied) { $steps.Add('turn on Remote Desktop') }
+      if (-not $convert -and (-not $secretKept -or $hasPassword)) { $steps.Add("store the bot user's password for the supervisor") }
+      if ($convert) { $steps.Add('sign the bot user out') }
+      $steps.Add('register the supervisor service')
+      if ($firewall -and $browser) { $steps.Add('point the firewall rules at the supervisor') }
+      elseif ($firewall) { $steps.Add('point the firewall rule at the supervisor') }
+    }
+    $steps.Add('add the Start menu shortcut')
     if ($upgrade) { $steps.Add('start tasks') }
   }
 
-  @{ Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Questions = $questions.ToArray(); Steps = $steps.ToArray(); AllowFrom = $allowFrom; PublicNetwork = $publicNetwork }
+  $notice = @()
+  if ($unattended -and -not $wasUnattended -and $steps.Count -gt 0) {
+    $shownBrowserPort = 0
+    if ($browser) { $shownBrowserPort = $browserPort }
+    $notice = @(Get-RpaUnattendedNotice $user $runnerPort $shownBrowserPort $idleSeconds $steps.ToArray())
+    if ($defaultMode) {
+      $notice = @(
+        'No sign-in mode was given, so this install is unattended (-Unattended): the default on Windows Server for a new bot'
+        'user. The other choices: -AutoSignIn (Windows keeps the bot user signed in), or -UserPassword (a person signs it in).'
+      ) + $notice
+    }
+  } elseif ($back -and $steps.Count -gt 0) {
+    $notice = @('-Unattended:$false changes how this machine works:')
+    if ($steps -contains 'keep the supervisor password for automatic sign-in') {
+      $notice += '  - The password of {0} stays the same: the one stored for the RPA Supervisor is stored for automatic' -f $user
+      $notice += '    sign-in instead, so no program of {0} loses data it protects with that password.' -f $user
+    }
+    $notice += '  - The service RPA Supervisor, its stored password and the other settings -Unattended changed are removed or put'
+    $notice += '    back, after automatic sign-in is set up.'
+    $notice += '  - Windows signs {0} in at the next start of this machine (Restart-Computer).' -f $user
+  }
+  # The browser added to an install, or removed from one. The port it is shown on is the one the install records when
+  # it goes.
+  $browserNotice = @()
+  if ($upgrade -and $steps.Count -gt 0 -and $browser -ne $installedBrowser) {
+    $shownPort = $browserPort
+    if (-not $browser -and $Facts.InstalledBrowserPort) { $shownPort = [int]$Facts.InstalledBrowserPort }
+    $browserNotice = @(Get-RpaBrowserChangeNotice $browser $user $shownPort $allowFrom $unattended ([string]$Facts.DataDir) $steps.ToArray())
+  }
+  @{
+    Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Questions = $questions.ToArray(); Steps = $steps.ToArray()
+    AllowFrom = $allowFrom; PublicNetwork = $publicNetwork; Notice = $notice; Unattended = $unattended; IdleSeconds = $idleSeconds
+    Browser = $browser; BrowserNotice = $browserNotice
+    Address = $address; AskAddress = (-not $address) -and $refusals.Count -eq 0 -and -not $Parameters.Force -and -not $Parameters.Unattended
+  }
 }
 
 # Decides whether an uninstall may run. -Parameters holds Uninstall-Rpa.ps1's parameters (RemoveData); -Facts is what
@@ -341,7 +660,10 @@ function Get-RpaUninstallPlan {
     }
     foreach ($account in @($Facts.Accounts)) {
       if (-not $account -or @($Facts.RunningSids) -notcontains $account.Sid) { continue }
-      $refusals.Add(('{0} is signed in. Sign {0} out, then run Uninstall-Rpa.ps1 -RemoveData again.' -f $account.Name))
+      # With -Unattended the RPA Supervisor's session of the bot user goes when the service stops.
+      if ($Facts.Unattended -and $account.Bot) {
+        $refusals.Add(("{0} is signed in. Stop the RPA Supervisor, which signs its session of {0} out (Stop-Service 'RPA Supervisor'), sign out any other session of {0}, then run Uninstall-Rpa.ps1 -RemoveData again." -f $account.Name))
+      } else { $refusals.Add(('{0} is signed in. Sign {0} out, then run Uninstall-Rpa.ps1 -RemoveData again.' -f $account.Name)) }
       if ($Facts.AutoSignInSid -and $Facts.AutoSignInSid -eq $account.Sid) {
         $refusals.Add(('Automatic sign-in is on for {0}, and Windows signs it in again after a sign-out. Run Uninstall-Rpa.ps1 without -RemoveData first, which turns that off; then sign {0} out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package.' -f $account.Name))
       }

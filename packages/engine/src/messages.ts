@@ -1,7 +1,7 @@
 import type { Locator } from './types.js';
 
-// Every user-facing golden string of the engine. Tests assert them verbatim, and
-// test/wording.test.ts checks that none of them contains a use-case word.
+// User-facing texts that several modules share, or that the node and its tests name. A text used in one place stays
+// next to its code. Tests assert them verbatim, and test/wording.test.ts checks that none of these contains a use-case word.
 
 /** Words no user-facing text may contain. */
 export const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
@@ -27,8 +27,12 @@ export const NO_TOTP_SECRET = 'no authenticator secret is configured for this si
 export const LOOKS_DESTRUCTIVE = 'looks like it deletes, cancels, pays, sends or otherwise changes something, or signs out';
 
 // Trust gate. Golden: tests assert them verbatim.
+/** Also what steps signed with an earlier Step Signing key get: the way back is the import form's sign-again page. */
 export const UNSIGNED_REQUIRED =
-  'The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first.';
+  'The steps are not signed, or the signature is not valid, and Require Signed Steps is on. '
+  + 'To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot\'s name. '
+  + 'Its steps may also have been changed in the Data Table after they were approved: read every step on the form before you approve. '
+  + 'Steps used without the form: sign them with Sign Steps first.';
 export const SIGNATURE_INVALID =
   'The signature is not valid for these steps: it does not match their name, version, start site, Site Login or approver.';
 export const SIGNATURE_WITHOUT_KEY = 'a signature is present but no Step Signing credential is attached';
@@ -36,13 +40,26 @@ export const UNSIGNED_WRITES =
   'Unsigned steps cannot sign in, submit a form or download through a form. Sign them with Sign Steps, or turn on Options → Allow Unsigned Writes.';
 export const UNSIGNED_SECRET_FILL =
   'Unsigned steps cannot type a secret into a password field (fill with secret: true). Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
+/** A desktop fill of a secret variable in unsigned steps: as a secret fill in the browser, only signed steps type one. */
+export const UNSIGNED_SECRET_VARIABLE = 'Unsigned steps cannot type a secret variable. Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
+/** A value of the RPA Secret Variables credential would be typed on a host its May Be Typed Into does not list. */
+export const secretHostNotListed = (where: string) =>
+  `A value from the RPA Secret Variables credential may not be typed on ${where}: the credential's May Be Typed Into does not list it. List it there only if the value is meant for it.`;
+/** A desktop run of an app the RPA Secret Variables credential's May Be Typed Into does not list: refused before the app starts. */
+export const secretAppNotListed = (app: string) =>
+  `The RPA Secret Variables credential's May Be Typed Into does not list ${app}, so this run may not start it. Add ${app} there, or remove the credential from this node.`;
+/**
+ * A signIn with changePassword in unsigned steps: refused at the trust gate before the browser opens, whatever Allow
+ * Unsigned Writes says, and by the step itself before anything is typed.
+ */
+export const UNSIGNED_CHANGE_PASSWORD = 'Unsigned steps cannot set a new password (signIn.changePassword). Sign them with Sign Steps.';
 export const nameMismatch = (signed: string, expected: string) => `the signed steps are named "${signed}", not "${expected}"`;
 export const versionMismatch = (signed: number, expected: number) => `the signed steps are version ${signed}, but Expected Version is ${expected}`;
 export const startSiteMismatch = (signed: string, expected: string) => `the signed steps start on ${signed}, but this run starts on ${expected}`;
 
 // Network guard. Golden: tests assert them verbatim.
 export const browserUnreachable = (url: string) =>
-  `Could not connect to the browser server at ${url}. Is it running? With the compose stack: docker compose up -d browser. On a Windows install: is the bot account signed in? (README: Where the browser runs).`;
+  `Could not connect to the browser server at ${url}. Is it running? With the compose stack: docker compose up -d browser; on a Windows machine, run rpa status there (README: Where the browser runs).`;
 export const browserVersionMismatch = (server: string, client: string) =>
   `The browser server is version ${server} but this node needs ${client}. Use image mcr.microsoft.com/playwright:v${client}.`;
 export const CHROMIUM_MISSING = 'Chromium not found. Run: npx playwright install chromium';
@@ -81,6 +98,18 @@ export const offListSite = (host: string, navHosts: string[]) =>
   `Blocked: the page tried to open ${host}, which is not allowed. This run only visits ${navHosts.join(', ')}. Add it under Options → Also Allow These Sites if this is expected.`;
 /** A fatal violation with no more specific message (writes, sockets, sign-in refusals): the v1 text. */
 export const BLOCKED_REQUEST = 'a blocked request was attempted during the run';
+/**
+ * A blocked write, named: `request` is `METHOD host/path` (no query; session segments masked as `(…)`), `readLine` the
+ * same as a Requests That Only Read line (a masked segment written with *). A site that posts to read (SAP) is the common
+ * case; a real write needs a declared submission.
+ */
+export const blockedPost = (request: string, readLine: string) =>
+  `${BLOCKED_REQUEST}: ${request}. If it only reads data, list it in the RPA Site Login under Requests That Only Read, as ${readLine}; if it saves or sends, only a step that submits may send it, listed under Forms It May Submit.`;
+export const blockedWrite = (request: string) =>
+  `${BLOCKED_REQUEST}: ${request}. Only a step that submits may send it, listed in the RPA Site Login under Forms It May Submit.`;
+/** A main-frame navigation the destructive-action denylist refused (agent and replay sessions). */
+export const blockedActionAddress = (request: string) =>
+  `${BLOCKED_REQUEST}: ${request}. Its address looks like an action (such as delete, send or sign out), which this run does not open.`;
 /** A step stopped only because the session recorded a fatal violation (steps/run.ts). */
 export const BLOCKED_STOP = 'stopped: a blocked request was attempted';
 
@@ -119,8 +148,48 @@ const locatorSuggestion = (desc: string): string =>
   desc.startsWith('Visible Text ') || desc.startsWith('Form Label ')
     ? 'Check the spelling or try Find by: Role and Name.'
     : 'Check the spelling or try Find by: Visible Text.';
+/**
+ * For signed steps, in place of locatorSuggestion: their owner cannot change a locator on the node ("Find by" is a field
+ * of a node whose steps are typed in), so the message names the two ways on.
+ */
+export const SIGNED_CONTROL_GONE =
+  'The page no longer has that control. To go on, change the bot on the import form, or let self-repair fix it if it is set up (AI Repair on the RPA node).';
+/** A step failure of signed steps: the Find-by advice of locatorNotFound replaced by SIGNED_CONTROL_GONE; anything else unchanged. */
+export const signedStepMessage = (message: string): string =>
+  message.replace(/Check the spelling or try Find by: (?:Visible Text|Role and Name)\./, SIGNED_CONTROL_GONE);
+/**
+ * For the import form's replay (runDraft), in place of locatorSuggestion: the person on the form changes the step
+ * itself, as JSON or in the file, not a Find by field, using the names the message lists.
+ */
+export const IMPORT_CONTROL_GONE =
+  "To go on, change the step's control name to one the page shows: with Change the steps as JSON on the import form, or in the file.";
+/** A failure of the import's replay: the Find-by advice of locatorNotFound replaced by IMPORT_CONTROL_GONE; anything else unchanged. */
+export const importStepMessage = (message: string): string =>
+  message.replace(/Check the spelling or try Find by: (?:Visible Text|Role and Name)\./, IMPORT_CONTROL_GONE);
 export const locatorNotFound = (desc: string, url: string, seconds: number): string =>
   `No element found for ${desc} on ${url} after ${seconds} s. ${locatorSuggestion(desc)}`;
+/**
+ * What the page shows at a control that is not there (steps/page-offers.ts): its visible links and buttons, or its
+ * fields and lists, by `names` already shown as text (masked, one line, cut), nearest first; `more` it shows besides.
+ */
+export const pageShows = (kind: 'buttons' | 'fields', names: readonly string[], more: number): string => {
+  if (names.length === 0) return kind === 'buttons' ? 'The page shows no links or buttons.' : 'The page shows no fields or lists.';
+  const list = names.map((n) => `"${n}"`).join(', ');
+  return `The page shows these ${kind === 'buttons' ? 'links and buttons' : 'fields and lists'}: ${list}${more > 0 ? `, and ${more} more` : ''}.`;
+};
+const stepList = (steps: readonly number[]): string =>
+  steps.length === 1 ? `Step ${steps[0]}` : `Steps ${steps.slice(0, -1).join(', ')} and ${steps[steps.length - 1]}`;
+/** The import's replay checked the later steps on the same page (steps/page-offers.ts); `allThere`: none is missing. */
+export const checkedWithoutActing = (steps: readonly number[], allThere: boolean): string =>
+  `${stepList(steps)} ${steps.length === 1 ? 'was' : 'were'} checked on this page too, without acting${allThere ? `: ${steps.length === 1 ? 'its control is' : 'their controls are'} there` : ''}.`;
+/** A later step whose control is not on the page either. */
+export const alsoMissing = (step: number, intent: string, lookedFor: string): string =>
+  `Step ${step} (${intent}) cannot find ${lookedFor} here either.`;
+/** Where the check of later steps stopped: the steps from `step` to `last` come after one that can change the page. */
+export const notCheckedFrom = (step: number, last: number): string =>
+  step >= last
+    ? `Step ${step} was not checked: it comes after a step that can change the page.`
+    : `Steps ${step} ${last === step + 1 ? 'and' : 'to'} ${last} were not checked: they come after a step that can change the page.`;
 export const locatorNotUnique = (desc: string, count: number): string =>
   `${desc} matches ${count} elements. Use a more specific locator; it must match exactly one.`;
 export const countMismatch = (expected: number, stated: string, found: number): string =>
@@ -128,6 +197,37 @@ export const countMismatch = (expected: number, stated: string, found: number): 
 export const notReachedNetworkIdle = (seconds: number): string => `the page did not reach network idle within ${seconds} s`;
 export const notLoaded = (seconds: number): string => `the page did not finish loading within ${seconds} s`;
 export const BROWSER_ERROR_PAGE = 'the browser showed an error page instead of the site';
+
+/** What the browser's network errors that a first run meets mean, by Chromium's name for them (net::ERR_…). */
+const NETWORK_SENTENCES: [RegExp, (host: string) => string][] = [
+  [/^ERR_NAME_NOT_RESOLVED$/, (h) => `${h} could not be found: no site answers to that name. Check the address, and that the site is up.`],
+  [/^ERR_CONNECTION_REFUSED$/, (h) => `${h} refused the connection: nothing answers at that address and port. Check the address, and that the site is up.`],
+  [/^ERR_(CONNECTION_)?TIMED_OUT$/, (h) => `${h} did not answer in time. Check the address, or try again later.`],
+  [/^ERR_(CERT_[A-Z_]+|SSL_[A-Z_]+|BAD_SSL_CLIENT_AUTH_CERT)$/, (h) => `The certificate of ${h.replace(/^The site/, 'the site')} was not accepted: it may have expired, be made by the site itself, or name another site. Check the address, or the site's certificate.`],
+];
+/**
+ * A browser error that names a network failure (`page.goto: net::ERR_NAME_NOT_RESOLVED at http://site/x`) as a sentence
+ * that names the site and says what happened, with the browser's own text after it in brackets for support; any other
+ * text unchanged. The bracketed text keeps `net::ERR_`, which classify.ts reads (site_down).
+ */
+export function networkSentence(text: string): string {
+  const m = /net::(ERR_[A-Z_]+)(?: at (\S+))?/.exec(text);
+  if (!m) return text;
+  const say = NETWORK_SENTENCES.find(([re]) => re.test(m[1]))?.[1];
+  if (!say) return text;
+  const url = m[2] !== undefined && URL.canParse(m[2]) ? new URL(m[2]) : undefined;
+  // "The site …" first: a message may be shown with its first letter in capitals, which a host name must not get.
+  return `${say(url ? `The site ${url.host}` : 'The site')} (browser: ${text.trim()})`;
+}
+
+/** A desktop choose step whose option is only run variables that are all empty: there is no item to look for. */
+export const emptyChoice = (names: readonly string[]): string =>
+  `the run variable ${names.map((n) => `"${n}"`).join(' and ')} is empty, so there is no item to choose: give it a value in Options → Variables of the RPA node`;
+/** The part of a fill's failure that says the field did not take the value: classify.ts reads it (policy_violation). */
+export const VALUE_NOT_TAKEN = ' did not take the value ';
+/** A fill whose value the field's type refuses (Playwright's "Malformed value", for example text in a date field). */
+export const valueNotTaken = (field: string, value: string, raw: string): string =>
+  `the field ${field}${VALUE_NOT_TAKEN}${value}: it does not fit that field, for example text in a date field (browser: ${raw.trim()})`;
 export const tooManyRows = (n: number): string => `limit: more than ${n} rows`;
 
 // Capture verbs and output limits.
@@ -147,10 +247,15 @@ export const elementTooTall = (h: number): string => `limit: the element is ${h}
 // Writes.
 export const PASSWORD_FILL_REFUSED = 'Fill and Submit Form cannot fill password fields. For sites behind a login, use Run Steps with a Site Login.';
 export const PASSWORD_FILL_REFUSED_STEPS = 'fill cannot type into a password field: passwords are typed only by signIn with a Site Login';
+export const PRESS_PASSWORD_REFUSED = 'press cannot send a key to a password field: passwords are typed only by signIn with a Site Login';
 export const formPostsElsewhere = (host: string, hosts: string[]): string => `the form posts to ${host}, which is not allowed. This run only submits to ${hosts.join(', ')}.`;
 export const WINDOW_STEP_NOT_CLICK = 'the write window must be on a click step';
 /** A {{var.x}} in a locator of a step that writes or types secrets: a run variable must never steer a write. */
 export const varInWriteLocator = (at: string): string => `${at}: {{var.*}} is not allowed in a locator of a step that writes or signs in; use a fixed locator`;
+/** A `when` on a run variable on a step that signs in or writes (signIn, submit, download, the write window click). */
+export const whenVarOnWrite = (at: string): string => `${at}.when may not use a variable on a step that signs in or writes`;
+/** A `when` on a variable that a secret fill types: whether the step ran would tell whether the secret equals a literal. */
+export const whenVarSecret = (at: string): string => `${at}.when may not test a variable that a secret fill types`;
 /**
  * A {{var.x}} in a locator key the run never renders (label, testId, css, frame, role, a window selector, a UI Automation
  * controlType, automationId or className, any key of a pop-up handler): it would be matched as literal text.
@@ -166,6 +271,7 @@ export const FIRST_RUN_NEEDS_NAME = 'A first run needs a name: set Options → N
 export const REPAIR_ALREADY_RAN = 'AI repair already ran in this execution';
 /** Appended to a script-lane drift when a two-page sign-in typed the username but no password was submitted. */
 export const REPAIR_SIGN_IN_HALF_DONE = 'AI repair cannot finish a sign-in whose username was already typed: fix the signIn step by hand';
+export const REPAIR_PASSWORD_CHANGE_HALF_DONE = 'AI repair cannot finish a password change whose fields were already typed: fix the signIn step by hand';
 export const NO_STEPS_NO_REPAIR = 'there are no steps yet and AI repair is off';
 export const COMPILE_TOUCHES_SUBMIT = 'the repair would drop or change a form submission step';
 export const COMPILE_EMITS_SUBMIT = 'repaired steps never contain a submit step';
@@ -194,6 +300,8 @@ export const IMPORT_NEEDS_SITE_LOGIN = 'The recording signs in: attach an RPA Si
 export const IMPORT_REFUSES_WRITES = 'Imported steps that submit a form or post to download cannot be adopted: repair and import never write.';
 export const IMPORT_NOT_ADOPTABLE =
   'These steps read no rows and download no file, so there is nothing to prove: the draft is returned for review but cannot be signed.';
+export const IMPORT_ROWS_NEED_ID =
+  'These steps read rows, but a step that reads them has no idPattern, so the replay cannot check the rows: the draft is returned for review but cannot be signed. Give each extract and extractTable step an idPattern, the shape of the ID every row has, such as INV-\\d{4}.';
 export const IMPORT_UNSUPPORTED_TARGET = 'Only JavaScript or TypeScript Playwright code can be imported; record with --target javascript.';
 export const IMPORT_EMPTY = 'Nothing in this file could be turned into steps.';
 export const IMPORT_PROOF_FAILED = 'The imported steps ran, but replaying them in a fresh browser did not pass the proof, so there is nothing to sign';
@@ -213,8 +321,20 @@ export const DESKTOP_UNSIGNED_WRITES =
 export const RUNNER_URL_NOT_SECURE = 'The desktop runner URL must start with wss://: plain ws:// is refused.';
 export const RUNNER_URL_HAS_CREDENTIALS = 'The desktop runner URL must not carry a token or a user name: put the token in the Token field.';
 export const RUNNER_FINGERPRINT_INVALID =
-  'The certificate fingerprint must be the SHA-256 fingerprint the runner prints at start: 64 hexadecimal digits, colons optional.';
+  'The certificate fingerprint must be the SHA-256 fingerprint rpa connection prints: 64 hexadecimal digits, colons optional.';
 export const runnerUnreachable = (where: string, why: string) => `Could not connect to the desktop runner at ${where} (${why}). Is it running, and is the port open?`;
+/**
+ * Nothing answered the TCP connection itself: what to check, in order. `privateHost` is the line's host when it is a
+ * private address (the installer's address on the route to n8n, which n8n outside that network cannot reach).
+ */
+export const runnerNoTcpAnswer = (where: string, seconds: number, privateHost?: string) =>
+  `Could not connect to the desktop runner at ${where} (no answer within ${seconds} s). Check, in this order: `
+  + '1. The address in the Connection Line is one n8n can reach. '
+  + (privateHost
+    ? `${privateHost} is a private address: if n8n is outside the Windows machine's network, print the line there in an administrator PowerShell with & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens -Address followed by the name or address n8n can reach, and paste it again. `
+    : '')
+  + '2. The port is open to n8n\'s address (Install-Rpa.ps1 -AllowFrom, and any firewall on the way). '
+  + '3. The Windows machine is on and the runner runs there (rpa status).';
 export const runnerFingerprintMismatch = (where: string, presented: string) =>
   `The desktop runner at ${where} presented a certificate with fingerprint ${presented}, which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.`;
 export const runnerTokenRefused = (where: string) => `The desktop runner at ${where} refused the token. Check the Token in the RPA Desktop Runner credential.`;
@@ -225,8 +345,14 @@ export const RUNNER_TOO_OLD_FOR_CLIPBOARD = 'the desktop runner is older than cl
 /** app.launch answered not_found: the allowed app is not installed where the runner's policy says. */
 export const runnerAppMissing = (exe: string) =>
   `the desktop runner could not start ${exe}: it is not installed at the path the runner's policy names (allowedApps[].path). Install it there or correct the policy`;
+/** app.launch refused because the app is not in the runner's allowedApps (the runner's own text, exactly, is what task.ts recognises). */
+export const runnerAppNotAllowed = (exe: string) =>
+  `the desktop runner is not allowed to start ${exe}. On the Windows machine, allow it: in the RPA Recorder choose "Allow this app…" after saving a recording of it, or as an administrator run: & "C:\\Program Files\\RPA Runner\\rpa.cmd" policy apply followed by the path of the recording's .policy-change.json file`;
 export const desktopNotInteractive = (locked: boolean) =>
   locked ? 'the desktop runner\'s Windows session is locked: unlock it or sign the runner user in again' : 'the desktop runner is not in an interactive Windows session';
+/** A desktop step the runner refused: the step (numbered from 1, as the review page numbers it), then the runner's own words. */
+export const desktopStepFailure = (number: number, intent: string, runnerSays: string): string => `Step ${number} (${intent}): ${runnerSays}`;
+
 /** The credential test's success message, with the Windows session's state as the runner reports it. */
 export const runnerConnected = (session: { interactive?: boolean; locked?: boolean }) =>
-  `Connected to the desktop runner (session ${session?.locked ? 'locked' : session?.interactive ? 'interactive' : 'not interactive'})`;
+  `Connected to the desktop runner (${session?.locked ? 'its Windows session is locked: a run fails until it is unlocked' : session?.interactive ? 'its Windows session is ready for a run' : 'it has no Windows session to work in yet'})`;

@@ -12,7 +12,7 @@ import { downloadTemplateIssues, parseScript } from '../steps/parse.js';
 import { shownMessage } from '../steps/urls.js';
 import { newRunState, type StepContext } from '../steps/run.js';
 import {
-  CODE_WORKFLOW_NOT_SET, expectedFileInvalid, FIRST_RUN_NEEDS_NAME, FIRST_RUN_NEEDS_TARGET, NO_STEPS_NO_REPAIR, REPAIR_ALREADY_RAN, REPAIR_DOWNLOAD_NEEDS_CHECK, REPAIR_SIGN_IN_HALF_DONE, REPAIR_NEEDS_ID_AND_EXTRACT, REPAIR_NO_CAPTURES,
+  CODE_WORKFLOW_NOT_SET, expectedFileInvalid, FIRST_RUN_NEEDS_NAME, FIRST_RUN_NEEDS_TARGET, NO_STEPS_NO_REPAIR, REPAIR_ALREADY_RAN, REPAIR_DOWNLOAD_NEEDS_CHECK, REPAIR_PASSWORD_CHANGE_HALF_DONE, REPAIR_SIGN_IN_HALF_DONE, REPAIR_NEEDS_ID_AND_EXTRACT, REPAIR_NO_CAPTURES,
   REPAIR_ONE_DOWNLOAD, REPAIR_REFUSED_WRITES,
 } from '../messages.js';
 import type { SaveTrace } from '../trace/trace.js';
@@ -26,12 +26,13 @@ import {
 } from './script-lane.js';
 import { openStartPage, startPageFailure } from './start-page.js';
 import type { DownloadTemplate } from '../steps/file-check.js';
+import type { SecretTargets } from '../secrets/secret-targets.js';
 import { isEmptySteps, type TrustInput } from './trust.js';
 
 export { MAX_AGENT_ACTIONS, MAX_AGENT_TOKENS, PROVE_RESERVE_MS } from './agent-lane.js';
 export { MIN_PROVE_MS } from './prove-run.js';
 /** v1 repair never records field extraction: such runs report drift instead of healing. */
-export const FIELDS_UNSUPPORTED = 'repair cannot record field extraction yet: update the script by hand';
+export const FIELDS_UNSUPPORTED = 'repair cannot record field extraction yet: update the steps by hand';
 
 /** AI repair settings. Present only when repair is on and a chat model is connected. */
 export interface RepairInput {
@@ -65,6 +66,16 @@ export interface TaskInput {
   endpoint: BrowserEndpoint;
   output?: OutputSpec;
   vars?: Record<string, string>;
+  /**
+   * The names in `vars` whose values are secrets (in n8n, the RPA Secret Variables credential): masked from the run start in
+   * everything the run returns and shows, refused by every template except a secret fill's (registerSecretVars).
+   */
+  secretVars?: string[];
+  /**
+   * Where the secret variables' values may be typed (in n8n, the RPA Secret Variables credential's May Be Typed Into):
+   * hosts for browser steps, checked right before a step types one of the values. Absent: no limit.
+   */
+  secretTargets?: SecretTargets;
   budgetMs?: number;
   defaultStepTimeoutMs?: number;
   viewport?: { width: number; height: number };
@@ -72,6 +83,8 @@ export interface TaskInput {
   signal?: AbortSignal;
   startStatus?: 'classify' | 'report';
   repair?: RepairInput;
+  /** Report Every Missing Control (ScriptLaneInput.reportEveryMissing): the import's replay sets it. Off by default. */
+  reportEveryMissing?: boolean;
 }
 export interface AgentActionSummary {
   tool: string;
@@ -119,6 +132,8 @@ export interface AgentLaneSuccess {
   transcript: ChatMessage[];
   /** True once a write left the browser in this run. Repair is refused after a write, so false in practice. */
   submitted: boolean;
+  /** True when the script lane's signIn.changePassword set a new password before the drift; absent otherwise. */
+  passwordChanged?: true;
   trace?: Buffer;
 }
 export type TaskFailure = LaneFailure & {
@@ -205,7 +220,7 @@ export function repairPrecondition(raw: unknown, output: OutputSpec | undefined,
 }
 
 const withoutName = ({ name: _name, ...rest }: RepairInput): RepairInput => rest;
-const maskerOf = (input: TaskInput) => laneMasker({ secrets: input.secrets, endpoint: input.endpoint, signingKey: input.trust.key });
+const maskerOf = (input: TaskInput) => laneMasker({ secrets: input.secrets, endpoint: input.endpoint, signingKey: input.trust.key, vars: input.vars, secretVars: input.secretVars });
 
 /**
  * One run: the script lane, then (on drift, with AI repair) the agent lane on the same session, compile, prove and
@@ -262,6 +277,11 @@ export async function runTask(input: TaskInput): Promise<TaskResult> {
     // password, a failed attempt toward a lockout), so no repair: the drift stands, and the kept session closes with its
     // failure trace as a plain drift would.
     return finishLane(input, runtime, { ...r, lane: 'script', message: `${r.message} (${REPAIR_SIGN_IN_HALF_DONE})` });
+  }
+  if (run.state.passwordChangeStarted && !run.state.passwordChanged) {
+    // The change form was typed into but the change did not go through: a click by the agent there could submit it and
+    // set a new password the run never reports. No repair, as for a half-done sign-in.
+    return finishLane(input, runtime, { ...r, lane: 'script', message: `${r.message} (${REPAIR_PASSWORD_CHANGE_HALF_DONE})` });
   }
   const kind = repairKind(input.script, input.output, repair);
   // The repair path takes the template from the steps only: the Expected File belongs to a first run.

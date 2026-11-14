@@ -2,8 +2,9 @@
 // its own floor (allowed apps and windows, declared write controls, gated keys); a step declared `write: true` by its
 // owner is the only one that carries the write marker.
 
-import { runBinaryTooLarge } from '../messages.js';
-import { renderVars } from '../secrets/render.js';
+import { emptyChoice, runBinaryTooLarge, UNSIGNED_SECRET_VARIABLE } from '../messages.js';
+import { renderVars, SECRET_FILL_VALUE } from '../secrets/render.js';
+import { secretFillValues } from '../secrets/secret-fills.js';
 import { FILE_CHECK_FAILED_PREFIX, checkFile } from '../steps/file-check.js';
 import { MAX_TEXT_BYTES, truncateUtf8 } from '../steps/handlers/capture.js';
 import { binaryName, DEFAULT_MAX_BYTES, DEFAULT_MIME, sanitizeFileName, sniffMime } from '../steps/handlers/files.js';
@@ -71,10 +72,16 @@ const VAR_REF = /\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g;
 /**
  * A text the run types into a field, rendered ({{var.x}}). The value of every variable it uses is kept for masking
  * (DesktopSurface.typed): such values come from outside the signed steps (a password, an account number) and are masked
- * out of messages, logs and read outputs. Literal text is part of the signed steps and is not.
+ * out of messages, logs and read outputs. Literal text is part of the signed steps and is not. A secret variable (the
+ * run's masker holds it, registerSecretVars) is typed only by signed steps and only as the whole text, exactly one
+ * {{var.name}}; renderVars refuses it anywhere else.
  */
 function typedText(ctx: StepContext, template: string): string {
-  const text = renderVars(template, ctx.vars, ctx.masker);
+  const name = SECRET_FILL_VALUE.exec(template)?.[1];
+  const value = name !== undefined && Object.hasOwn(ctx.vars, name) ? ctx.vars[name] : undefined;
+  const secret = typeof value === 'string' && secretFillValues(ctx.masker).has(value);
+  if (secret && !ctx.signed) throw new Error(UNSIGNED_SECRET_VARIABLE);
+  const text = secret ? value : renderVars(template, ctx.vars, ctx.masker);
   const typed = desktopOf(ctx).typed;
   for (const m of template.matchAll(VAR_REF)) {
     const v = ctx.vars[m[1]];
@@ -103,6 +110,11 @@ const click: Handler = async (ctx, step, state, timeout) => {
   return (await actOn(ctx, s, s.click, 'click', state, timeout)).candidate;
 };
 
+const doubleClick: Handler = async (ctx, step, state, timeout) => {
+  const s = step as unknown as D<'doubleClick'>;
+  return (await actOn(ctx, s, s.doubleClick, 'doubleClick', state, timeout)).candidate;
+};
+
 const fill: Handler = async (ctx, step, state, timeout) => {
   const s = step as unknown as D<'fill'>;
   const segments = fillSegments(ctx, s.fill.value);
@@ -112,7 +124,11 @@ const fill: Handler = async (ctx, step, state, timeout) => {
 const select: Handler = async (ctx, step, state, timeout) => {
   const s = step as unknown as D<'select'>;
   // An option is the name of an item the app lists, not typed text: rendered, not masked.
-  return (await actOn(ctx, s, s.select.field, 'select', state, timeout, { value: renderVars(s.select.option, ctx.vars, ctx.masker) })).candidate;
+  const value = renderVars(s.select.option, ctx.vars, ctx.masker);
+  // Run variables that are empty name no item: said now, instead of after the wait for an item without a name.
+  const names = [...String(s.select.option).matchAll(/\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g)].map((m) => m[1]);
+  if (value.trim() === '' && names.length) throw new Error(emptyChoice([...new Set(names)]));
+  return (await actOn(ctx, s, s.select.field, 'select', state, timeout, { value })).candidate;
 };
 
 const check: Handler = async (ctx, step, state, timeout) => {
@@ -176,6 +192,6 @@ const expectFile: Handler = async (ctx, step, state, timeout) => {
 };
 
 registerHandlers('desktop', {
-  click: recorded(click), fill: recorded(fill), select: recorded(select), check: recorded(check), key: recorded(key),
+  click: recorded(click), doubleClick: recorded(doubleClick), fill: recorded(fill), select: recorded(select), check: recorded(check), key: recorded(key),
   waitFor: recorded(waitFor), read: recorded(read), expectFile: recorded(expectFile),
 });

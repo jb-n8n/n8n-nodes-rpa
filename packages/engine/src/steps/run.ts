@@ -1,15 +1,17 @@
 import type { Page } from 'playwright-core';
 import type { AllowedSubmit, WriteWindow } from '../browser/session.js';
 import { maskClipped, type Masker } from '../secrets/mask.js';
-import type { CodeProvider, PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, Violation } from '../types.js';
+import type { CodeProvider, Locator, PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, StepWhen, Violation } from '../types.js';
 import type { InterruptHandle } from './interrupts.js';
 import { HANDLERS, type AnyVerb } from './handlers/index.js';
 import { desktopVerbOf, verbOf } from './parse.js';
 import { renderLocators } from './render-locators.js';
 import { registerSecretFills } from '../secrets/secret-fills.js';
-import { PolicyError } from './errors.js';
+import { renderVars } from '../secrets/render.js';
+import type { SecretTypingLimit } from '../secrets/secret-targets.js';
+import { ControlNotFound, PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
-import { BLOCKED_STOP } from '../messages.js';
+import { BLOCKED_STOP, networkSentence, signedStepMessage } from '../messages.js';
 import { surfaceOf } from '../surface/browser.js';
 import type { Surface } from '../surface/surface.js';
 
@@ -31,6 +33,11 @@ export interface StepContext {
   codeTimeoutMs?: number;
   /** True when the trust gate verified a signature for these steps (script lane); only then does a fill with `secret` type. */
   signed?: boolean;
+  /**
+   * The RPA Secret Variables credential's May Be Typed Into for a browser run (secretTypingLimit): a step that types one
+   * of its values checks the page's and the field's frame's host first (steps/secret-target.ts). Absent: no limit.
+   */
+  secretTyping?: SecretTypingLimit;
   vars: Record<string, string>;
   masker: Masker;
   defaultTimeoutMs: number;
@@ -87,7 +94,14 @@ function coverHint(raw: string): string {
 /** The single choke point for step failure messages: first line, URLs shown without query string, masked, capped. */
 function messageOf(err: unknown, masker: Masker): string {
   const raw = err instanceof Error ? err.message : String(err);
-  return shownMessage(raw.split('\n')[0] + coverHint(raw), masker).slice(0, 500);
+  return shownMessage(networkSentence(raw.split('\n')[0]) + coverHint(raw), masker).slice(0, 500);
+}
+
+/** A locator with every text in it masked (kind, name, frame, within, fallbacks). */
+function maskedLocator(loc: Locator, masker: Masker): Locator {
+  const walk = (v: unknown): unknown =>
+    typeof v === 'string' ? masker.mask(v) : Array.isArray(v) ? v.map(walk) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v;
+  return walk(loc) as Locator;
 }
 
 /** The log entry's `output` for a step that produced one: read values, or the binary name (never the bytes). */
@@ -103,6 +117,18 @@ function logOutput(state: RunState, verb: AnyVerb, outputsBefore: number, downlo
     };
   }
   return undefined;
+}
+
+/**
+ * Whether a step's `when` holds now. `visible` and `hidden` look once, without waiting. A variable condition reads the
+ * run variable as renderVars does (an unset one throws `missing input "x"`, one that holds a secret is refused) and
+ * compares it with the literal text.
+ */
+async function conditionMet(when: StepWhen, surface: Surface, ctx: StepContext): Promise<boolean> {
+  if ('visible' in when) return surface.isVisible(when.visible);
+  if ('hidden' in when) return !(await surface.isVisible(when.hidden));
+  const value = renderVars(`{{var.${when.var}}}`, ctx.vars, ctx.masker);
+  return 'equals' in when ? value === when.equals : value !== when.notEquals;
 }
 
 /**
@@ -144,15 +170,25 @@ export async function runSteps(
     let lastError: unknown;
     const timeout = Math.min(step.timeoutMs ?? ctx.defaultTimeoutMs, opts.maxTimeoutMs ?? Infinity);
     let hookLabel: string | undefined;
+    const skipUnmet = async () => {
+      log('skipped', 0, { note: 'condition not met' });
+      if (!opts.nested) await opts.afterStep?.(i);
+    };
     const endHook = async (ok: boolean) => {
       if (hookLabel !== undefined) await hooks?.end(ctx.page, ok, hookLabel).catch(() => undefined);
     };
     try {
+      // A variable condition is checked first, so a skipped step never needs its own locators' variables.
+      const when = step.when;
+      const byVar = when !== undefined && 'var' in when;
+      if (byVar && !(await conditionMet(when, surface, ctx))) {
+        await skipUnmet();
+        continue;
+      }
       // {{var.x}} in a locator is rendered for this run into a copy; the step itself keeps its template.
       const live = renderLocators(step, ctx.vars, ctx.masker);
-      if (live.when && !(await surface.isVisible(live.when.visible))) {
-        log('skipped', 0, { note: 'condition not met' });
-        if (!opts.nested) await opts.afterStep?.(i);
+      if (!byVar && live.when && !(await conditionMet(live.when, surface, ctx))) {
+        await skipUnmet();
         continue;
       }
       if (hooks && !opts.nested) {
@@ -179,13 +215,17 @@ export async function runSteps(
     } catch (err) {
       lastError = err;
       await endHook(false);
-      const message = messageOf(err, ctx.masker);
+      // Signed steps: no Find-by advice, their owner cannot edit the step (signedStepMessage).
+      const message = ctx.signed ? signedStepMessage(messageOf(err, ctx.masker)) : messageOf(err, ctx.masker);
       // A run limit (`limit: …`) always ends the run as incomplete: `optional` never swallows it.
       if (step.optional && !message.startsWith('limit: ')) {
         log('skipped', Date.now() - t0, { note: message });
       } else if (!ctx.violations.some((v) => v.fatal)) {
         log('failed', Date.now() - t0, { note: message });
-        return { ok: false, state, failure: { index: i, intent: step.intent, message } };
+        // The control that was not there, for the lane's one look at what the page shows instead (steps/page-offers.ts).
+        // Masked like every text the run returns: a rendered locator can hold a run variable's value.
+        const missing = err instanceof ControlNotFound && !opts.nested && surface.kind === 'browser' ? { missing: maskedLocator(err.locator, ctx.masker) } : {};
+        return { ok: false, state, failure: { index: i, intent: step.intent, message }, ...missing };
       }
     }
     if (ctx.violations.some((v) => v.fatal)) {
@@ -205,3 +245,4 @@ import './handlers/data.js';
 import './handlers/auth.js';
 import './handlers/files.js';
 import './handlers/capture.js';
+import './handlers/input.js';

@@ -1,16 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { ConfigError, CREDENTIALS } from './config.js';
+import type { INode } from 'n8n-workflow';
+import { ConfigError, CREDENTIALS, SHARE_ACROSS_WORKERS } from './config.js';
 import type { NodeContext } from './context.js';
 import { redisGuardStore } from './redis-store.js';
 
 export type BreakerCode = 'login_failed' | 'account_locked';
-export type BreakerRecord = { code: BreakerCode; at: string; resetKey: string; message: string };
+/** A slow, salted hash of the username and password a site rejected (see loginFingerprints in guard.ts), both base64. */
+export type LoginFingerprint = { salt: string; hash: string };
+/** `login` only on a login_failed record made since the fingerprint was added: a corrected login then gets one try. */
+export type BreakerRecord = { code: BreakerCode; at: string; resetKey: string; message: string; login?: LoginFingerprint };
 export type Lock = { token: string; expiresAt: number };
 
 /** Field-by-field equality of two breaker records. */
 export function sameRecord(a: BreakerRecord | undefined, b: BreakerRecord | undefined): boolean {
-  return a !== undefined && b !== undefined && a.code === b.code && a.at === b.at && a.resetKey === b.resetKey && a.message === b.message;
+  return a !== undefined && b !== undefined && a.code === b.code && a.at === b.at && a.resetKey === b.resetKey && a.message === b.message
+    && a.login?.salt === b.login?.salt && a.login?.hash === b.login?.hash;
 }
 
 /** Where the login breaker and the run lock live. */
@@ -74,6 +79,21 @@ export function resetMemoryGuardStoreForTests(): void {
 
 export const QUEUE_NEEDS_REDIS =
   'n8n runs in queue mode, so Run Steps and Import Steps with an RPA Site Login need an RPA Redis credential: without it the login breaker and run lock would not be shared between workers. Attach an RPA Redis credential (the Redis that n8n\'s queue uses works).';
+/** The same for a version 2 node, whose RPA Redis slot shows only with the switch on. */
+export const QUEUE_NEEDS_REDIS_V2 =
+  'n8n runs in queue mode, so Run Steps and Import Steps with an RPA Site Login need an RPA Redis credential: without it the login breaker and run lock would not be shared between workers. Turn on Share Login Breaker Across Workers (RPA Redis) and attach an RPA Redis credential (the Redis that n8n\'s queue uses works).';
+export const queueNeedsRedis = (node: Pick<INode, 'typeVersion'>): string => ((node.typeVersion ?? 1) >= 2 ? QUEUE_NEEDS_REDIS_V2 : QUEUE_NEEDS_REDIS);
+
+/**
+ * Whether the node runs with its RPA Redis credential. Version 1: when one is attached, as always. Version 2: only with
+ * Share Login Breaker Across Workers on and Runs On not A Windows desktop app, where its slot shows; otherwise it runs
+ * as a version 1 node without the credential (n8n would refuse to read one whose slot is hidden).
+ */
+export function redisAttached(node: Pick<INode, 'typeVersion' | 'parameters' | 'credentials'>): boolean {
+  if (!node.credentials?.[CREDENTIALS.redis]) return false;
+  if ((node.typeVersion ?? 1) < 2) return true;
+  return node.parameters?.[SHARE_ACROSS_WORKERS] === true && node.parameters?.runsOn !== 'desktop';
+}
 
 /** Test seams for where the guard store comes from: the Redis factory and how n8n's execution mode is read. */
 export type GuardStoreDeps = {
@@ -110,9 +130,9 @@ export function isQueueMode(deps: GuardStoreDeps = {}): boolean {
  * in queue mode where that would not be shared between workers (a ConfigError). The caller closes it.
  */
 export async function openGuardStore(ctx: NodeContext, itemIndex: number, deps: GuardStoreDeps = {}): Promise<GuardStore> {
-  if (ctx.getNode().credentials?.[CREDENTIALS.redis]) {
+  if (redisAttached(ctx.getNode())) {
     return await (deps.redis ?? redisGuardStore)(await ctx.getCredentials(CREDENTIALS.redis, itemIndex));
   }
-  if (isQueueMode(deps)) throw new ConfigError(QUEUE_NEEDS_REDIS);
+  if (isQueueMode(deps)) throw new ConfigError(queueNeedsRedis(ctx.getNode()));
   return memoryGuardStore();
 }

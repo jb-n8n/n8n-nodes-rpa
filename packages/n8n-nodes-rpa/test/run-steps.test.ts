@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { CODE_WORKFLOW_GUIDANCE, CONFIG_GUIDANCE, GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { APPROVER } from './fixtures.js';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
-import { isEmptySteps, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
-import { ConfigError } from '../nodes/Playwright/config.js';
+import { isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
+import { ConfigError, MAX_SECONDS } from '../nodes/Playwright/config.js';
 import { memoryGuardStore, type GuardStore } from '../nodes/Playwright/guard-store.js';
-import { BREAKER_KEY, resetGuardsForTests, siteLoginKey } from '../nodes/Playwright/guard.js';
-import { executeRunSteps, parseStepsParam, readRunStepsParams } from '../nodes/Playwright/operations/runSteps.js';
+import { BREAKER_KEY, loginFingerprints, resetGuardsForTests, siteLoginKey } from '../nodes/Playwright/guard.js';
+import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
+import { parseStepsParam, readRunStepsParams } from '../nodes/Playwright/operations/runStepsParams.js';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { agentOk, fakeEngine, scriptOk, taskFail } from './fake-engine.js';
 import { harness, type HarnessOptions } from './harness.js';
@@ -16,7 +19,6 @@ const KEY = 'run-steps-signing-key-0123456789abcdef';
 const TOKEN = 'tok-5d8e3a71';
 const USER = 'site-user-7c1';
 const PASS = 'site-pass-9f2';
-const APPROVER = 'approver@example.com';
 const SIGNATURE = 'ab'.repeat(32);
 const GOAL = 'Read every item; IDs look like SKU-1001.';
 const BROWSER = { mode: 'playwright', wsUrl: 'wss://browser.example.net/pw', token: TOKEN };
@@ -58,6 +60,8 @@ const many = (n: number) => Array.from({ length: n }, (_, i) => ({ json: { i } }
 const REDIS_CRED = { host: 'redis.internal', port: 6380, password: 'redis-pass-1' };
 const QUEUE_NEEDS_REDIS =
   "n8n runs in queue mode, so Run Steps and Import Steps with an RPA Site Login need an RPA Redis credential: without it the login breaker and run lock would not be shared between workers. Attach an RPA Redis credential (the Redis that n8n's queue uses works).";
+const QUEUE_NEEDS_REDIS_V2 =
+  "n8n runs in queue mode, so Run Steps and Import Steps with an RPA Site Login need an RPA Redis credential: without it the login breaker and run lock would not be shared between workers. Turn on Share Login Breaker Across Workers (RPA Redis) and attach an RPA Redis credential (the Redis that n8n's queue uses works).";
 
 describe('Run Steps: the guard store (Redis, queue mode)', () => {
   it('queue mode without Redis is a configuration error, before the browser', async () => {
@@ -73,7 +77,7 @@ describe('Run Steps: the guard store (Redis, queue mode)', () => {
     expect(engine.calls).toHaveLength(1);
   });
   it("without queue mode and without Redis, the memory store is used (a held lock still turns the run away)", async () => {
-    await memoryGuardStore().acquireLock(siteLoginKey('site-a'), 60_000);
+    await memoryGuardStore().acquireLock(siteLoginKey('site-a', USER), 60_000);
     const engine = fakeEngine(() => scriptOk());
     const [data] = await executeRunSteps(ctx({ continueOnFail: true }), engine, { executionsMode: 'regular' });
     expect(errorOf(data[0])).toBe('busy: another run using this Site Login is in progress');
@@ -93,6 +97,24 @@ describe('Run Steps: the guard store (Redis, queue mode)', () => {
     );
     expect(opened).toEqual([REDIS_CRED, REDIS_CRED]);
     expect(closed).toEqual([1, 2]);
+    expect(engine.calls).toHaveLength(2);
+  });
+  it('version 2 with Share Login Breaker Across Workers off runs as version 1 without RPA Redis: the credential is never opened', async () => {
+    const opened: unknown[] = [];
+    const redis = async (credentials: unknown): Promise<GuardStore> => {
+      opened.push(credentials);
+      return memoryGuardStore();
+    };
+    const withRedis = { credentials: { ...ALL, playwrightRedisApi: REDIS_CRED }, credentialIds: { ...IDS, playwrightRedisApi: 'redis-1' }, continueOnFail: true, typeVersion: 2 };
+    const engine = fakeEngine(() => scriptOk());
+    const [queued] = await executeRunSteps(ctx(withRedis), engine, { redis, executionsMode: 'queue' });
+    expect(errorOf(queued[0])).toBe(QUEUE_NEEDS_REDIS_V2);
+    const [regular] = await executeRunSteps(ctx(withRedis), engine, { redis, executionsMode: 'regular' });
+    expect(errorOf(regular[0])).toBeUndefined();
+    expect(opened).toEqual([]);
+    // Turned on, it opens the credential, as version 1 always does.
+    await executeRunSteps(ctx({ ...withRedis, params: params({ shareAcrossWorkers: true }) }), engine, { redis, executionsMode: 'queue' });
+    expect(opened).toEqual([REDIS_CRED]);
     expect(engine.calls).toHaveLength(2);
   });
   it('an unreachable Redis is a configuration error and no login is tried', async () => {
@@ -131,6 +153,16 @@ describe('Run Steps: trust and engine input', () => {
     expect(input.repair).toBeUndefined();
     expect(input).toMatchObject({ budgetMs: 180_000, defaultStepTimeoutMs: 30_000, viewport: { width: 1280, height: 800 }, saveTrace: 'never', vars: {} });
   });
+  it("the node's version takes no part in the trust check: a version 2 node hands the engine the same input", async () => {
+    const inputs = [];
+    for (const typeVersion of [1, 2]) {
+      const engine = fakeEngine(() => scriptOk());
+      await executeRunSteps(ctx({ params: params({}, { name: 'items', expectedVersion: 3 }), typeVersion }), engine);
+      inputs.push(engine.calls[0]);
+    }
+    expect(inputs[1]).toEqual(inputs[0]);
+    expect(inputs[1].trust).toMatchObject({ signature: SIGNATURE, approvedBy: APPROVER, expect: { name: 'items', version: 3, siteLoginId: 'site-a' } });
+  });
   it('an unsigned run without a Site Login uses the Start URL allowlist, no secrets and no output checks', async () => {
     const engine = fakeEngine(() => scriptOk());
     await executeRunSteps(ctx({ params: unsigned(), credentials: BROWSER_ONLY }), engine);
@@ -153,8 +185,11 @@ describe('Run Steps: trust and engine input', () => {
     expect(engine.calls[0]).toMatchObject({
       trust: { allowUnsignedWrites: true }, vars: { from: '2026-01-01' },
       output: { idPattern: 'SKU-\\d{4}', totalPattern: 'Showing (\\d+) results', requiredFields: ['title', 'price'], emptyPattern: 'No results found' },
-      defaultStepTimeoutMs: 5000, budgetMs: 300_000, viewport: { width: 1024, height: 700 }, saveTrace: 'always',
+      defaultStepTimeoutMs: 5000, budgetMs: 600_000, viewport: { width: 1024, height: 700 }, saveTrace: 'always',
     });
+  });
+  it("Max Seconds' limit equals the engine's run budget cap", () => {
+    expect(MAX_SECONDS * 1000).toBe(MAX_BUDGET_MS);
   });
   it('clamps the viewport to the bounds the UI allows: width 320–3840, height 240–2160', () => {
     const viewport = (size: Record<string, unknown>) => readRunStepsParams(ctx({ params: params({}, { viewport: { size } }) }), 0).common.viewport;
@@ -162,6 +197,13 @@ describe('Run Steps: trust and engine input', () => {
     expect(viewport({ width: 4000, height: 4000 })).toEqual({ width: 3840, height: 2160 });
     expect(viewport({ width: 320, height: 2160 })).toEqual({ width: 320, height: 2160 });
     expect(viewport({ width: 'wide', height: null })).toEqual({ width: 1280, height: 800 });
+  });
+  it('refuses a variable name the steps could not name, as the RPA Secret Variables credential does', () => {
+    const read = (name: string) => () => readRunStepsParams(ctx({ params: params({}, { variables: { values: [{ name, value: 'x' }] } }) }), 0);
+    for (const name of ['2026', 'from-date', 'a b']) {
+      expect(read(name)).toThrow(`Variable name "${name}" may only use letters, digits and underscores, and may not start with a digit`);
+    }
+    expect(read('from_2026')()).toMatchObject({ vars: { from_2026: 'x' } });
   });
   it('reads the documented defaults', () => {
     const p = readRunStepsParams(ctx(), 0);
@@ -368,12 +410,16 @@ describe('literal-only switches under an expression-valued Options collection', 
   });
 });
 
-describe('breaker and lock: only with a Site Login, keyed by its credential id', () => {
-  it('siteLoginKey is site-login:<id>', () => {
-    expect(siteLoginKey('abc')).toBe('site-login:abc');
+describe('breaker and lock: only with a Site Login, keyed by its credential id and username', () => {
+  it('siteLoginKey is site-login:<id>:<16 hex of the username>, the same whatever its case and surrounding spaces', () => {
+    expect(siteLoginKey('abc', 'Jo.Smith')).toMatch(/^site-login:abc:[0-9a-f]{16}$/);
+    expect(siteLoginKey('abc', ' jo.smith ')).toBe(siteLoginKey('abc', 'Jo.Smith'));
+    expect(siteLoginKey('abc', 'jo.smith')).not.toBe(siteLoginKey('abc', 'al.jones'));
+    expect(siteLoginKey('abc', 'jo.smith')).not.toBe(siteLoginKey('abd', 'jo.smith'));
+    expect(siteLoginKey('abc', 'jo.smith')).not.toContain('jo.smith');
   });
   it('a Site Login credential without an id is a configuration error and never keys "site-login:"', async () => {
-    await memoryGuardStore().acquireLock(siteLoginKey(''), 60_000); // were the empty key used, this run would answer busy
+    await memoryGuardStore().acquireLock(siteLoginKey('', USER), 60_000); // were the empty key used, this run would answer busy
     const engine = fakeEngine(() => taskFail('login_failed', 'the site rejected the sign-in'));
     const h = ctx({ continueOnFail: true, credentialIds: { ...IDS, playwrightSiteLoginApi: '' } });
     const [data] = await executeRunSteps(h, engine);
@@ -384,7 +430,7 @@ describe('breaker and lock: only with a Site Login, keyed by its credential id',
     expect(h.staticData[BREAKER_KEY]).toBeUndefined();
   });
   it('without a Site Login there is no lock and no breaker', async () => {
-    expect(await memoryGuardStore().acquireLock(siteLoginKey('site-a'), 60_000)).not.toBeNull();
+    expect(await memoryGuardStore().acquireLock(siteLoginKey('site-a', USER), 60_000)).not.toBeNull();
     const engine = fakeEngine(() => taskFail('login_failed', 'the site rejected the sign-in'));
     const h = ctx({ credentials: BROWSER_ONLY, params: unsigned(), continueOnFail: true });
     await executeRunSteps(h, engine);
@@ -393,7 +439,7 @@ describe('breaker and lock: only with a Site Login, keyed by its credential id',
     expect(h.staticData[BREAKER_KEY]).toBeUndefined();
   });
   it('a held lock on the Site Login turns the run away as busy, whatever the node name', async () => {
-    await memoryGuardStore().acquireLock(siteLoginKey('site-a'), 60_000);
+    await memoryGuardStore().acquireLock(siteLoginKey('site-a', USER), 60_000);
     const engine = fakeEngine(() => scriptOk());
     for (const nodeName of ['Run steps', 'Run steps (copy)']) {
       const [data] = await executeRunSteps(ctx({ nodeName, continueOnFail: true }), engine);
@@ -408,19 +454,91 @@ describe('breaker and lock: only with a Site Login, keyed by its credential id',
     expect(engine.calls).toHaveLength(1);
     expect(data.map(errorOf)).toEqual([
       'login_failed: the site rejected the sign-in',
-      'locked_out: A previous login for example.com failed, so no login was tried.',
-      'locked_out: A previous login for example.com failed, so no login was tried.',
+      'locked_out: A previous login of this account on example.com failed, so no login was tried.',
+      'locked_out: A previous login of this account on example.com failed, so no login was tried.',
     ]);
     expect(data.map((d) => d.pairedItem)).toEqual([[{ item: 0 }], [{ item: 1 }], [{ item: 2 }]]);
-    expect(Object.keys(h.staticData[BREAKER_KEY] as IDataObject)).toEqual(['site-login:site-a']);
+    expect(Object.keys(h.staticData[BREAKER_KEY] as IDataObject)).toEqual([siteLoginKey('site-a', USER)]);
     const [other] = await executeRunSteps(ctx({ nodeName: 'Another node', staticData: {}, continueOnFail: true }), engine);
-    expect(errorOf(other[0])).toBe('locked_out: A previous login for example.com failed, so no login was tried.');
+    expect(errorOf(other[0])).toBe('locked_out: A previous login of this account on example.com failed, so no login was tried.');
     expect(engine.calls).toHaveLength(1);
   });
 });
 
+describe('one Site Login, many accounts: a username and password set by expressions, resolved per item', () => {
+  const ACCOUNTS = ['ann.north', 'bob.harbor', 'cy.lake'];
+  const WRONG = 'wrong-pass-1';
+  /** The Site Login as each item resolves it: item i signs in as ACCOUNTS[i % 3], item `wrong` with a wrong password. */
+  const perAccount = (wrong?: number) => (type: string, i: number) =>
+    type === 'playwrightSiteLoginApi' ? { ...SITE_LOGIN, username: ACCOUNTS[i % 3], password: i === wrong ? WRONG : `pass-${ACCOUNTS[i % 3]}` } : undefined;
+  const rejectWrong = () => fakeEngine((input) => (input.secrets?.password === WRONG ? taskFail('login_failed', 'the site rejected the sign-in') : scriptOk()));
+  const LOCKED = 'locked_out: A previous login of this account on example.com failed, so no login was tried.';
+  const users = (engine: ReturnType<typeof fakeEngine>) => engine.calls.map((c) => c.secrets?.username);
+
+  it("each item signs in as its own account, and item 2's rejected login stops neither item 1 nor item 3, now or later", async () => {
+    const engine = rejectWrong();
+    const h = ctx({ items: many(3), itemCredentials: perAccount(1), continueOnFail: true });
+    const [data] = await executeRunSteps(h, engine);
+    expect(users(engine)).toEqual(ACCOUNTS);
+    expect(data.map(errorOf)).toEqual([undefined, 'login_failed: the site rejected the sign-in', undefined]);
+    expect(Object.keys(h.staticData[BREAKER_KEY] as IDataObject)).toEqual([siteLoginKey('site-a', 'bob.harbor')]);
+    // The next execution: item 2 is held back (the same wrong password), items 1 and 3 sign in.
+    const next = rejectWrong();
+    const [again] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(1), staticData: h.staticData, continueOnFail: true }), next);
+    expect(again.map(errorOf)).toEqual([undefined, LOCKED, undefined]);
+    expect(users(next)).toEqual(['ann.north', 'cy.lake']);
+    // Item 2 with a corrected password gets its one try, and its breaker is cleared.
+    const fixed = rejectWrong();
+    const [ok] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(), staticData: h.staticData, continueOnFail: true }), fixed);
+    expect(ok.map(errorOf)).toEqual([undefined, undefined, undefined]);
+    expect(h.staticData[BREAKER_KEY]).toEqual({});
+  });
+  it('each item says which account it was: the user name on the Data item and on the error item, never the password', async () => {
+    const [data] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(1), continueOnFail: true }), rejectWrong());
+    expect(data.map((d) => (d.json.details as IDataObject | undefined)?.account ?? d.json.account)).toEqual(ACCOUNTS);
+    const text = JSON.stringify(data.map((d) => d.json));
+    for (const p of [WRONG, ...ACCOUNTS.map((a) => `pass-${a}`)]) expect(text).not.toContain(p);
+    // Without a Site Login there is no account.
+    const [plain] = await executeRunSteps(ctx({ credentials: BROWSER_ONLY, params: unsigned() }), fakeEngine(() => scriptOk()));
+    expect(plain[0].json).not.toHaveProperty('account');
+  });
+  it('a lock held for one account turns away only that account', async () => {
+    await memoryGuardStore().acquireLock(siteLoginKey('site-a', 'bob.harbor'), 60_000);
+    const engine = fakeEngine(() => scriptOk());
+    const [data] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(), continueOnFail: true }), engine);
+    expect(data.map(errorOf)).toEqual([undefined, 'busy: another run using this Site Login is in progress', undefined]);
+    expect(users(engine)).toEqual(['ann.north', 'cy.lake']);
+  });
+  it("a password changed for one account stops only that account's later items in the execution", async () => {
+    const engine = fakeEngine((input) => scriptOk(input.secrets?.username === 'ann.north' ? { passwordChanged: true } : {}));
+    const [data] = await executeRunSteps(ctx({ items: many(4), itemCredentials: perAccount(), continueOnFail: true }), engine);
+    expect(data[0].json.passwordChanged).toBe(true);
+    expect(data.slice(1, 3).map(errorOf)).toEqual([undefined, undefined]);
+    expect(errorOf(data[3])).toMatch(/^locked_out: The password of this account was changed earlier in this execution/);
+    expect(users(engine)).toEqual(ACCOUNTS);
+  });
+  it('a breaker kept under the credential id alone (0.2.0) still stops every account, until a new reset key', async () => {
+    const staticData: IDataObject = { [BREAKER_KEY]: { 'site-login:site-a': { code: 'account_locked', at: '2026-10-01T00:00:00.000Z', resetKey: '', message: 'locked' } } };
+    const engine = fakeEngine(() => scriptOk());
+    const [data] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(), staticData, continueOnFail: true }), engine);
+    expect(data.map(errorOf)).toEqual([LOCKED, LOCKED, LOCKED]);
+    expect(engine.calls).toHaveLength(0);
+    const [reset] = await executeRunSteps(ctx({ params: params({}, { breakerResetKey: '2026-11-12' }), items: many(3), itemCredentials: perAccount(), staticData, continueOnFail: true }), engine);
+    expect(reset.map(errorOf)).toEqual([undefined, undefined, undefined]);
+    expect(staticData[BREAKER_KEY]).toEqual({});
+  });
+  it('a login_failed breaker kept under the credential id alone gives a different login its one try, as before', async () => {
+    const login = await loginFingerprints({ username: 'ann.north', password: WRONG }).create();
+    const staticData: IDataObject = { [BREAKER_KEY]: { 'site-login:site-a': { code: 'login_failed', at: '2026-10-01T00:00:00.000Z', resetKey: '', message: 'rejected', login } } };
+    const engine = rejectWrong();
+    const [data] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(), staticData, continueOnFail: true }), engine);
+    expect(data.map(errorOf)).toEqual([undefined, undefined, undefined]);
+    expect(staticData[BREAKER_KEY]).toEqual({});
+  });
+});
+
 describe('Login Breaker Reset Key is literal-only and cannot reset the breaker item by item', () => {
-  const LOCKED = 'locked_out: A previous login for example.com failed, so no login was tried.';
+  const LOCKED = 'locked_out: A previous login of this account on example.com failed, so no login was tried.';
   const EXPRESSION = 'Login Breaker Reset Key must be set directly, not with an expression.';
   // Each item resolves its own key, as {{ $json.id }} would: before the fix every new key reset the breaker.
   const perItem = (i: number) => params({}, { breakerResetKey: `id-${i}` });
@@ -587,7 +705,7 @@ describe('AI repair', () => {
   });
   it('agent-lane results that spent no model effort do not use up the repair', async () => {
     const before = [
-      taskFail('drift_detected', 'repair cannot record field extraction yet: update the script by hand', { lane: 'agent' }),
+      taskFail('drift_detected', 'repair cannot record field extraction yet: update the steps by hand', { lane: 'agent' }),
       taskFail('browser_unavailable', 'Could not connect to the browser server', { lane: 'agent', llmCalls: 0 }),
       taskFail('site_down', 'HTTP 503 at https://example.com/list', { lane: 'agent' }),
       taskFail('incomplete', 'run cancelled', { lane: 'agent', llmCalls: 0, tokens: 0 }),
@@ -615,7 +733,7 @@ describe('AI repair', () => {
     expect(engine.calls.map((c) => c.repair?.alreadyRan)).toEqual([false, false, false]);
   });
   it('repair preconditions are configuration errors before the lock and before any run', async () => {
-    await memoryGuardStore().acquireLock(siteLoginKey('site-a'), 60_000); // a held lock would answer busy: the precondition comes first
+    await memoryGuardStore().acquireLock(siteLoginKey('site-a', USER), 60_000); // a held lock would answer busy: the precondition comes first
     const engine = fakeEngine(() => agentOk());
     const submit = { ...STEPS, steps: [...STEPS.steps, { intent: 'Send the form', submit: { host: 'example.com', path: '/send', button: { css: 'button' } } }] };
     const cases: [Record<string, unknown>, Record<string, unknown>, string][] = [
@@ -648,7 +766,7 @@ describe('AI repair', () => {
     const [data] = await executeRunSteps(ctx({ model: STUB_MODEL, continueOnFail: true, params: repairParams() }), engine);
     expect(data[0].json).toEqual({
       error: refused, message: refused,
-      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: true },
+      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: true, guidance: CONFIG_GUIDANCE },
     });
     const err = await executeRunSteps(ctx({ model: STUB_MODEL, params: repairParams() }), engine).catch((e: unknown) => e);
     expect((err as NodeOperationError).message).toBe(refused);
@@ -677,7 +795,7 @@ describe('AI repair', () => {
     const [data] = await executeRunSteps(ctx({ model: STUB_MODEL, continueOnFail: true, params: repairParams() }), engine);
     expect(data[0].json).toEqual({
       error: 'AI repair needs an ID Pattern and an extract step.', message: 'AI repair needs an ID Pattern and an extract step.',
-      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: false },
+      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: false, guidance: CONFIG_GUIDANCE },
     });
   });
 });
@@ -711,7 +829,7 @@ describe('outputs', () => {
       url: 'https://example.com/list', title: 'Items', status: 200, name: 'items', version: 3, hash: 'c3'.repeat(32), lane: 'script',
       confirmed: true, llmCalls: 0, durationMs: 1200, llmTokens: 0, log, rows: [{ id: 'SKU-1001', title: 'Widget' }],
       files: [{ fileName: 'report.csv', mimeType: 'text/csv', bytes: 4, binaryProperty: 'file_3' }],
-      blockedRequests: [{ method: 'POST', host: 'collect.example.net', path: '/b' }], submitted: true,
+      blockedRequests: [{ method: 'POST', host: 'collect.example.net', path: '/b' }], submitted: true, account: USER,
     });
     expect(Object.keys(data[0].binary ?? {}).sort()).toEqual(['file_3', 'screenshot_2', 'trace']);
     expect(data[0].binary?.screenshot_2).toMatchObject({ fileName: 'screenshot_2.png', mimeType: 'image/png' });
@@ -720,7 +838,7 @@ describe('outputs', () => {
   });
   it('without an extract step there is no rows key, and empty lists are left out', async () => {
     const [data] = await executeRunSteps(ctx(), fakeEngine(() => scriptOk({ rows: [], verified: false })));
-    expect(Object.keys(data[0].json)).toEqual(['url', 'title', 'status', 'name', 'version', 'hash', 'lane', 'confirmed', 'llmCalls', 'durationMs', 'llmTokens', 'log']);
+    expect(Object.keys(data[0].json)).toEqual(['url', 'title', 'status', 'name', 'version', 'hash', 'lane', 'confirmed', 'llmCalls', 'durationMs', 'llmTokens', 'log', 'account']);
     expect(data[0].binary).toBeUndefined();
   });
   it('agent lane: rows go to Data, and the Repaired steps item goes to the second output', async () => {
@@ -731,8 +849,10 @@ describe('outputs', () => {
     });
     expect(repaired).toHaveLength(1);
     expect(Object.keys(repaired[0].json)).toEqual([
-      'name', 'baseVersion', 'version', 'steps', 'hash', 'digest', 'evidence', 'changes', 'safetyFlags', 'evidenceLine', 'changeList', 'safetyLine', 'attachmentNames',
+      'name', 'baseVersion', 'version', 'steps', 'hash', 'digest', 'evidence', 'changes', 'safetyFlags', 'evidenceLine', 'changeList', 'safetyLine', 'reviewChanges', 'attachmentNames',
     ]);
+    // A repair: the change list as the approval emails show it. An entry that names no step keeps the run's words.
+    expect(repaired[0].json.reviewChanges).toEqual([{ change: 'Changed', text: 'Read the product list', was: 'Read the items' }]);
     expect(repaired[0].json).toMatchObject({
       name: 'items', baseVersion: 3, version: 4, hash: 'd4'.repeat(32), digest: proposalDigest({ ...PROPOSAL, safetyFlags: ['host: example.com'] }), safetyFlags: ['host: example.com'], evidenceLine: 'Proven in a fresh browser: 3 of 3 rows',
       changeList: 'Changed: Read the items -> Read the product list', safetyLine: 'host: example.com', attachmentNames: 'before,after',
@@ -770,6 +890,7 @@ describe('outputs', () => {
       details: {
         code: 'incomplete', message: 'run cancelled', name: 'items', version: 3, hash: 'c3'.repeat(32), lane: 'script', stepIntent: 'Send the form',
         traceRef: 'trace', durationMs: 900, llmTokens: 0, log: [{ index: 0, intent: 'Open the form', status: 'ok', ms: 5 }], submitted: true,
+        guidance: GUIDANCE.incomplete, account: USER,
       },
     });
     expect(data[0].error).toBeUndefined();
@@ -788,6 +909,47 @@ describe('outputs', () => {
     expect((err as NodeOperationError).description).toBe(
       'site_down: The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
     );
+    // A message that says what to do itself: no description after it, and the item's guidance is empty (W6-13).
+    const own = 'Type the PIN: A value from the RPA Secret Variables credential may not be typed on example.com: the credential\'s May Be Typed Into does not list it. List it there only if the value is meant for it.';
+    const refused = await executeRunSteps(ctx(), fakeEngine(() => taskFail('policy_violation', own))).catch((e: unknown) => e);
+    expect((refused as NodeOperationError).message).toBe(`policy_violation: ${own}`);
+    expect((refused as NodeOperationError).description ?? null).toBeNull();
+    const [items] = await executeRunSteps(ctx({ continueOnFail: true }), fakeEngine(() => taskFail('policy_violation', own)));
+    expect(details(items[0])).toMatchObject({ code: 'policy_violation', guidance: '' });
+  });
+  it('an auth_blocked failure gets the description of its cause: the code workflow, no TOTP Secret, or neither', async () => {
+    // [the engine's message, the message the node shows (without the engine's detected: mark), the description]
+    const cases: [string, string, string][] = [
+      ['Sign in: detected:mfa_code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
+        'Sign in: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
+        `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`],
+      ['Sign in: detected:mfa_code: the one-time code workflow did not return a code within 120 s', 'Sign in: the one-time code workflow did not return a code within 120 s', `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`],
+      ['Sign in: detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret',
+        'Sign in: the site asked for a one-time code and the Site Login has no TOTP Secret', `auth_blocked: ${NO_TOTP_SECRET_GUIDANCE}`],
+      ['Sign in: detected:mfa_sms', 'Sign in: mfa_sms', 'auth_blocked: The site asked for a second factor that this run could not answer; the message says which. A push message or a hardware key needs a person to sign in.'],
+      // A detect step that found the code page is not the missing seed: the steps have no code step.
+      ['Check sign-in: detected:mfa_totp', 'Check sign-in: mfa_totp', 'auth_blocked: The site asked for a second factor that this run could not answer; the message says which. A push message or a hardware key needs a person to sign in.'],
+    ];
+    for (const [message, shown, description] of cases) {
+      const err = await executeRunSteps(ctx(), fakeEngine(() => taskFail('auth_blocked', message))).catch((e: unknown) => e);
+      expect((err as NodeOperationError).message, message).toBe(`auth_blocked: ${shown}`);
+      expect((err as NodeOperationError).description, message).toBe(description);
+    }
+  });
+  it('the error item shows the message without the engine\'s detected: mark, in every place it is read', async () => {
+    const log = [
+      { index: 0, intent: 'Open the start page', status: 'ok' as const, ms: 5 },
+      { index: 1, intent: 'Sign in', status: 'failed' as const, ms: 9, note: 'detected:login_failed: the site sent the sign-in page back' },
+      { index: 2, intent: 'Check the page', status: 'failed' as const, ms: 3, note: 'detected:account_locked' },
+    ];
+    const engine = fakeEngine(() => taskFail('login_failed', 'Sign in: detected:login_failed: the site sent the sign-in page back', { log }));
+    const [data] = await executeRunSteps(ctx({ continueOnFail: true }), engine);
+    const shown = 'Sign in: the site sent the sign-in page back';
+    expect(data[0].json).toMatchObject({ error: `login_failed: ${shown}`, message: shown, details: { code: 'login_failed', message: shown, guidance: GUIDANCE.login_failed } });
+    // The step log's notes too (the engine's own log keeps the mark, for its classification).
+    expect((data[0].json.details as { log: unknown[] }).log).toEqual([log[0], { ...log[1], note: 'the site sent the sign-in page back' }, { ...log[2], note: 'account_locked' }]);
+    expect(log[1].note).toBe('detected:login_failed: the site sent the sign-in page back');
+    expect(JSON.stringify(data[0].json)).not.toContain('detected:');
   });
   it('every output item is paired with its input item', async () => {
     const engine = fakeEngine((_input, call) => (call === 0 ? scriptOk() : taskFail('not_found', 'the page or the data was not found')));
@@ -860,7 +1022,16 @@ describe('no message carries a token, a query string or a username', () => {
     }), engine);
     const login = fakeEngine(() => taskFail('login_failed', 'the site rejected the sign-in'));
     const [siteOut] = await executeRunSteps(ctx({ items: many(2), continueOnFail: true }), login);
-    const text = JSON.stringify([unsignedOut, siteOut]);
+    // The user name is on the items as `account` (which account a run was), and nowhere else: no message carries it.
+    const accounts: unknown[] = [];
+    const withoutAccount = (d: INodeExecutionData) => {
+      const { account, ...json } = d.json;
+      const details = json.details as IDataObject | undefined;
+      accounts.push(account ?? details?.account);
+      return details ? { ...json, details: { ...details, account: undefined } } : json;
+    };
+    const text = JSON.stringify([...unsignedOut, ...siteOut].map(withoutAccount));
+    expect(accounts).toEqual([undefined, undefined, undefined, undefined, USER, USER]);
     for (const leak of [TOKEN, 'abc123', USER, PASS, KEY, '?token=']) expect(text).not.toContain(leak);
     expect(unsignedOut.map(errorOf)).toEqual([
       undefined,
@@ -868,7 +1039,7 @@ describe('no message carries a token, a query string or a username', () => {
       'policy_violation: URL must start with http:// or https:// (got "file:").',
       expect.stringMatching(/^policy_violation: /),
     ]);
-    expect(siteOut.map(errorOf)).toEqual(['login_failed: the site rejected the sign-in', 'locked_out: A previous login for example.com failed, so no login was tried.']);
+    expect(siteOut.map(errorOf)).toEqual(['login_failed: the site rejected the sign-in', 'locked_out: A previous login of this account on example.com failed, so no login was tried.']);
   });
 });
 
@@ -914,5 +1085,143 @@ describe('Run Steps: downloads refuse a CDP browser connection', () => {
     const engine = fakeEngine(() => scriptOk());
     await executeRunSteps(ctx({ credentials: BROWSER_ONLY, params: withSteps([DOWNLOAD]) }), engine);
     expect(engine.calls).toHaveLength(1);
+  });
+});
+
+describe('a forced password change (signIn.changePassword)', () => {
+  const CHANGE_FAILED = 'Sign in: detected:password_change_failed';
+  it('the Data item says passwordChanged when the sign-in set a new password, and nothing otherwise', async () => {
+    const [changed] = await executeRunSteps(ctx(), fakeEngine(() => scriptOk({ passwordChanged: true })));
+    expect(changed[0].json.passwordChanged).toBe(true);
+    const [plain] = await executeRunSteps(ctx(), fakeEngine(() => scriptOk()));
+    expect(plain[0].json).not.toHaveProperty('passwordChanged');
+    const [agent] = await executeRunSteps(ctx({ model: STUB_MODEL, params: repairParams() }), fakeEngine(() => agentOk({ passwordChanged: true })));
+    expect(agent[0].json.passwordChanged).toBe(true);
+  });
+  it('a run that fails after the change says passwordChanged in the error item and on the thrown error', async () => {
+    const drift = 'Read the items: No element found';
+    const engine = fakeEngine(() => taskFail('drift_detected', drift, { passwordChanged: true }));
+    const [data] = await executeRunSteps(ctx({ continueOnFail: true }), engine);
+    expect(details(data[0])).toMatchObject({ code: 'drift_detected', passwordChanged: true });
+    const err = await executeRunSteps(ctx(), engine).catch((e: unknown) => e);
+    expect((err as NodeOperationError).context).toMatchObject({ code: 'drift_detected', passwordChanged: true });
+    const [other] = await executeRunSteps(ctx({ continueOnFail: true }), fakeEngine(() => taskFail('drift_detected', drift)));
+    expect(details(other[0])).not.toHaveProperty('passwordChanged');
+  });
+  it('after a change, later items of the execution try no login with the old password and say passwordChanged, in both error modes', async () => {
+    const CHANGED = 'locked_out: The password of this account was changed earlier in this execution, so no login was tried: store the new password where the Site Login reads it, then run again.';
+    const engine = fakeEngine((_input, call) => (call === 0 ? scriptOk({ passwordChanged: true }) : taskFail('login_failed', 'the site rejected the sign-in')));
+    const h = ctx({ items: many(3), continueOnFail: true });
+    const [data] = await executeRunSteps(h, engine);
+    expect(engine.calls).toHaveLength(1);
+    expect(data[0].json.passwordChanged).toBe(true);
+    expect(data.slice(1).map(errorOf)).toEqual([CHANGED, CHANGED]);
+    for (const item of data.slice(1)) expect(details(item)).toMatchObject({ code: 'locked_out', passwordChanged: true });
+    expect(h.staticData[BREAKER_KEY]).toBeUndefined();
+    // A second node on the same Site Login in the same execution: no login either.
+    const [other] = await executeRunSteps({ ...h, getNode: () => ({ ...h.getNode(), name: 'Another node' }) }, engine);
+    expect(errorOf(other[0])).toBe(CHANGED);
+    expect(engine.calls).toHaveLength(1);
+    // Without continue-on-fail, item 1's error is thrown, and it carries passwordChanged.
+    const strict = fakeEngine((_input, call) => (call === 0 ? scriptOk({ passwordChanged: true }) : taskFail('login_failed', 'the site rejected the sign-in')));
+    const err = await executeRunSteps(ctx({ items: many(2) }), strict).catch((e: unknown) => e);
+    expect((err as NodeOperationError).message).toBe(CHANGED);
+    expect((err as NodeOperationError).context).toMatchObject({ code: 'locked_out', passwordChanged: true });
+    expect(strict.calls).toHaveLength(1);
+  });
+  it('a run that changed the password does not open the login breaker when a later step fails as a login failure', async () => {
+    for (const code of ['login_failed', 'account_locked'] as const) {
+      const engine = fakeEngine(() => taskFail(code, 'Check sign-in worked: detected:login_failed', { passwordChanged: true }));
+      const h = ctx({ continueOnFail: true });
+      const [data] = await executeRunSteps(h, engine);
+      expect(details(data[0]), code).toMatchObject({ code, passwordChanged: true });
+      expect(h.staticData[BREAKER_KEY], code).toBeUndefined();
+      // A fresh execution (same static data, new per-execution context) signs in.
+      const later = fakeEngine(() => scriptOk());
+      const [next] = await executeRunSteps(ctx({ staticData: h.staticData, continueOnFail: true }), later);
+      expect(errorOf(next[0]), code).toBeUndefined();
+      expect(later.calls, code).toHaveLength(1);
+    }
+  });
+  it('password_change_failed does not open the login breaker: the next items still sign in', async () => {
+    const engine = fakeEngine(() => taskFail('password_change_failed', CHANGE_FAILED));
+    const h = ctx({ items: many(3), continueOnFail: true });
+    const [data] = await executeRunSteps(h, engine);
+    expect(engine.calls).toHaveLength(3);
+    // Shown without the engine's detected: mark.
+    expect(data.map(errorOf)).toEqual(Array(3).fill('password_change_failed: Sign in: password_change_failed'));
+    expect(h.staticData[BREAKER_KEY]).toBeUndefined();
+    const err = await executeRunSteps(ctx(), engine).catch((e: unknown) => e);
+    expect((err as NodeOperationError).description).toBe(
+      'password_change_failed: The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
+    );
+  });
+});
+
+describe('Run Steps: RPA Secret Variables', () => {
+  const SECRET = 'Vault-pw-8c2e';
+  const secretCred = (...values: { name: string; value: string }[]) => ({ rpaSecretVariablesApi: { variables: { values } } });
+  const withSecrets = (options: Record<string, unknown>, ...values: { name: string; value: string }[]) =>
+    ctx({ params: params({}, options), credentials: { ...ALL, ...secretCred(...values) }, credentialIds: { ...IDS, rpaSecretVariablesApi: 'secret-1' }, continueOnFail: true });
+  it('merges the pairs into the run variables and names them as secret; Options → Variables stay plain', async () => {
+    const engine = fakeEngine(() => scriptOk());
+    await executeRunSteps(withSecrets({ variables: { values: [{ name: 'from', value: '2026-01-01' }] } }, { name: 'pw', value: SECRET }), engine);
+    expect(engine.calls[0]).toMatchObject({ vars: { from: '2026-01-01', pw: SECRET }, secretVars: ['pw'] });
+  });
+  it('May Be Typed Into goes to the engine as secretTargets, hosts read as Also Allow These Sites reads them; empty is no limit', async () => {
+    const withTargets = (mayBeTypedInto: string | undefined) =>
+      ctx({
+        params: params({}, {}), credentials: { ...ALL, rpaSecretVariablesApi: { variables: { values: [{ name: 'pw', value: SECRET }] }, ...(mayBeTypedInto === undefined ? {} : { mayBeTypedInto }) } },
+        credentialIds: { ...IDS, rpaSecretVariablesApi: 'secret-1' }, continueOnFail: true,
+      });
+    const engine = fakeEngine(() => scriptOk());
+    await executeRunSteps(withTargets('ErpDemo.exe\nhttps://ERP.example.com/\nerp.example.com:443\nlogin.example.com:8443'), engine);
+    expect(engine.calls[0]).toMatchObject({ secretVars: ['pw'], secretTargets: { apps: ['ErpDemo.exe'], hosts: ['erp.example.com', 'login.example.com:8443'] } });
+    for (const empty of ['', ' \n ', undefined]) {
+      await executeRunSteps(withTargets(empty), engine);
+      expect(engine.calls.at(-1)?.secretTargets, String(empty)).toBeUndefined();
+    }
+    // A bad line or an expression stops the item before the engine runs, and shows no value.
+    const calls = engine.calls.length;
+    for (const [v, message] of [
+      ['erp.example.com/login', 'Line 1 of May Be Typed Into in the RPA Secret Variables credential ("erp.example.com/login"): it is neither a program file name such as ErpDemo.exe nor a site host such as erp.example.com.'],
+      [`${SECRET}.example.com`, "Line 1 of May Be Typed Into in the RPA Secret Variables credential: it holds one of this credential's values: list where they may be typed, not the values."],
+      ['={{ $json.host }}', 'May Be Typed Into in the RPA Secret Variables credential must be typed in, not set with an expression.'],
+    ]) {
+      const [data] = await executeRunSteps(withTargets(v), engine);
+      expect(errorOf(data[0])).toBe(message);
+      expect(details(data[0])).toMatchObject({ configError: true });
+      expect(JSON.stringify(data)).not.toContain(SECRET);
+    }
+    expect(engine.calls).toHaveLength(calls);
+  });
+  it('without the credential no variable is secret', async () => {
+    const engine = fakeEngine(() => scriptOk());
+    await executeRunSteps(ctx(), engine);
+    expect(engine.calls[0].secretVars).toBeUndefined();
+    expect(engine.calls[0].secretTargets).toBeUndefined();
+  });
+  it('a name in both places is a configuration error that names the variable, never its value, before the engine runs', async () => {
+    const engine = fakeEngine(() => scriptOk());
+    const [data] = await executeRunSteps(withSecrets({ variables: { values: [{ name: 'pw', value: 'plain-one' }] } }, { name: 'pw', value: SECRET }), engine);
+    expect(errorOf(data[0])).toBe('Variable "pw" is set both in Options → Variables and in the RPA Secret Variables credential: keep it in one of them.');
+    expect(details(data[0])).toMatchObject({ configError: true });
+    expect(engine.calls).toHaveLength(0);
+    expect(JSON.stringify(data)).not.toContain(SECRET);
+    expect(JSON.stringify(data)).not.toContain('plain-one');
+  });
+  it('a value shorter than 4 characters is a configuration error without the value', async () => {
+    const engine = fakeEngine(() => scriptOk());
+    const [data] = await executeRunSteps(withSecrets({}, { name: 'pin', value: '9x1' }), engine);
+    expect(errorOf(data[0])).toContain('The secret variable "pin" in the RPA Secret Variables credential is shorter than 4 characters');
+    expect(JSON.stringify(data)).not.toContain('9x1');
+    expect(engine.calls).toHaveLength(0);
+  });
+  it('a variable nobody supplied fails as before, and the message says where a secret goes', async () => {
+    const engine = fakeEngine(() => taskFail('incomplete', 'Type the password: missing input "pw"'));
+    const [data] = await executeRunSteps(ctx({ continueOnFail: true }), engine);
+    expect(errorOf(data[0])).toBe(
+      'incomplete: Type the password: missing input "pw" (a secret goes in an RPA Secret Variables credential, any other value in Options → Variables)',
+    );
   });
 });

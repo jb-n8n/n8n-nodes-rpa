@@ -1,8 +1,9 @@
+import { createHash, createHmac, scrypt } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NodeOperationError, type IDataObject } from 'n8n-workflow';
 import type { ErrorCode, TaskInput, TaskResult } from 'n8n-rpa-engine';
 import { LOCK_GRACE_MS, runOne, type GuardSpec } from '../nodes/Playwright/execute.js';
-import { BREAKER_KEY, openBreaker, resetGuardsForTests, tripBreaker } from '../nodes/Playwright/guard.js';
+import { BREAKER_KEY, loginFingerprints, openBreaker, resetGuardsForTests, tripBreaker, type SiteLoginSecrets } from '../nodes/Playwright/guard.js';
 import { memoryGuardStore, type GuardStore } from '../nodes/Playwright/guard-store.js';
 import { fakeEngine } from './fake-engine.js';
 import { harness } from './harness.js';
@@ -202,5 +203,87 @@ describe('runOne', () => {
   });
   it('the lock grace period is one minute', () => {
     expect(LOCK_GRACE_MS).toBe(60_000);
+  });
+});
+
+// The breaker's tests on both stores (same login, another login, two runs at once) are in guard-store.contract.ts.
+describe('a corrected login after login_failed', () => {
+  const LOGIN: SiteLoginSecrets = { username: 'dealer-7', password: 'first-pass-1' };
+  const withLogin = (login: SiteLoginSecrets, resetKey = ''): GuardSpec => ({ ...GUARD, resetKey, fingerprints: loginFingerprints(login) });
+  /** One run in a new execution; the engine answers `result`. */
+  const run = async (guard: GuardSpec, result: TaskResult = SCRIPT_OK, h = harness({ params: {} })) => {
+    const engine = fakeEngine(() => result);
+    return { r: await runOne(h, engine, { itemIndex: 0, guard, input: () => INPUT }), logins: engine.calls.length, h };
+  };
+  const record = async () => memoryGuardStore().getBreaker(GUARD.key);
+  const derive = (material: Buffer | string, salt: Buffer) => new Promise<Buffer>((resolve, reject) => {
+    scrypt(material, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (e, key) => (e ? reject(e) : resolve(key)));
+  });
+
+  it('correcting only the username also gives one try', async () => {
+    const { h } = await run(withLogin(LOGIN), failed('login_failed'));
+    const corrected = withLogin({ ...LOGIN, username: 'dealer-8' });
+    // The execution that tripped the breaker stays blocked whatever the credential.
+    expect(await run(corrected, SCRIPT_OK, h)).toMatchObject({ r: { kind: 'blocked', code: 'locked_out' }, logins: 0 });
+    // A later execution tries once; the login is accepted, so the record is cleared.
+    const later = await run(corrected);
+    expect(later).toMatchObject({ r: { kind: 'ran', tripped: false }, logins: 1 });
+    expect(await record()).toBeUndefined();
+    expect(later.h.staticData[BREAKER_KEY]).toEqual({});
+  });
+  it('changing only the TOTP Secret gives one try', async () => {
+    // The fingerprint is keyed with the TOTP Secret, so adding, replacing or removing it counts as a changed login.
+    const withSeed = { ...LOGIN, totpSecret: 'JBSWY3DPEHPK3PXP' };
+    for (const [before, after] of [[withSeed, { ...LOGIN, totpSecret: 'KRSXG5CTMVRXEZLU' }], [withSeed, LOGIN], [LOGIN, withSeed]] as const) {
+      resetGuardsForTests();
+      await run(withLogin(before), failed('login_failed'));
+      expect(await run(withLogin(before))).toMatchObject({ r: { kind: 'blocked', code: 'locked_out' }, logins: 0 });
+      expect(await run(withLogin(after))).toMatchObject({ r: { kind: 'ran', tripped: false }, logins: 1 });
+    }
+  });
+  it('a record from before this change stays locked_out until the reset key changes', async () => {
+    await tripBreaker(memoryGuardStore(), {}, GUARD.key, { code: 'login_failed', resetKey: '', message: 'rejected' });
+    expect(await run(withLogin({ ...LOGIN, password: 'second-pass-2' }))).toMatchObject({ r: { kind: 'blocked', code: 'locked_out' }, logins: 0 });
+    expect(await run(withLogin({ ...LOGIN, password: 'second-pass-2' }, '2026-11-10'))).toMatchObject({ r: { kind: 'ran' }, logins: 1 });
+  });
+  it('an account_locked record is not opened by a new password', async () => {
+    await run(withLogin(LOGIN), failed('login_failed'));
+    // The corrected login's one try finds the account locked: that record replaces the login_failed one.
+    expect(await run(withLogin({ ...LOGIN, password: 'second-pass-2' }), failed('account_locked'))).toMatchObject({ r: { kind: 'ran', tripped: true }, logins: 1 });
+    expect(await record()).toMatchObject({ code: 'account_locked' });
+    expect((await record())?.login).toBeUndefined();
+    expect(await run(withLogin({ ...LOGIN, password: 'third-pass-3' }))).toMatchObject({ r: { kind: 'blocked', code: 'locked_out' }, logins: 0 });
+  });
+  it("the record's login field holds a salt and a hash, and no text of the username or password", async () => {
+    const { h } = await run(withLogin(LOGIN), failed('login_failed'));
+    const login = (await record())?.login;
+    const salt = Buffer.from(login?.salt ?? '', 'base64');
+    expect(salt).toHaveLength(16);
+    expect(Buffer.from(login?.hash ?? '', 'base64')).toHaveLength(32);
+    // scrypt of `username NUL password` with the record's own salt (the Site Login has no TOTP Secret).
+    expect((await derive(`${LOGIN.username}\0${LOGIN.password}`, salt)).toString('base64')).toBe(login?.hash);
+    const saved = JSON.stringify(h.staticData);
+    expect(saved).toContain(login?.hash);
+    for (const text of [LOGIN.username, LOGIN.password]) expect(saved).not.toContain(text);
+    // The execution's own copy of the breaker (saved with the execution) has no fingerprint.
+    expect(JSON.stringify(h.getContext('flow'))).not.toContain(login?.salt);
+  });
+  it('the record holds no password and no unsalted or unkeyed hash of it', async () => {
+    const totp = { ...LOGIN, totpSecret: 'JBSWY3DPEHPK3PXP' };
+    const { h } = await run(withLogin(totp), failed('login_failed'));
+    const saved = JSON.stringify(h.staticData);
+    const login = (await record())?.login;
+    const salt = Buffer.from(login?.salt ?? '', 'base64');
+    const material = `${LOGIN.username}\0${LOGIN.password}`;
+    for (const text of [LOGIN.password, LOGIN.username, totp.totpSecret]) expect(saved).not.toContain(text);
+    for (const value of [LOGIN.password, material]) {
+      for (const algorithm of ['md5', 'sha1', 'sha256', 'sha512']) {
+        const digest = createHash(algorithm).update(value).digest();
+        for (const encoding of ['hex', 'base64'] as const) expect(saved).not.toContain(digest.toString(encoding));
+      }
+    }
+    // Keyed with the TOTP Secret: the scrypt of the bare login with the same salt is not what is stored.
+    expect((await derive(material, salt)).toString('base64')).not.toBe(login?.hash);
+    expect((await derive(createHmac('sha256', totp.totpSecret).update(material).digest(), salt)).toString('base64')).toBe(login?.hash);
   });
 });

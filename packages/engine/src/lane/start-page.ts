@@ -1,6 +1,6 @@
 import type { Page } from 'playwright-core';
 import { classifyFailure, toErrorCode } from '../classify/classify.js';
-import { BROWSER_ERROR_PAGE, notLoaded, notReachedNetworkIdle } from '../messages.js';
+import { BROWSER_ERROR_PAGE, networkSentence, notLoaded, notReachedNetworkIdle } from '../messages.js';
 import type { Masker } from '../secrets/mask.js';
 import { isLoginPage } from '../steps/handlers/auth.js';
 import { absoluteHttpUrl } from '../steps/parse.js';
@@ -73,7 +73,7 @@ export async function openStartPage(
     const timedOut = err instanceof Error && err.name === 'TimeoutError';
     error = timedOut
       ? (waitUntil === 'networkidle' ? notReachedNetworkIdle(seconds(timeoutMs)) : notLoaded(seconds(timeoutMs)))
-      : shownMessage((err instanceof Error ? err.message : String(err)).split('\n')[0], opts.masker);
+      : shownMessage(networkSentence((err instanceof Error ? err.message : String(err)).split('\n')[0]), opts.masker);
   }
   if (error === undefined && isBrowserErrorPage(page.url())) error = BROWSER_ERROR_PAGE;
   // A login page may itself be served with 401/403 (forms auth); the steps decide from there.

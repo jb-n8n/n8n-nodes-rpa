@@ -31,6 +31,16 @@ public class PolicyCommandTests
     private static readonly string AllowErp = $"Allow app \"ErpDemo.exe\" at {L(ErpPath)}";
     private static readonly string OneApp = "This change: 1 app(s) allowed or updated, 0 helper process pattern(s), 0 write control(s), 0 gated key(s).";
 
+    // The note for an app the policy already had and that no write control protects (one allowed by an earlier version).
+    private const string NoWriteControl = "No write control is listed for \"ErpDemo.exe\", so the runner gates no write in it. To protect its save or post buttons, record a run that clicks them and apply that recording's change file the same way.";
+
+    // A change file as the recorder writes it for a recording that clicked Post and the Save button of a Save dialog.
+    private static readonly string RecorderChange = $$"""
+        { "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}} }],
+          "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "btnPost", "name": "Post" }],
+          "leftOutControls": [{ "exe": "ErpDemo.exe", "automationId": "1", "name": "Save" }] }
+        """;
+
     private static string Changing(int apps = 0, int helpers = 0) =>
         $"Changing the policy at {PolicyPath} ({apps} app(s), {helpers} helper process pattern(s) today).";
 
@@ -116,10 +126,35 @@ public class PolicyCommandTests
 
         public IReadOnlyList<string> BackupFolderProblems(string folder) => BackupProblems.GetValueOrDefault(folder, []);
 
+        /// <summary>What is wrong with the folder for change copies; nothing unless a test puts it here.</summary>
+        public Dictionary<string, string[]> ChangeProblems { get; } = [];
+
+        public IReadOnlyList<string> ChangeFolderProblems(string folder) => ChangeProblems.GetValueOrDefault(folder, []);
+
+        /// <summary>The copies apply made of change files, by path (kept apart from the other files, so that the tests
+        /// of the policy's own files see only those).</summary>
+        public Dictionary<string, byte[]> Copies { get; } = [];
+
+        /// <summary>When set, writing a copy fails with it.</summary>
+        public Exception? CopyFailure { get; set; }
+
+        /// <summary>Runs after a copy was written.</summary>
+        public Action<string>? AfterCopy { get; set; }
+
+        public void CreateChangeFolder(string folder) => Folders.Add(folder);
+
+        public void CreateChangeCopy(string path, byte[] content)
+        {
+            if (CopyFailure is not null) throw CopyFailure;
+            if (Kind(path) != PathKind.None) throw new IOException("The file exists.");
+            Copies[path] = content.ToArray();
+            AfterCopy?.Invoke(path);
+        }
+
         public PathKind Kind(string path)
         {
             Looked.Add(path);
-            var kind = Folders.Contains(path) ? PathKind.Folder : Text.ContainsKey(path) || Bytes.ContainsKey(path) ? PathKind.File : PathKind.None;
+            var kind = Folders.Contains(path) ? PathKind.Folder : Text.ContainsKey(path) || Bytes.ContainsKey(path) || Copies.ContainsKey(path) ? PathKind.File : PathKind.None;
             if (AfterLook is { } after && Steps.Count > 0 && Steps[^1].StartsWith("replace", StringComparison.Ordinal))
             {
                 AfterLook = null;
@@ -132,6 +167,7 @@ public class PolicyCommandTests
         {
             Reads.Add(path);
             if (Text.ContainsKey(path) && Failures.TryGetValue("read", out var failure)) throw failure;
+            if (Copies.TryGetValue(path, out var copy)) return copy;
             return Bytes.TryGetValue(path, out var bytes) ? bytes : Text.TryGetValue(path, out var text) ? Encoding.UTF8.GetBytes(text) : null;
         }
 
@@ -328,6 +364,110 @@ public class PolicyCommandTests
         Assert.DoesNotContain(tool.Files.Text.Keys, name => name.EndsWith(".tmp", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Apply_first_copies_the_change_file_into_its_own_folder_and_applies_the_copy()
+    {
+        // The change file may be in a folder its user can change (Documents, where the recorder saves): the tool works
+        // from a copy in a folder of its own that only administrators can change.
+        var tool = new Tool();
+        var before = DateTimeOffset.Now;
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{Updated}\n", tool.Output);
+        var folder = PolicyCommand.ChangeFolder(PolicyPath);
+        Assert.Equal(Path.Combine(Path.GetDirectoryName(PolicyPath)!, "policy-changes"), folder);
+        Assert.Contains(folder, tool.Files.Folders);
+        var copy = Assert.Single(tool.Files.Copies);
+        Assert.Contains(copy.Key, new[] { before, DateTimeOffset.Now }.Select(time => PolicyCommand.ChangeCopyPath(PolicyPath, "change.json", time, _ => false)));
+        Assert.Equal(Change, Encoding.UTF8.GetString(copy.Value));
+        // The change file itself is opened once, as before, and the copy is what is read for the summary.
+        Assert.Single(tool.Files.Opened);
+        Assert.Contains(copy.Key, tool.Files.Reads);
+
+        // Each apply keeps its own copy.
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(2, tool.Files.Copies.Count);
+    }
+
+    [Fact]
+    public void What_is_shown_and_applied_is_the_copy_and_a_change_file_changed_meanwhile_changes_nothing()
+    {
+        var other = $$"""{ "allowedApps": [{ "exe": "Other.exe", "path": {{J(Path.Combine(Root, "Other", "Other.exe"))}} }] }""";
+        var tool = new Tool();
+        // Whoever owns the folder of the change file changes it while the administrator reads the summary.
+        tool.AtPrompt = () => tool.Files.Text[ChangePath] = other;
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(ErpPath, Assert.Single(RunnerPolicy.Parse(Assert.Single(tool.Files.Writes).Json).AllowedApps).Path);
+        Assert.Equal(Change, Encoding.UTF8.GetString(Assert.Single(tool.Files.Copies).Value));
+
+        // The summary and the write come from the copy as it is in the tool's folder.
+        var read = new Tool();
+        read.Files.AfterCopy = path => read.Files.Copies[path] = Encoding.UTF8.GetBytes(other);
+        Assert.Equal(0, read.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Contains("Allow app \"Other.exe\"", read.Output);
+        Assert.Equal("Other.exe", Assert.Single(RunnerPolicy.Parse(Assert.Single(read.Files.Writes).Json).AllowedApps).Exe);
+    }
+
+    [Fact]
+    public void A_change_folder_that_cannot_be_trusted_stops_apply_before_the_summary()
+    {
+        // The runner's user may be able to create the folder before the tool does.
+        var folder = PolicyCommand.ChangeFolder(PolicyPath);
+        var tool = new Tool();
+        tool.Files.Folders.Add(folder);
+        tool.Files.ChangeProblems[folder] = [@"PC\bot owns the change folder"];
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(R(@"the change folder cannot be trusted: PC\bot owns the change folder; an administrator must check and remove it") + "\n", tool.Output);
+        Assert.Equal("y\n", tool.Unread);
+        Assert.Empty(tool.Files.Copies);
+        Assert.Empty(tool.Files.Writes);
+
+        var planted = new Tool();
+        planted.Files.Text[folder] = "planted";
+        Assert.Equal(1, planted.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{R($"{folder} exists and is not a folder; an administrator must check and remove it")}\n", planted.Output);
+        Assert.Empty(planted.Files.Copies);
+        Assert.Empty(planted.Files.Writes);
+    }
+
+    [Fact]
+    public void A_copy_that_cannot_be_written_stops_apply_with_nothing_changed()
+    {
+        var tool = new Tool();
+        tool.Files.CopyFailure = new UnauthorizedAccessException("Access to the path is denied.");
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(R($"The change file could not be copied to {PolicyCommand.ChangeFolder(PolicyPath)}: Access to the path is denied. Nothing was changed.") + "\n", tool.Output);
+        Assert.Empty(tool.Files.Writes);
+        Assert.Equal(0, tool.Restarts);
+    }
+
+    [Fact]
+    public void Nothing_is_copied_for_a_change_file_that_is_refused_or_for_allow_app()
+    {
+        var tool = new Tool();
+        Assert.Equal(1, tool.Run("y\n", "apply", Path.Combine(Root, "changes", "missing.json"), "--policy", PolicyPath));
+        tool.Files.Text[ChangePath] = new string(' ', (int)PolicyCommand.MaxChangeFileBytes + 1);
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(0, tool.Run("y\n", "allow-app", ErpPath, "--policy", PolicyPath));
+        Assert.Empty(tool.Files.Copies);
+        Assert.DoesNotContain(PolicyCommand.ChangeFolder(PolicyPath), tool.Files.Folders);
+    }
+
+    [Fact]
+    public void A_copy_is_named_after_the_change_file_and_the_time_and_never_replaces_another()
+    {
+        var at = new DateTimeOffset(2026, 11, 11, 14, 47, 0, TimeSpan.Zero);
+        var folder = PolicyCommand.ChangeFolder(PolicyPath);
+        Assert.Equal(Path.Combine(folder, "erp.policy-change.20261111-144700.json"), PolicyCommand.ChangeCopyPath(PolicyPath, "erp.policy-change.json", at, _ => false));
+        Assert.Equal(Path.Combine(folder, "notes.txt.20261111-144700.json"), PolicyCommand.ChangeCopyPath(PolicyPath, "notes.txt", at, _ => false));
+        var first = Path.Combine(folder, "a.20261111-144700.json");
+        Assert.Equal(Path.Combine(folder, "a.20261111-144700-2.json"), PolicyCommand.ChangeCopyPath(PolicyPath, "a.JSON", at, name => name == first));
+        Assert.Equal(Path.Combine(folder, new string('x', 100) + ".20261111-144700.json"), PolicyCommand.ChangeCopyPath(PolicyPath, new string('x', 150) + ".json", at, _ => false));
+        // A name that holds a stream (change.json:more) or another character Windows refuses in a file name is not
+        // taken as it is: the copy is one plain file.
+        Assert.Equal(Path.Combine(folder, "change.json_more.20261111-144700.json"), PolicyCommand.ChangeCopyPath(PolicyPath, "change.json:more", at, _ => false));
+        Assert.Equal(Path.Combine(folder, "a_b_c.20261111-144700.json"), PolicyCommand.ChangeCopyPath(PolicyPath, "a?b\u0001c.json", at, _ => false));
+    }
+
     [Theory]
     [InlineData("n\n")]
     [InlineData("\n")]
@@ -381,9 +521,78 @@ public class PolicyCommandTests
         var tool = new Tool();
         Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
         Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Equal($"{Changing(apps: 1)}\nNothing to change.\n", tool.Output);
+        Assert.Equal($"{Changing(apps: 1)}\nNothing to change.\n{R(NoWriteControl)}\n", tool.Output);
         Assert.Single(tool.Files.Writes);
         Assert.Equal(1, tool.Restarts);
+    }
+
+    [Fact]
+    public void The_recorder_s_change_asks_once_for_the_app_and_the_buttons_to_protect_and_says_which_it_left_out()
+    {
+        var tool = new Tool();
+        tool.Files.Text[ChangePath] = RecorderChange;
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(
+            $"{Changing()}\n" +
+            R("Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control", PolicyChange.ProtectMeaning, AllowErp,
+              "Not protected: \"Save\" (\"1\") of \"ErpDemo.exe\": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares") +
+            "\nThis change: 1 app(s) allowed or updated, 0 helper process pattern(s), 1 write control(s), 0 gated key(s).\n" +
+            $"{Prompt}{Updated}\n",
+            tool.Output);
+        var policy = RunnerPolicy.Parse(Assert.Single(tool.Files.Writes).Json);
+        Assert.Equal(("ErpDemo.exe", "btnPost"), (Assert.Single(policy.WriteControls).Exe, policy.WriteControls[0].AutomationId));
+        Assert.Single(policy.AllowedApps);
+
+        // No: neither the app nor the button.
+        var declined = new Tool();
+        declined.Files.Text[ChangePath] = RecorderChange;
+        Assert.Equal(3, declined.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Empty(declined.Files.Writes);
+    }
+
+    [Fact]
+    public void An_app_allowed_without_write_controls_gets_them_from_a_new_recording_s_change_with_the_same_command()
+    {
+        var tool = new Tool();
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        tool.Files.Text[ChangePath] = RecorderChange;
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        // Bots of the app may exist: the question says, before the answer, where they now stop.
+        Assert.Equal(
+            $"{Changing(apps: 1)}\n" +
+            R("Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control", PolicyChange.ProtectMeaning,
+              "Bots of \"ErpDemo.exe\" approved earlier stop where they press one of these buttons, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape while a window that holds one is open, unless that step was ticked as a write. Sign such a bot again on the import form with that step ticked.",
+              "Not protected: \"Save\" (\"1\") of \"ErpDemo.exe\": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares") +
+            "\nThis change: 0 app(s) allowed or updated, 0 helper process pattern(s), 1 write control(s), 0 gated key(s).\n" +
+            $"{Prompt}{Updated}\n",
+            tool.Output);
+        Assert.DoesNotContain("No write control", tool.Output);
+        Assert.Equal(["btnPost"], RunnerPolicy.Parse(tool.Files.Writes[^1].Json).WriteControls.Select(w => w.AutomationId));
+    }
+
+    [Fact]
+    public void The_note_comes_before_the_lines_of_a_change_and_only_for_apply()
+    {
+        var tool = new Tool();
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        tool.Files.Text[ChangePath] = $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "allowedArgs": [["--ui", "v2"]] }] }""";
+        Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(
+            $"{Changing(apps: 1)}\n{R(NoWriteControl)}\n{R($"Update app \"ErpDemo.exe\" at {L(ErpPath)} (allowed arguments added)")}\n  with arguments: \"--ui\" \"v2\"\n{OneApp}\n{Prompt}",
+            tool.Output);
+        // allow-app is the way to allow an app without its buttons: it says nothing about them.
+        Assert.Equal(0, tool.Run("", "allow-app", ErpPath, "--yes", "--policy", PolicyPath));
+        Assert.Equal($"{Changing(apps: 1)}\nNothing to change.\n", tool.Output);
+    }
+
+    [Fact]
+    public void Started_by_the_recorder_the_tool_waits_after_nothing_to_change_when_it_printed_a_note()
+    {
+        var tool = new Tool { Console = OwnWindow };
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--close-on-success"));
+        Assert.Equal(0, tool.Run("\nrest", "apply", ChangePath, "--close-on-success"));
+        Assert.EndsWith($"Nothing to change.\n{R(NoWriteControl)}\n{Closing}\n", tool.Output);
+        Assert.Equal("rest", tool.Unread);
     }
 
     [Fact]
@@ -983,7 +1192,7 @@ public class PolicyCommandTests
         Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
         Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Updated}\n", tool.Output);
         Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
-        Assert.EndsWith("Nothing to change.\n", tool.Output);
+        Assert.EndsWith($"Nothing to change.\n{R(NoWriteControl)}\n", tool.Output);
         Assert.Equal(0, tool.Run("", "show", "--policy", PolicyPath));
 
         // The size is read once, when the tool is about to ask: not for a command that ends earlier.
@@ -992,7 +1201,7 @@ public class PolicyCommandTests
         Assert.Equal(1, counting.Run("", "apply", Path.Combine(Root, "changes", "missing.json"), "--policy", PolicyPath));
         Assert.Equal(0, counting.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
         Assert.Equal(0, counting.Run("", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.EndsWith("Nothing to change.\n", counting.Output);
+        Assert.EndsWith($"Nothing to change.\n{R(NoWriteControl)}\n", counting.Output);
         Assert.Equal(0, asked);
         counting.Files.Text[ChangePath] = """{ "gatedKeys": ["Ctrl+S"] }""";
         Assert.Equal(3, counting.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
@@ -1035,6 +1244,41 @@ public class PolicyCommandTests
             Assert.Equal("rest", tool.Unread);
         }
         Assert.Equal(policy, Assert.Single(tool.Files.Writes).Path);
+    }
+
+    [Fact]
+    public void Started_by_the_recorder_the_tool_closes_its_window_after_a_successful_apply_and_waits_after_anything_else()
+    {
+        // The recorder's bar passes --close-on-success and reads the exit code; the tool run by hand waits as above.
+        var policy = Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
+        var tool = new Tool { Console = OwnWindow };
+        tool.Files.Text[ChangePath] = RecorderChange;
+        Assert.Equal(0, tool.Run("y\nrest", "apply", ChangePath, "--close-on-success"));
+        Assert.EndsWith($"{Prompt}{Updated}\n", tool.Output);
+        Assert.Equal("rest", tool.Unread);
+        Assert.Equal(policy, Assert.Single(tool.Files.Writes).Path);
+        // Nothing to change is a success too (with nothing to read: a note waits, as tested below).
+        Assert.Equal(0, tool.Run("rest", "apply", ChangePath, "--close-on-success"));
+        Assert.EndsWith("Nothing to change.\n", tool.Output);
+        Assert.Equal("rest", tool.Unread);
+
+        // Declined, refused, a usage error, or applied with a runner that could not be restarted: the person reads why.
+        var waiting = new (int Code, string Typed, string[] Args, Exception? RestartFailure)[]
+        {
+            (3, "n\n\nrest", ["apply", ChangePath, "--close-on-success"], null),
+            (1, "\nrest", ["apply", Path.Combine(Root, "changes", "missing.json"), "--close-on-success"], null),
+            (2, "\nrest", ["apply", "--close-on-success"], null),
+            (2, "\nrest", ["show", "--close-on-success"], null),
+            (0, "y\n\nrest", ["apply", ChangePath, "--close-on-success"], new System.ComponentModel.Win32Exception(5, "Access is denied.")),
+        };
+        foreach (var (code, typed, args, failure) in waiting)
+        {
+            var other = new Tool { Console = OwnWindow, RestartFailure = failure };
+            Assert.Equal(code, other.Run(typed, args));
+            Assert.EndsWith($"\n{Closing}\n", "\n" + other.Output.Replace(Prompt, Prompt + "\n"));
+            Assert.Equal("rest", other.Unread);
+        }
+        Assert.Contains("[--close-on-success]", PolicyCommand.Usage);
     }
 
     [Fact]
@@ -1635,7 +1879,7 @@ public class PolicyCommandTests
         var tool = new Tool();
         Assert.Equal(2, tool.Run(""));
         Assert.Equal(UsageText, tool.Output);
-        foreach (var line in new[] { "RpaPolicy show [--policy <path>]", "RpaPolicy apply <change.json> [--yes] [--policy <path>]", "RpaPolicy allow-app <path-to-exe> [--pin-hash] [--yes] [--policy <path>]" })
+        foreach (var line in new[] { "RpaPolicy show [--policy <path>]", "RpaPolicy apply <change.json> [--yes] [--close-on-success] [--policy <path>]", "RpaPolicy allow-app <path-to-exe> [--pin-hash] [--yes] [--policy <path>]" })
             Assert.Contains(line, PolicyCommand.Usage);
     }
 
@@ -1644,7 +1888,7 @@ public class PolicyCommandTests
     {
         string[][] invalid =
         [
-            ["remove-app", ErpPath], ["apply"], ["apply", ChangePath, "extra.json"], ["apply", ChangePath, "--pin-hash"],
+            ["remove-app", ErpPath], ["apply"], ["apply", ChangePath, "extra.json"], ["apply", ChangePath, "--pin-hash"], ["allow-app", ErpPath, "--close-on-success"],
             ["apply", ChangePath, "--policy"], ["apply", ChangePath, "--force"], ["allow-app"], ["show", ChangePath], ["show", "--yes"],
         ];
         foreach (var args in invalid)

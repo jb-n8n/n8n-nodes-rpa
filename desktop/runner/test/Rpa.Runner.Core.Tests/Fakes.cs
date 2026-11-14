@@ -101,8 +101,16 @@ public sealed class FakeDesktop : IDesktop
 
     public IUiNode? GetOwnerWindow(IUiNode window) => ((FakeNode)window).Owner;
 
+    /// <summary>Runs at every look at the top-level windows (each attempt of the resolver looks once per candidate).</summary>
+    public Action? OnLook { get; set; }
+
     public SessionState GetSessionState() => Session;
-    public IReadOnlyList<IUiNode> GetTopLevelWindows() => Windows;
+
+    public IReadOnlyList<IUiNode> GetTopLevelWindows()
+    {
+        OnLook?.Invoke();
+        return Windows;
+    }
     public IUiNode? GetForegroundWindow() => Foreground;
     public IUiNode? GetFocusedElement() => Focused;
 
@@ -125,6 +133,8 @@ public sealed class FakeDesktop : IDesktop
     public string? Perform(UiOperation op)
     {
         BeforeInput?.Invoke(op);
+        // As the Windows driver: a disabled element takes no input, only a read or a focus.
+        if (op.Action is not (ActionKind.Read or ActionKind.Focus) && !op.Element.IsEnabled) throw RetryableActionException.Disabled();
         if (op.Action is ActionKind.Type or ActionKind.Key)
         {
             // As the Windows driver does right before keyboard input: first the window manager's focus window (a bare
@@ -227,7 +237,36 @@ public sealed class FakeProcessHost : IProcessHost
         }
         return false;
     }
-    public void KillTree(int pid) => Killed.Add(pid);
+
+    /// <summary>Everything done to processes, in order: "close:pid", "kill:pid" (only for a process still running).</summary>
+    public List<string> Events { get; } = [];
+    public List<int> CloseRequested { get; } = [];
+    /// <summary>Processes that have ended (an app that closed, or ended before the run did).</summary>
+    public HashSet<int> Exited { get; } = [];
+    /// <summary>Processes that end when asked to close; any other ignores the request (as at "Save changes?").</summary>
+    public HashSet<int> ClosesOnRequest { get; } = [];
+    /// <summary>Runs when a process is stopped by force or released (for example to look at the export folder).</summary>
+    public Action<int>? OnKill { get; set; }
+
+    public bool HasExited(int pid) => Exited.Contains(pid);
+
+    public void RequestClose(int pid)
+    {
+        Events.Add($"close:{pid}");
+        CloseRequested.Add(pid);
+        if (ClosesOnRequest.Contains(pid)) Exited.Add(pid);
+    }
+
+    /// <summary>Like the real host: only a process still running counts as stopped by force.</summary>
+    public void KillTree(int pid)
+    {
+        OnKill?.Invoke(pid);
+        if (Exited.Add(pid))
+        {
+            Killed.Add(pid);
+            Events.Add($"kill:{pid}");
+        }
+    }
 }
 
 /// <summary>Records private directories; the writable answer is set by the test.</summary>

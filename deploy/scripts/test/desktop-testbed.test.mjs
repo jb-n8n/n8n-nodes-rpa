@@ -226,9 +226,9 @@ test('fingerprint runs Show-RpaConnection.ps1', () => {
     assert.ok(send.includes('AWS-RunPowerShellScript') && send.includes(INSTANCE));
     const params = JSON.parse(send[send.indexOf('--parameters') + 1]);
     assert.deepEqual(params.commands, ["& 'C:\\Program Files\\RPA Runner\\scripts\\Show-RpaConnection.ps1'"], 'never with -ShowTokens');
-    r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: `Runner fingerprint: ${FINGERPRINT}\r\nBrowser fingerprint: not known yet\r\nBrowser: not listening: see C:\\ProgramData\\RPA Runner\\logs\\browser.err.log` });
+    r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: `Runner fingerprint: ${FINGERPRINT}\r\nBrowser fingerprint: not known yet (the program has not started)\r\nBrowser: not listening yet. It starts within a minute of the bot user's sign-in: run this again. If it stays like this, read C:\\ProgramData\\RPA Runner\\logs\\browser.err.log` });
     assert.equal(r.code, 1);
-    assert.equal(r.stdout, `Runner fingerprint: ${FINGERPRINT}\nBrowser fingerprint: not known yet\n`);
+    assert.equal(r.stdout, `Runner fingerprint: ${FINGERPRINT}\nBrowser fingerprint: not known yet (the program has not started)\n`);
     assert.match(r.stderr, /a fingerprint is not known yet/);
     r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: 'RPA is not installed here: C:\\Program Files\\RPA Runner\\install.json is missing. Run Install-Rpa.ps1 from the unpacked package.' });
     assert.equal(r.code, 1);

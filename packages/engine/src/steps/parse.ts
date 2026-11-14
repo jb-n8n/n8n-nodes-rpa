@@ -1,14 +1,16 @@
-import { DESKTOP_VERBS, STEP_VERBS, type DesktopScript, type DesktopVerb, type Script, type Step, type StepVerb } from '../types.js';
+import { DESKTOP_VERBS, MAX_STEP_TIMEOUT_MS, STEP_VERBS, type DesktopScript, type DesktopVerb, type Script, type Step, type StepVerb } from '../types.js';
 import {
   BROWSER_STEPS_NEED_BROWSER, browserLocatorOnDesktop, browserStepOnDesktop, DESKTOP_STEPS_NEED_RUNNER, desktopLocatorInBrowser, exportDirOnlyInFill,
-  FIRST_STEP_GOTO, reservedTemplate, secretFillValue, varInWriteLocator, varNotRendered,
+  FIRST_STEP_GOTO, reservedTemplate, secretFillValue, varInWriteLocator, varNotRendered, whenVarOnWrite, whenVarSecret,
 } from '../messages.js';
 import { SECRET_FILL_VALUE } from '../secrets/render.js';
-import { DESKTOP_WRITE_VERBS, READ_NAME, stepChordProblem } from './desktop-vocabulary.js';
+import { secretFillVariables } from '../secrets/secret-fills.js';
+import { browserKeyProblem } from './browser-keys.js';
+import { COND_TEXT_KEYS, DESKTOP_WRITE_VERBS, isText, MAX_UIA_TEXT, READ_NAME, RESERVED, stepChordProblem, WINDOW_KEYS } from './desktop-vocabulary.js';
 
 export class ScriptShapeError extends Error {
   constructor(public readonly issues: string[]) {
-    super(`invalid script: ${issues.join('; ')}`);
+    super(`invalid steps: ${issues.join('; ')}`);
     this.name = 'ScriptShapeError';
   }
 }
@@ -20,6 +22,9 @@ const LOCATOR_KEYS = new Set([...LOCATOR_KINDS, 'name', 'exact', 'within', 'fram
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const WAIT_UNTIL = ['load', 'domcontentloaded', 'networkidle'];
 const FIELD_ATTRIBUTES = ['text', 'href', 'src', 'title', 'alt', 'aria-label'];
+const CLICK_MODIFIERS = ['Ctrl', 'Shift', 'Alt'];
+/** The keys a step may hold beside its verb: goto's waitUntil and click's modifiers. On any other verb they are unknown keys. */
+const VERB_EXTRAS: Partial<Record<StepVerb, string[]>> = { goto: ['waitUntil'], click: ['modifiers'] };
 
 /** An absolute http(s) URL without a {{template}}, normalised as the browser will load it; undefined otherwise. */
 export function absoluteHttpUrl(v: unknown): string | undefined {
@@ -129,6 +134,75 @@ function checkSubmitTarget(v: Obj, path: string, issues: string[]) {
   if (v.method !== undefined && !(typeof v.method === 'string' && METHODS.has(v.method.toUpperCase()))) issues.push(`${path}.method must be one of ${[...METHODS].join(', ')}`);
 }
 
+/** The browser verbs that sign in or write: no run variable may steer them (a locator or a `when`). */
+const BROWSER_WRITE_VERBS: readonly StepVerb[] = ['signIn', 'submit', 'download'];
+/** A run variable's name, as Options → Variables accepts it. */
+const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const WHEN_FORMS = ['visible', 'hidden', 'var'] as const;
+
+/**
+ * Whether running the step may sign in or write: its own verb does, or it is a paginate whose body holds a write
+ * (skipping the paginate skips that write too).
+ */
+function writesWhenRun(s: Obj, verb: StepVerb): boolean {
+  if (BROWSER_WRITE_VERBS.includes(verb)) return true;
+  const each = verb === 'paginate' && isObj(s.paginate) ? s.paginate.each : undefined;
+  return Array.isArray(each) && each.some((e) => isObj(e) && BROWSER_WRITE_VERBS.some((w) => Object.hasOwn(e, w)));
+}
+
+/**
+ * A step's `when`: exactly one of `{ visible }`, `{ hidden }` (a locator each) or `{ var, equals | notEquals }` (a run
+ * variable against literal text). `writes`: the step signs in or writes, so a variable may not decide whether it runs.
+ */
+function checkWhen(w: unknown, path: string, writes: boolean, issues: string[]) {
+  const at = `${path}.when`;
+  if (!isObj(w)) { issues.push(`${at} must be an object`); return; }
+  checkKeys(w, [...WHEN_FORMS, 'equals', 'notEquals'], at, issues);
+  const forms = WHEN_FORMS.filter((k) => Object.hasOwn(w, k));
+  if (forms.length !== 1) { issues.push(`${at} must have exactly one of visible, hidden, or var with equals or notEquals`); return; }
+  const ops = (['equals', 'notEquals'] as const).filter((k) => Object.hasOwn(w, k));
+  if (forms[0] !== 'var') {
+    ops.forEach((k) => issues.push(`${at}.${k} is used only with var`));
+    checkLocator(w[forms[0]], `${at}.${forms[0]}`, issues);
+    return;
+  }
+  if (writes) issues.push(whenVarOnWrite(path));
+  if (typeof w.var !== 'string' || !VAR_NAME.test(w.var)) issues.push(`${at}.var must be a variable name: letters, digits and _, not starting with a digit`);
+  if (ops.length !== 1) { issues.push(`${at} with var needs exactly one of equals or notEquals`); return; }
+  const value = w[ops[0]];
+  if (typeof value !== 'string') issues.push(`${at}.${ops[0]} must be a string`);
+  else if (value.includes('{{')) issues.push(`${at}.${ops[0]} is compared as literal text and may not hold {{`);
+}
+
+/**
+ * A condition never tests a secret: no `when.var` may name a variable that a secret fill types, anywhere in the list
+ * (paginate bodies included). Runs on a list that already has the right shape.
+ */
+function checkWhenSecrets(steps: Step[], secret: Set<string>, issues: string[], path = 'steps') {
+  steps.forEach((s, i) => {
+    const at = `${path}[${i}]`;
+    if (s.when && 'var' in s.when && secret.has(s.when.var)) issues.push(whenVarSecret(at));
+    if ('paginate' in s) checkWhenSecrets(s.paginate.each, secret, issues, `${at}.paginate.each`);
+  });
+}
+
+/**
+ * signIn.changePassword: `{ detect, current?, new: 1 or 2 locators, submit, value }`. `value` follows the rule of a secret
+ * fill (exactly one {{var.name}}, nothing around it). Its locators are checked for variables with the rest of signIn
+ * (checkBrowserWriteLocators). Returns the object when it is one, for the caller's frame check.
+ */
+function checkChangePassword(v: unknown, p: string, issues: string[]): Obj | undefined {
+  if (!isObj(v)) { issues.push(`${p} must be an object`); return undefined; }
+  checkKeys(v, ['detect', 'current', 'new', 'submit', 'value'], p, issues);
+  checkLocator(v.detect, `${p}.detect`, issues);
+  if (v.current !== undefined) checkLocator(v.current, `${p}.current`, issues);
+  if (!Array.isArray(v.new) || v.new.length < 1 || v.new.length > 2) issues.push(`${p}.new must be an array of 1 or 2 locators`);
+  else v.new.forEach((loc, i) => checkLocator(loc, `${p}.new[${i}]`, issues));
+  checkLocator(v.submit, `${p}.submit`, issues);
+  if (typeof v.value !== 'string' || !SECRET_FILL_VALUE.test(v.value)) issues.push(`${p}.value must be exactly one {{var.name}} template (nothing before or after it)`);
+  return v;
+}
+
 function checkSteps(steps: unknown, path: string, issues: string[], nested: boolean) {
   if (!Array.isArray(steps) || steps.length === 0) { issues.push(`${path} must be a non-empty array`); return; }
   if (steps.length > 200) issues.push(`${path} has more than 200 steps`);
@@ -138,8 +212,7 @@ function checkSteps(steps: unknown, path: string, issues: string[], nested: bool
 function checkStep(s: unknown, path: string, issues: string[], nested: boolean) {
   if (!isObj(s)) { issues.push(`${path} must be an object`); return; }
   if (!isStr(s.intent) || s.intent.length > 200) issues.push(`${path}.intent must be a non-empty string of at most 200 characters`);
-  // waitUntil belongs to goto only; on any other verb it is reported as an unknown key.
-  const verbExtras = Object.hasOwn(s, 'goto') ? ['waitUntil'] : [];
+  const verbExtras = Object.entries(VERB_EXTRAS).flatMap(([verb, extras]) => (Object.hasOwn(s, verb) ? extras : []));
   const verbs = Object.keys(s).filter((k) => !BASE_KEYS.has(k) && !verbExtras.includes(k));
   const known = verbs.filter((k) => (STEP_VERBS as readonly string[]).includes(k));
   if (known.length !== 1 || verbs.length !== 1) {
@@ -150,14 +223,9 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
   }
   if (s.optional !== undefined && typeof s.optional !== 'boolean') issues.push(`${path}.optional must be a boolean`);
   if (s.checkpoint !== undefined && typeof s.checkpoint !== 'boolean') issues.push(`${path}.checkpoint must be a boolean`);
-  if (s.timeoutMs !== undefined && !isInt(s.timeoutMs, 100, 120_000)) issues.push(`${path}.timeoutMs must be an integer between 100 and 120000`);
-  if (s.when !== undefined) {
-    if (!isObj(s.when)) issues.push(`${path}.when must be an object`);
-    else {
-      checkKeys(s.when, ['visible'], `${path}.when`, issues);
-      checkLocator(s.when.visible, `${path}.when.visible`, issues);
-    }
-  }
+  if (s.timeoutMs !== undefined && !isInt(s.timeoutMs, 100, MAX_STEP_TIMEOUT_MS)) issues.push(`${path}.timeoutMs must be an integer between 100 and ${MAX_STEP_TIMEOUT_MS}`);
+  const verb = known[0] as StepVerb;
+  if (s.when !== undefined) checkWhen(s.when, path, writesWhenRun(s, verb), issues);
   if (s.expect !== undefined) {
     if (!isObj(s.expect)) issues.push(`${path}.expect must be an object`);
     else {
@@ -167,7 +235,6 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
       if (s.expect.visible !== undefined) checkLocator(s.expect.visible, `${path}.expect.visible`, issues);
     }
   }
-  const verb = known[0] as StepVerb;
   const v = s[verb];
   const p = `${path}.${verb}`;
   switch (verb) {
@@ -177,13 +244,29 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
         issues.push(`${path}.waitUntil must be "load", "domcontentloaded" or "networkidle"`);
       }
       break;
-    case 'click':
+    case 'click': {
+      checkLocator(v, p, issues);
+      const mods = s.modifiers;
+      if (mods !== undefined && !(Array.isArray(mods) && mods.length > 0 && mods.every((m) => CLICK_MODIFIERS.includes(m as string)) && new Set(mods).size === mods.length)) {
+        issues.push(`${path}.modifiers must be a non-empty list of Ctrl, Shift and Alt, each at most once`);
+      }
+      break;
+    }
+    case 'press': {
+      if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
+      checkKeys(v, ['key', 'target'], p, issues);
+      const problem = browserKeyProblem(typeof v.key === 'string' ? v.key : '');
+      if (problem) issues.push(`${p}.key ${problem}`);
+      if (v.target !== undefined) checkLocator(v.target, `${p}.target`, issues);
+      break;
+    }
+    case 'hover':
       checkLocator(v, p, issues);
       break;
     case 'signIn':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
       if (nested) issues.push(`${p}: signIn is not allowed inside paginate`);
-      checkKeys(v, ['username', 'next', 'password', 'submit', 'totp'], p, issues);
+      checkKeys(v, ['username', 'next', 'password', 'submit', 'totp', 'changePassword'], p, issues);
       checkLocator(v.username, `${p}.username`, issues);
       if (v.next !== undefined) checkLocator(v.next, `${p}.next`, issues);
       checkLocator(v.password, `${p}.password`, issues);
@@ -203,9 +286,13 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
           }
         }
       }
+      const change = v.changePassword === undefined ? undefined : checkChangePassword(v.changePassword, `${p}.changePassword`, issues);
       const totp = isObj(v.totp) ? v.totp : undefined;
       const lists = (key: 'via' | 'check'): [string, unknown][] => (Array.isArray(totp?.[key]) ? (totp[key] as unknown[]).map((loc, i) => [`totp.${key}[${i}]`, loc]) : []);
-      for (const [k, loc] of [['username', v.username], ['next', v.next], ['password', v.password], ['submit', v.submit], ['totp.field', totp?.field], ['totp.submit', totp?.submit], ...lists('via'), ...lists('check')] as [string, unknown][]) {
+      const changeLocators: [string, unknown][] = change
+        ? [['changePassword.detect', change.detect], ...(change.current !== undefined ? [['changePassword.current', change.current] as [string, unknown]] : []), ...(Array.isArray(change.new) ? change.new.map((loc, i): [string, unknown] => [`changePassword.new[${i}]`, loc]) : []), ['changePassword.submit', change.submit]]
+        : [];
+      for (const [k, loc] of [['username', v.username], ['next', v.next], ['password', v.password], ['submit', v.submit], ['totp.field', totp?.field], ['totp.submit', totp?.submit], ...lists('via'), ...lists('check'), ...changeLocators] as [string, unknown][]) {
         if (isObj(loc) && loc.frame !== undefined) issues.push(`${p}.${k} cannot use frame`);
       }
       break;
@@ -352,13 +439,13 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
 export function parseScript(input: unknown, opts: { defaultStartUrl?: string } = {}): Script {
   const issues: string[] = [];
   const doc: unknown = Array.isArray(input) ? { steps: input } : input;
-  if (!isObj(doc)) throw new ScriptShapeError(['script must be an object']);
+  if (!isObj(doc)) throw new ScriptShapeError(['the steps must be an object']);
   // Fail closed on the surface: a desktop step set never runs in a browser, and an unknown surface is refused.
   // Own properties only: the hash (canonicalize) covers own properties, so routing never reads an inherited one.
   const surface = Object.hasOwn(doc, 'surface') ? doc.surface : undefined;
   if (surface === 'desktop') throw new ScriptShapeError([DESKTOP_STEPS_NEED_RUNNER]);
   if (surface !== undefined && surface !== 'browser') throw new ScriptShapeError([SURFACE_INVALID]);
-  for (const k of Object.keys(doc)) if (!['surface', 'name', 'version', 'startUrl', 'interrupts', 'steps'].includes(k)) issues.push(`script has unknown key "${k}"`);
+  for (const k of Object.keys(doc)) if (!['surface', 'name', 'version', 'startUrl', 'interrupts', 'steps'].includes(k)) issues.push(`the steps have the unknown key "${k}"`);
   checkBrowserTemplates(doc.steps, issues);
   checkBrowserWriteLocators(doc.steps, issues);
   if (doc.name !== undefined && !isStr(doc.name)) issues.push('name must be a non-empty string');
@@ -385,6 +472,7 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
     });
   }
   checkSteps(doc.steps, 'steps', issues, false);
+  if (!issues.length) checkWhenSecrets(doc.steps as Step[], secretFillVariables(doc.steps as Step[]), issues);
   if (issues.length) throw new ScriptShapeError(issues);
   return structuredClone({ ...doc, startUrl }) as unknown as Script;
 }
@@ -392,8 +480,6 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
 // Reserved templates. `{{$name}}` is kept apart from the steps' own `{{var.x}}` templates: the only one there is,
 // {{$exportDir}}, is the desktop runner's export directory, and it is accepted only in a desktop fill value.
 
-/** A `{{$name}}` template, also behind extra braces or spaces (`{{{ $name }}}`), so none slips past the check. */
-const RESERVED = /\{\{[\s{]*(\$[^}]*?)\s*\}\}/g;
 /** {{$exportDir}} as a fill value may write it (the same spacing renderVars accepts). */
 export const EXPORT_DIR_TOKEN = /\{\{\s*\$exportDir\s*\}\}/g;
 
@@ -454,16 +540,22 @@ function varsInLocators(v: unknown, path: string, out: string[]) {
 /**
  * A run variable must never steer a write: signIn, submit and download steps (and, for a desktop step set, any step
  * with write: true) may not hold `{{var.x}}` in any locator, including `when`, `expect` and fallbacks. Walks paginate
- * bodies. The write window step is checked by the policy (it is declared there, not in the steps).
+ * bodies. A paginate whose body writes may not hold one in its own locators either (`when` and `expect` gate the body,
+ * `next` decides how often it repeats). The write window step is checked by the policy (it is declared there, not in
+ * the steps).
  */
 function checkBrowserWriteLocators(steps: unknown, issues: string[], path = 'steps') {
   if (!Array.isArray(steps)) return;
+  const writes = (s: unknown) => isObj(s) && BROWSER_WRITE_VERBS.some((verb) => Object.hasOwn(s, verb));
   steps.forEach((s, i) => {
     if (!isObj(s)) return;
     const at = `${path}[${i}]`;
-    if (['signIn', 'submit', 'download'].some((verb) => Object.hasOwn(s, verb))) {
+    const ownLocators = writes(s) ? s
+      : isObj(s.paginate) && Array.isArray(s.paginate.each) && s.paginate.each.some(writes) ? { ...s, paginate: { ...s.paginate, each: undefined } }
+      : undefined;
+    if (ownLocators) {
       const hits: string[] = [];
-      varsInLocators(s, at, hits);
+      varsInLocators(ownLocators, at, hits);
       hits.forEach((h) => issues.push(varInWriteLocator(h)));
     }
     if (isObj(s.paginate)) checkBrowserWriteLocators(s.paginate.each, issues, `${at}.paginate.each`);
@@ -472,16 +564,12 @@ function checkBrowserWriteLocators(steps: unknown, issues: string[], path = 'ste
 
 const DESKTOP_BASE_KEYS = new Set(['intent', 'optional', 'when', 'expect', 'checkpoint', 'timeoutMs', 'write']);
 const BROWSER_LOCATOR_KEYS = ['role', 'label', 'text', 'testId', 'css', 'name', 'exact', 'within', 'frame'];
-const WINDOW_KEYS = ['exe', 'title', 'titlePattern', 'automationId', 'className'];
-const COND_TEXT_KEYS = ['controlType', 'automationId', 'name', 'className'];
-const MAX_UIA_TEXT = 500;
 /**
  * The largest file an expectFile step may ask for: the desktop runner's ceiling (its policy's maxFileBytes may be at
  * most 36 MiB, so that one answer stays under the 50 MiB frame limit). The runner's policy maxFileBytes (20 MiB by
  * default) is the effective limit; a larger file is refused by the runner (policy_refused).
  */
 export const MAX_EXPECTED_FILE_BYTES = 36 * 1024 * 1024;
-const isText = (v: unknown, max = MAX_UIA_TEXT): v is string => isStr(v) && v.length <= max && !/[\r\n]/.test(v);
 
 function checkWindowSel(v: unknown, path: string, issues: string[]) {
   if (!isObj(v)) { issues.push(`${path} must be an object`); return; }
@@ -549,7 +637,7 @@ function checkDesktopStep(s: unknown, path: string, issues: string[]) {
   if (s.timeoutMs !== undefined && !isInt(s.timeoutMs, 100, 120_000)) issues.push(`${path}.timeoutMs must be an integer between 100 and 120000`);
   if (s.write !== undefined) {
     if (typeof s.write !== 'boolean') issues.push(`${path}.write must be a boolean`);
-    else if (s.write && !DESKTOP_WRITE_VERBS.has(verb)) issues.push(`${path}.write is only allowed on click, fill, select, check and key steps`);
+    else if (s.write && !DESKTOP_WRITE_VERBS.has(verb)) issues.push(`${path}.write is only allowed on click, doubleClick, fill, select, check and key steps`);
   }
   if (s.when !== undefined) {
     if (!isObj(s.when)) issues.push(`${path}.when must be an object`);
@@ -570,6 +658,7 @@ function checkDesktopStep(s: unknown, path: string, issues: string[]) {
   const p = `${path}.${verb}`;
   switch (verb) {
     case 'click':
+    case 'doubleClick':
       checkDesktopLocator(v, p, issues);
       break;
     case 'fill':
@@ -646,11 +735,11 @@ export function isDesktopDocument(raw: unknown): boolean {
  */
 export function parseDesktopScript(input: unknown): DesktopScript {
   const issues: string[] = [];
-  if (!isObj(input)) throw new ScriptShapeError(['script must be an object']);
+  if (!isObj(input)) throw new ScriptShapeError(['the steps must be an object']);
   const doc = input;
   const surface = Object.hasOwn(doc, 'surface') ? doc.surface : undefined;
   if (surface !== 'desktop') throw new ScriptShapeError([surface === undefined || surface === 'browser' ? BROWSER_STEPS_NEED_BROWSER : SURFACE_INVALID]);
-  checkKeys(doc, ['surface', 'name', 'version', 'app', 'interrupts', 'steps'], 'script', issues);
+  for (const k of Object.keys(doc)) if (!['surface', 'name', 'version', 'app', 'interrupts', 'steps'].includes(k)) issues.push(`the steps have the unknown key "${k}"`);
   if (Object.hasOwn(doc, 'startUrl')) issues.push('startUrl is a browser setting, not allowed in a desktop step set: set app instead');
   if (doc.name !== undefined && !isStr(doc.name)) issues.push('name must be a non-empty string');
   if (doc.version !== undefined && !isInt(doc.version, 1, Number.MAX_SAFE_INTEGER)) issues.push('version must be a positive integer');

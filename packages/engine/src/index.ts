@@ -1,9 +1,15 @@
 export * from './types.js';
-export * from './messages.js';
+// The texts the node and its tests name; the rest of messages.ts is internal.
+export {
+  BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS,
+  codeWorkflowFailed, DOWNLOAD_NEEDS_BROWSER_SERVER, IMPORT_EMPTY, IMPORT_NEEDS_SITE_LOGIN, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED, IMPORT_ROWS_NEED_ID,
+  IMPORT_REFUSES_WRITES, IMPORT_UNSUPPORTED_TARGET, networkSentence, notHttp, runnerConnected, STEPS_HASH_MISMATCH, USE_CASE_WORDS, VALUE_NOT_TAKEN, valueNotTaken,
+} from './messages.js';
 export * from './sign.js';
 export * from './secrets/totp.js';
 export { createMasker, type Masker } from './secrets/mask.js';
 export * from './secrets/render.js';
+export type { SecretTargets } from './secrets/secret-targets.js';
 export * from './steps/parse.js';
 export { fileFacts, checkFile, FILE_CHECK_FAILED_PREFIX } from './steps/file-check.js';
 export type { DownloadTemplate } from './steps/file-check.js';
@@ -22,6 +28,8 @@ export { PolicyError } from './steps/errors.js';
 export { sanitizeFileName, sniffMime, DEFAULT_MAX_BYTES, DEFAULT_MIME, MIME, binaryName } from './steps/handlers/files.js';
 export { MAX_TEXT_BYTES, MAX_SCREENSHOT_HEIGHT, MAX_CAPTURE_BYTES } from './steps/handlers/capture.js';
 export { MAX_RUN_BINARY_BYTES } from './steps/limits.js';
+// How a page address may be shown: the node's review page shows each goto with it.
+export { shownUrl } from './steps/urls.js';
 // runScriptLane and startScriptLane are internal: runTask is the only entry point.
 export {
   CANCELLED, DEFAULT_BUDGET_MS, MAX_BUDGET_MS, clampBudget, laneFailure, laneMasker, maskLog, openLaneRuntime, screenshotMasks,
@@ -42,14 +50,17 @@ export * from './lane/task.js';
 // internal, and so is draft mode (lane/draft.ts: runDraft is reachable only through adoptDraft, never from runTask).
 export type * from './import/types.js';
 export { importSource } from './import/index.js';
-export { adoptDraft, type AdoptInput, type AdoptResult } from './import/adopt.js';
+export { detectImportSource } from './import/detect.js';
+export { adoptDraft, statedIdPattern, type AdoptInput, type AdoptResult } from './import/adopt.js';
 // Desktop step sets: the desktop lane, the runner client and the protocol's typed errors.
-export { checkDesktopTrust, DEFAULT_BUSY_WAIT_MS, DEFAULT_LEASE_MS, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from './desktop/task.js';
+export { checkDesktopTrust, DEFAULT_LEASE_MS, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from './desktop/task.js';
 export {
   connectRunner, fingerprintOf, normalizeFingerprint, probeRunner, RUNNER_CONNECT_TIMEOUT_MS, runnerAddress, RunnerClient,
   type Lease, type RunnerAddress, type RunnerEndpoint,
 } from './desktop/client.js';
 export * from './desktop/protocol.js';
+// Browser steps that go to approval without a replay (a step document that writes or types a secret).
+export { needsApprovalAsWritten, notReplayedFlags, notReplayedProposal } from './proposal/not-replayed.js';
 // Desktop drafts (UiPath desktop imports): their review, the owner's write declarations at approval, and signing.
 export {
   declareWrites, describeDesktopStep, DESKTOP_CHANGES_MISMATCH, DESKTOP_EVIDENCE_INVALID, DESKTOP_FLAGS_INCOMPLETE, DESKTOP_NEEDS_FIRST_VERSION, DESKTOP_WRITES_PRESET, desktopProposal, desktopSafetyFlags,

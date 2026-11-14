@@ -277,6 +277,18 @@ describe('stripSecrets: sign-in', () => {
     expect(JSON.stringify(r)).not.toContain('492039');
   });
 
+  it('with codeFromWorkflow, a recorded code becomes signIn.totp with source "workflow"; a sign-in without a code is unchanged', () => {
+    const withCode = importEvents([
+      ...signInEvents(), click('Authentication code', [{ label: 'Authentication code', exact: true }]), fill('Authentication code', '492039'), click('Verify'),
+    ], { ...OPTS, codeFromWorkflow: true });
+    expect((stepsOf(withCode)[1] as S<'signIn'>).signIn.totp).toEqual({
+      field: { label: 'Authentication code', exact: true }, submit: { role: 'button', name: 'Verify' }, source: 'workflow',
+    });
+    expect(JSON.stringify(withCode)).not.toContain('492039');
+    const noCode = importEvents(signInEvents(), { ...OPTS, codeFromWorkflow: true });
+    expect((stepsOf(noCode)[1] as S<'signIn'>).signIn.totp).toBeUndefined();
+  });
+
   it('a value equal to the Site Login password in an oddly named field is stripped', () => {
     const r = importEvents([
       goto(LOGIN),
@@ -532,10 +544,10 @@ describe('sign-in grouping and masking', () => {
 
   it('a credential-looking field that is no password field is stripped but is no sign-in', () => {
     for (const opts of [OPTS, { name: 'erp-export', hasSiteLogin: false }] as ImportOptions[]) {
-      const r = importEvents([goto(LOGIN), fill('Name', 'Smith'), fill('Passenger', 'Smythe', [{ label: 'Passenger' }]), click('Search')], opts);
+      const r = importEvents([goto(LOGIN), fill('Name', 'Smith'), fill('Client secret', 'Smythe', [{ label: 'Client secret' }]), click('Search')], opts);
       expect(stepsOf(r).map((s) => s.intent)).toEqual(['Open erp.example.com/acme/login', 'Type into Name', 'Click Search']);
       expect(r.report.items.some((i) => i.reason === IMPORT_NEEDS_SITE_LOGIN || i.what === 'Sign in')).toBe(false);
-      expect(r.report.items).toContainEqual(expect.objectContaining({ kind: 'secret', what: 'Passenger' }));
+      expect(r.report.items).toContainEqual(expect.objectContaining({ kind: 'secret', what: 'Client secret' }));
     }
   });
 });

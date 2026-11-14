@@ -9,7 +9,8 @@ import { openStartPage, pageInfo, startPageFailure, startPlan, startProceeds, ty
 import { createMasker } from '../src/secrets/mask.js';
 import type { PortalPolicy } from '../src/types.js';
 import { LOCAL, policyFor, publicPolicy } from './helpers.js';
-import { BROWSER_ERROR_PAGE } from '../src/messages.js';
+import { BROWSER_ERROR_PAGE, networkSentence } from '../src/messages.js';
+import { classifyFailure } from '../src/classify/classify.js';
 import { parseScript } from '../src/steps/parse.js';
 
 /** A port nothing listens on: bound once, then released. */
@@ -73,6 +74,22 @@ describe('startPageFailure', () => {
     const seen: (string | undefined)[] = [];
     expect(startPageFailure(runtime(null, seen), notFound)).toEqual({ code: 'drift_detected', message: 'HTTP 404 at the start page' });
     expect(seen).toEqual(['the start page']);
+  });
+  it('a network error the browser names becomes a sentence that names the site, the browser\'s text after it (IB-10)', () => {
+    const say = (raw: string) => networkSentence(raw);
+    expect(say('page.goto: net::ERR_NAME_NOT_RESOLVED at http://sandbox:8080/acme/login'))
+      .toBe('The site sandbox:8080 could not be found: no site answers to that name. Check the address, and that the site is up. (browser: page.goto: net::ERR_NAME_NOT_RESOLVED at http://sandbox:8080/acme/login)');
+    expect(say('page.goto: net::ERR_CONNECTION_REFUSED at https://erp.example.com/a'))
+      .toBe('The site erp.example.com refused the connection: nothing answers at that address and port. Check the address, and that the site is up. (browser: page.goto: net::ERR_CONNECTION_REFUSED at https://erp.example.com/a)');
+    expect(say('page.goto: net::ERR_CONNECTION_TIMED_OUT at https://erp.example.com/a')).toMatch(/^The site erp\.example\.com did not answer in time\. Check the address, or try again later\. \(browser: /);
+    expect(say('page.goto: net::ERR_CERT_DATE_INVALID at https://erp.example.com/a')).toMatch(/^The certificate of the site erp\.example\.com was not accepted: .* \(browser: page\.goto: net::ERR_CERT_DATE_INVALID at /);
+    // No address: the site; another network error, or another text: as it was.
+    expect(say('page.goto: net::ERR_NAME_NOT_RESOLVED')).toMatch(/^The site could not be found: /);
+    expect(say('page.goto: net::ERR_ABORTED at https://a.example/')).toBe('page.goto: net::ERR_ABORTED at https://a.example/');
+    expect(say('No element found')).toBe('No element found');
+    // Still site_down: the browser's text stays in the message.
+    expect(classifyFailure({ violations: [], failure: { index: 0, intent: 'Open', message: say('page.goto: net::ERR_NAME_NOT_RESOLVED at http://sandbox:8080/') } })).toBe('site_down');
+    for (const raw of ['net::ERR_NAME_NOT_RESOLVED at http://a/', 'net::ERR_CERT_AUTHORITY_INVALID at https://a/']) expect(say(raw)).not.toMatch(/[<>]/);
   });
   it('reports the navigation error as the message', () => {
     expect(startPageFailure(runtime(null), { status: null, error: 'page.goto: net::ERR_CONNECTION_REFUSED', responded: false, proceed: false }).message)

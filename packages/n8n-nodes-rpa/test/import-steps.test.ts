@@ -3,6 +3,9 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
+import { CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { NO_MODEL } from '../nodes/Playwright/operations/common.js';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData, type INodeProperties, type INodePropertyOptions } from 'n8n-workflow';
 import * as real from 'n8n-rpa-engine';
 import type { AdoptInput, AdoptResult, Draft, ImportResult, Script } from 'n8n-rpa-engine';
@@ -13,14 +16,21 @@ import { nodeInputs, nodeOutputs } from '../nodes/Playwright/description/io.js';
 import type { Engine } from '../nodes/Playwright/engine.js';
 import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
 import { memoryGuardStore } from '../nodes/Playwright/guard-store.js';
-import { executeImportSteps, MAX_IMPORT_BYTES, STEPS_WITHHELD } from '../nodes/Playwright/operations/importSteps.js';
+import {
+  executeImportSteps, IMPORT_NEEDS_START, MAX_IMPORT_BYTES, NOT_TRIED_CANCELLED, SOURCE_UNKNOWN, STEPS_WITHHELD,
+} from '../nodes/Playwright/operations/importSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
+import { BY_POSITION, BY_ROW, fullSafetyFlags, reviewSteps } from '../nodes/Playwright/format.js';
 import { repairedStepsJson } from '../nodes/Playwright/output.js';
+import type { WorkflowJson } from '../nodes/Playwright/import/workflow.js';
 import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { fakeEngine } from './fake-engine.js';
 import { credentialsV2, nodeContext, signStepsParams, siteLoginData } from './feed-fixtures.js';
 import { SECRETS } from './fixtures.js';
 import type { Harness } from './harness.js';
+
+/** A review entry as the page shows it: the sentence, then the author's description under the page's own label. */
+const line = (r: { text: string; describedAs?: string }) => (r.describedAs === undefined ? r.text : `${r.text} (described differently as: ${r.describedAs})`);
 
 afterEach(() => resetGuardsForTests());
 
@@ -31,8 +41,6 @@ const NAME_REQUIRED = 'Name is required: it names the imported steps.';
 const NAME_EQUALS = 'Name must not start with "=".';
 const CDP_DOWNLOAD =
   'Downloads need the Browser Server or Local Browser mode: a Chrome DevTools Protocol (CDP) connection cannot read downloaded files. Pick an RPA Browser credential in Browser Server mode for this node.';
-const NO_MODEL = 'AI repair is on but no chat model is connected. Connect one to the Model input.';
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 
 const SITE = { url: 'https://erp.example.com', host: 'erp.example.com' };
 const ENGINE_FIXTURES = new URL('../../engine/test/fixtures/import/', import.meta.url);
@@ -186,7 +194,9 @@ const drafts = (item: INodeExecutionData) => item.json.drafts as IDataObject[];
 
 describe('Import Steps: the description', () => {
   const d = new Playwright().description;
-  const own = d.properties.filter((p) => p.name !== 'options' && p.displayOptions?.show?.operation?.includes('importSteps'));
+  // Runs On is shared with Run Steps (test/runs-on.test.ts).
+  // Runs On and version 2's Share Login Breaker Across Workers are Run Steps' and Import Steps' alike (runs-on.test.ts, node-v2.test.ts).
+  const own = d.properties.filter((p) => !['options', 'runsOn', 'shareAcrossWorkers'].includes(p.name) && p.displayOptions?.show?.operation?.includes('importSteps'));
   const field = (name: string): INodeProperties => {
     const p = own.find((x) => x.name === name);
     if (!p) throw new Error(`no Import Steps field "${name}"`);
@@ -201,14 +211,16 @@ describe('Import Steps: the description', () => {
     ]);
     for (const p of own) expect(p.displayOptions?.show?.operation, p.name).toEqual(['importSteps']);
     expect((field('source').options as INodePropertyOptions[]).map((o) => [o.name, o.value])).toEqual([
-      ['Chrome Recorder (JSON)', 'chrome'], ['Playwright Code (JavaScript or TypeScript)', 'playwright'], ['UiPath Project (ZIP or XAML)', 'uipath'],
+      ['Work It Out From the File', 'auto'], ['Chrome Recorder (JSON)', 'chrome'], ['Playwright Code (JavaScript or TypeScript)', 'playwright'], ['UiPath Project (ZIP or XAML)', 'uipath'],
+      ['Step Document (JSON)', 'steps'], ['RPA Recording', 'recording'],
     ]);
     expect(field('source').default).toBe('chrome');
-    expect(field('inputFrom')).toMatchObject({ default: 'binary', displayOptions: { show: { operation: ['importSteps'] }, hide: { source: ['uipath'] } } });
+    // A UiPath project and an RPA recording are always a file.
+    expect(field('inputFrom')).toMatchObject({ default: 'binary', displayOptions: { show: { operation: ['importSteps'] }, hide: { source: ['uipath', 'recording'] } } });
     expect((field('inputFrom').options as INodePropertyOptions[]).map((o) => [o.name, o.value])).toEqual([['Binary File', 'binary'], ['Text', 'text']]);
     expect(field('binaryPropertyName')).toMatchObject({ displayName: 'Input Binary Field', default: 'data', displayOptions: { hide: { inputFrom: ['text'] } } });
     expect(field('sourceText')).toMatchObject({
-      displayName: 'Recording or Code', typeOptions: { rows: 10 }, displayOptions: { show: { operation: ['importSteps'], inputFrom: ['text'] }, hide: { source: ['uipath'] } },
+      displayName: 'Recording or Code', typeOptions: { rows: 10 }, displayOptions: { show: { operation: ['importSteps'], inputFrom: ['text'] }, hide: { source: ['uipath', 'recording'] } },
     });
     expect(field('stepsName')).toMatchObject({ displayName: 'Name', required: true, default: '' });
     expect(field('aiRepair')).toMatchObject({ displayName: 'AI Repair', type: 'boolean', default: true });
@@ -216,37 +228,48 @@ describe('Import Steps: the description', () => {
     expect(field('idPattern').displayName).toBe('ID Pattern (Regex)');
     const file = field('expectedFile');
     expect(file.displayName).toBe('Expected File (First Version)');
+    // A step document's download steps carry their own checks; a recording's Save dialog gives its expectFile step.
+    expect(file.displayOptions).toEqual({ show: { operation: ['importSteps'] }, hide: { source: ['steps', 'recording'] } });
     expect((file.options as { values: INodeProperties[] }[])[0].values.map((v) => v.displayName)).toEqual([
       'File Type', 'File Name Pattern (Regex)', 'Minimum Size (Bytes)', 'Required Columns', 'Minimum Rows',
     ]);
     expect(optionsFor('importSteps').map((o) => o.name)).toEqual([
-      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'breakerResetKey', 'saveTrace', 'maxItems',
+      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'version', 'approvedBeforeHandOver', 'importFormName', 'importFormAddress', 'breakerResetKey', 'saveTrace', 'maxItems',
     ]);
-    // Credentials: the browser, the Site Login and its Redis guard store. No signing key: Sign Steps signs.
+    // Credentials: the browser, the Site Login and its Redis guard store; then the signing key and the desktop runner,
+    // which the import only passes on to the workflow file (Sign Steps signs, and the import never reads them).
     expect((d.credentials ?? []).filter((c) => NodeHelpers.displayParameter({ operation: 'importSteps' }, c, null, d)).map((c) => c.name)).toEqual([
-      'playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightRedisApi',
+      'playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightRedisApi', 'playwrightScriptSigningApi', 'rpaDesktopRunnerApi',
     ]);
     expect((OPERATIONS.options as INodePropertyOptions[]).at(-1)).toEqual({
       name: 'Import Steps', value: 'importSteps', action: 'Import steps from a recording, code or a UiPath bot',
-      description: 'Advanced: turn a Chrome Recorder export, Playwright code or a UiPath project into steps for approval',
+      description: 'Advanced: turn a Chrome Recorder export, Playwright code, a UiPath project, an RPA recording or a step document into steps for approval',
     });
     expect(Object.keys(DISPATCH)).toContain('importSteps');
   });
 
-  it('says that an import can take about twice Max Seconds, which must leave room for a TOTP wait, and only on Import Steps', () => {
+  it('one Max Seconds for every browser operation; Import Steps\' notice says that an import can take about twice it', () => {
     const maxSeconds = optionsFor('importSteps').filter((o) => o.name === 'maxSeconds');
     expect(maxSeconds).toHaveLength(1);
-    expect(maxSeconds[0]).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 300 } });
-    expect(maxSeconds[0].description).toContain('so it can take about twice this. On sites with an authenticator code, Max Seconds must leave room for up to a 30 s wait.');
-    // Every other operation shows the plain help, without the import sentence.
-    for (const op of ['runSteps', 'screenshot', 'download']) {
+    expect(maxSeconds[0]).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 600 } });
+    for (const op of ['importSteps', 'runSteps', 'screenshot', 'download']) {
       const other = optionsFor(op).filter((o) => o.name === 'maxSeconds');
       expect(other, op).toHaveLength(1);
       expect(other[0].description, op).toBe('One deadline for the whole run, AI repair and proof included');
     }
     const notice = field('importNotice').displayName;
     for (const text of ['no form submissions or writes; Requests That Only Read still pass', 'about twice Options → Max Seconds',
-      'On sites with an authenticator code, Max Seconds must leave room for up to a 30 s wait']) expect(notice, text).toContain(text);
+      'On sites with an authenticator code, the import needs either the TOTP Secret in the Site Login or Options → One-Time Code Workflow, and Max Seconds must leave room for up to a 30 s wait.']) expect(notice, text).toContain(text);
+  });
+
+  it('Import Steps offers One-Time Code Workflow and Code Timeout', () => {
+    const wf = optionsFor('importSteps').find((o) => o.name === 'codeWorkflowId');
+    const timeout = optionsFor('importSteps').find((o) => o.name === 'codeTimeout');
+    // The same entries as Run Steps: the same names, help, limits and rules.
+    expect(wf).toBe(optionsFor('runSteps').find((o) => o.name === 'codeWorkflowId'));
+    expect(timeout).toBe(optionsFor('runSteps').find((o) => o.name === 'codeTimeout'));
+    expect(wf).toMatchObject({ displayName: 'One-Time Code Workflow', type: 'workflowSelector', default: '', displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } } });
+    expect(timeout).toMatchObject({ displayName: 'Code Timeout (Seconds)', type: 'number', default: 120, typeOptions: { minValue: 1, maxValue: 300 } });
   });
 
   it('has the Model input when AI Repair is on (its default) and always both outputs', () => {
@@ -272,7 +295,7 @@ describe('Import Steps: the description', () => {
     for (const t of texts) expect(t, t).not.toMatch(USE_CASE_WORDS);
     expect(texts.filter((t) => /playwright/i.test(t))).toEqual([
       'Playwright Code (JavaScript or TypeScript)',
-      'Advanced: turn a Chrome Recorder export, Playwright code or a UiPath project into steps for approval',
+      'Advanced: turn a Chrome Recorder export, Playwright code, a UiPath project, an RPA recording or a step document into steps for approval',
     ]);
   });
 });
@@ -305,10 +328,15 @@ describe('Import Steps: execution', () => {
     expect(input).not.toHaveProperty('trust');
     expect(JSON.stringify(input.draft)).not.toContain(SECRETS.password);
 
-    // Repaired Steps: exactly the item Run Steps emits for the same proposal.
+    // Repaired Steps: exactly the item Run Steps emits for the same proposal, with what the import left out, plus its steps
+    // as the review page lists them (shown only).
     expect(repaired).toHaveLength(1);
     const proposal = (await proved(input)) as Extract<AdoptResult, { ok: true }>;
-    expect(repaired[0].json).toEqual(repairedStepsJson(engine, proposal.proposal, 'after'));
+    const leftOut = (data[0].json.report as { items: { kind: string; at: string; what: string; reason: string }[] }).items
+      .filter((i) => i.kind === 'untranslated' || (i.kind === 'dropped' && !(i as { notNeeded?: true }).notNeeded)).map((i) => `${i.at}, ${i.what}: ${i.reason}`);
+    expect(repaired[0].json).toEqual({
+      ...repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'), reviewSteps: reviewSteps(proposal.proposal.steps.steps, { desktop: false, shownUrl: real.shownUrl }),
+    });
     expect(repaired[0].json).toMatchObject({ name: 'sap-export', baseVersion: null, version: 1 });
     expect(repaired[0].binary?.after).toMatchObject({ mimeType: 'image/png', fileName: 'after-v1.png' });
     expect(repaired[0].pairedItem).toEqual([{ item: 0 }]);
@@ -319,8 +347,10 @@ describe('Import Steps: execution', () => {
     expect(data[0].json.report).toMatchObject({ source: 'chrome', steps: 9 });
     expect((data[0].json.report as { items: { kind: string }[] }).items.some((i) => i.kind === 'secret')).toBe(true);
     expect(drafts(data[0])).toEqual([{ name: 'sap-export', steps: JSON.parse(JSON.stringify(input.draft)), adopted: true }]);
-    expect(data[0].json).not.toHaveProperty('workflowName');
-    expect(data[0].binary).toBeUndefined();
+    // Every import with steps comes with the workflow around them: here one browser pair, by the draft's name.
+    expect(data[0].json.workflowName).toBe('sap-export (imported from a Chrome recording)');
+    expect(Object.keys(data[0].binary ?? {})).toEqual(['workflow']);
+    expect(data[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'sap-export.workflow.json' });
     expect(data[0].pairedItem).toEqual([{ item: 0 }]);
   });
 
@@ -371,6 +401,32 @@ describe('Import Steps: execution', () => {
     expect(repaired.map((r) => r.json.name)).toEqual(['sap-report-1']);
     expect((data[0].json.report as { source: string }).source).toBe('uipath');
     expect(data[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'sap-report.workflow.json' });
+  });
+
+  it('the generated workflow\'s Run steps has Allow Private Network on exactly when the import had it on; an expression there is refused', async () => {
+    const runNode = async (options: Record<string, unknown>) => {
+      const engine = importEngine((input) => proved(input));
+      const [data] = await run(engine, { params: params({}, options) });
+      expect(data[0].json.error).toBeUndefined();
+      const wf = JSON.parse(binaryText(data[0], 'workflow').toString('utf8')) as { nodes: { type: string; parameters: { operation?: string; options?: IDataObject }; notes?: string }[] };
+      const runs = wf.nodes.filter((n) => n.parameters.operation === 'runSteps');
+      expect(runs).toHaveLength(1);
+      return runs[0];
+    };
+    const on = await runNode({ allowPrivateNetwork: true });
+    expect(on.parameters.options?.allowPrivateNetwork).toBe(true);
+    expect(on.notes).toContain('Options → Allow Private Network is on because the import had it on');
+    for (const options of [{ allowPrivateNetwork: false }, {}]) {
+      const off = await runNode(options);
+      expect(off.parameters.options, JSON.stringify(options)).not.toHaveProperty('allowPrivateNetwork');
+      expect(off.notes).toContain('For a site on your own network, turn on Options → Allow Private Network here.');
+    }
+    // Import Steps reads it as a literal, as Run Steps does: an expression stops the item before anything is imported.
+    const engine = importEngine((input) => proved(input));
+    const p = params({}, { allowPrivateNetwork: '={{ true }}' });
+    const [refused] = await run(engine, { params: { ...p, options: { ...(p.options as IDataObject), allowPrivateNetwork: true } }, rawParameters: p });
+    expect(String(refused[0].json.error)).toContain('Allow Private Network');
+    expect(engine.imports).toHaveLength(0);
   });
 
   describe('a very large UiPath project gives bounded outputs', () => {
@@ -427,6 +483,11 @@ describe('Import Steps: execution', () => {
     });
   });
 
+  it('clamps Max Seconds to 600 for an import, as Run Steps does', async () => {
+    const engine = importEngine((input) => proved(input));
+    await run(engine, { params: params({}, { maxSeconds: 999 }) });
+    expect(engine.adoptions[0]).toMatchObject({ budgetMs: 600_000 });
+  });
   it('a non-adoptable draft goes to Data with adopted false and no Repaired Steps', async () => {
     const engine = importEngine(() => adoptFailure('policy_violation', NOT_ADOPTABLE, { adoptable: false, configError: true }));
     const [data, repaired] = await run(engine, { continueOnFail: false });
@@ -480,6 +541,17 @@ describe('Import Steps: execution', () => {
     expect(String(tampered.error)).toMatch(/^Sign Steps refused: /);
     expect(String(tampered.error)).toContain('the repaired steps changed after they were reviewed');
     expect(tampered).not.toHaveProperty('signature');
+
+    // The steps shown for approval (reviewSteps, shown only, outside the digest) must be those the steps give.
+    const REFUSED = 'Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again';
+    const shown = repaired[0].json.reviewSteps as { text: string; marks: string[] }[];
+    const forged = await sign({ ...repaired[0].json, reviewSteps: shown.map((r) => (r.text.startsWith('Type into') ? { ...r, text: 'Type into From: "2026-01-01"' } : r)) as unknown as IDataObject[] });
+    expect(forged.error).toBe(REFUSED);
+    expect(forged).not.toHaveProperty('signature');
+    expect((await sign({ ...repaired[0].json, reviewSteps: shown.slice(0, -1) as unknown as IDataObject[] })).error).toBe(REFUSED);
+    expect((await sign({ ...repaired[0].json, reviewSteps: 'Click Save' })).error).toBe(REFUSED);
+    const { reviewSteps: _r, ...older } = repaired[0].json;
+    expect(await sign(older)).toMatchObject({ status: 'active' });
   });
 
   it('files over 20 MiB are a configuration error', async () => {
@@ -539,7 +611,7 @@ describe('Import Steps: execution', () => {
     const [data] = await run(engine, { params: params({ source: 'uipath', stepsName: 'sap-report' }) });
     expect(engine.adoptions).toHaveLength(1);
     expect((details(data[0]).drafts as IDataObject[]).map((x) => x.code)).toEqual(['login_failed', 'locked_out']);
-    expect(String(data[0].json.error)).toMatch(/^None of the 2 imported step lists could be adopted\. sap-report-1: login_failed: /);
+    expect(String(data[0].json.error)).toMatch(/^None of the 2 imported step lists could be replayed\. sap-report-1: login_failed: /);
     // The same execution's next import with that Site Login is locked out too, before any import.
     const next = importEngine((input) => proved(input));
     const [locked] = await run(next);
@@ -547,14 +619,50 @@ describe('Import Steps: execution', () => {
     expect((details(locked[0]).drafts as IDataObject[])[0]).toMatchObject({ code: 'locked_out' });
   });
 
-  it('adopts at most 10 drafts per import; the rest are reported, not tried', async () => {
+  it('refuses a Source it does not know, before reading the file', async () => {
+    const engine = importEngine((input) => proved(input));
+    const [data] = await run(engine, { params: params({ source: 'cobol' }) });
+    expect(data[0].json.error).toBe(SOURCE_UNKNOWN);
+    expect(engine.imports).toHaveLength(0);
+  });
+
+  it('a draft that opens no page, with no Start URL and no Site Login, is not replayed', async () => {
+    const { startUrl: _start, ...noStart } = chromeDraft('sap-export').script;
+    const engine = importEngine((input) => proved(input), () => ({ drafts: [{ name: 'sap-export', script: noStart as Script }], report: { source: 'chrome', steps: 9, items: [] } }));
+    const [data] = await run(engine, { credentials: { playwrightBrowserApi: BROWSER } });
+    expect(engine.adoptions).toHaveLength(0);
+    expect(details(data[0]).drafts).toEqual([expect.objectContaining({ adopted: false, code: 'policy_violation', reason: IMPORT_NEEDS_START })]);
+  });
+
+  it('a cancelled execution tries no draft, and the error says where the reasons are', async () => {
+    const engine = importEngine((input) => proved(input), uipathResult(2));
+    const ctx = nodeContext({ params: params({ source: 'uipath', stepsName: 'sap-report' }), items: [fileItem(CHROME)], credentials: CREDS as never, signal: AbortSignal.abort() }) as Harness;
+    const error = await run(engine, {}, ctx).then(() => undefined, (e: unknown) => e);
+    expect(engine.adoptions).toHaveLength(0);
+    expect(error).toBeInstanceOf(NodeOperationError);
+    expect((error as NodeOperationError).message).toBe(`None of the 2 imported step lists could be replayed. sap-report-1: ${NOT_TRIED_CANCELLED}`);
+    expect((error as NodeOperationError).description).toBe('No step list was replayed. The reasons are in details.drafts.');
+  });
+
+  it('a replay that throws is reported for its draft, and the next draft is still tried', async () => {
+    const engine = importEngine((input, call) => {
+      if (call === 0) throw new Error('the browser went away');
+      return proved(input);
+    }, uipathResult(2));
+    const [data, repaired] = await run(engine, { params: params({ source: 'uipath', stepsName: 'sap-report' }) });
+    expect(engine.adoptions).toHaveLength(2);
+    expect(repaired).toHaveLength(1);
+    expect(drafts(data[0])[0]).toMatchObject({ adopted: false, code: 'incomplete', reason: 'the replay stopped unexpectedly: the browser went away' });
+  });
+
+  it('replays at most 10 drafts per import; the rest are reported, not tried', async () => {
     const engine = importEngine((input) => proved(input), uipathResult(12));
     const [data, repaired] = await run(engine, { params: params({ source: 'uipath', stepsName: 'sap-report' }) });
     expect(engine.adoptions).toHaveLength(10);
     expect(repaired).toHaveLength(10);
     const rest = drafts(data[0]).slice(10);
     expect(rest.map((x) => x.name)).toEqual(['sap-report-11', 'sap-report-12']);
-    for (const x of rest) expect(x).toMatchObject({ adopted: false, reason: 'not tried: an import adopts at most 10 step lists' });
+    for (const x of rest) expect(x).toMatchObject({ adopted: false, reason: 'not tried: an import replays at most 10 step lists' });
   });
 
   it('AI Repair with a model heals a drift; one repair per execution, so a later draft gets none', async () => {
@@ -577,6 +685,111 @@ describe('Import Steps: execution', () => {
     const [data] = await run(engine, { params: params({ aiRepair: true }) });
     expect(engine.adoptions[0].repair).toBeUndefined();
     expect(data[0].json.error).toBe(`drift_detected: No element found for Visible Text "Line Item Report" (${NO_MODEL})`);
+  });
+
+  describe('the sign-in code', () => {
+    const CODE = '482913';
+    const NO_SEED = { ...CREDS, playwrightSiteLoginApi: { ...siteLoginData(SITE), totpSecret: '' } };
+    const signInOf = (script: Script) => script.steps.find((s): s is Extract<Script['steps'][number], { signIn: unknown }> => 'signIn' in s);
+
+    it('an expression as the One-Time Code Workflow is refused, as in Run Steps, before anything is imported', async () => {
+      const engine = importEngine(async (input) => proved(input));
+      const ctx = nodeContext({
+        params: params({}, { codeWorkflowId: { __rl: true, mode: 'id', value: '={{ $json.wf }}' } }), items: [fileItem(CHROME)], credentials: NO_SEED as never, continueOnFail: true,
+      }) as Harness;
+      const [data] = await run(engine, {}, ctx);
+      expect(data[0].json.error).toBe('One-Time Code Workflow must be set directly, not with an expression.');
+      expect(engine.imports).toHaveLength(0);
+    });
+    it('an import whose sign-in asks for a code runs with the code from the workflow and imports totp.source "workflow"', async () => {
+      const subs: unknown[] = [];
+      const codes: string[] = [];
+      const engine = importEngine(async (input) => {
+        codes.push(await input.codeProvider!({ requestedAt: '2026-11-10T10:00:00.000Z' }));
+        return proved(input);
+      });
+      const ctx = nodeContext({
+        params: params({}, { codeWorkflowId: ' wf-code-1 ', codeTimeout: 45 }), items: [fileItem(CHROME)], credentials: NO_SEED as never, continueOnFail: true,
+        executeWorkflow: async (info, items) => {
+          subs.push({ info, items });
+          return { executionId: 'sub-1', data: [[{ json: { code: CODE } }]] };
+        },
+      }) as Harness;
+      const [data, repaired] = await run(engine, {}, ctx);
+      expect(data[0].json.error).toBeUndefined();
+      expect(engine.imports[0][2]).toMatchObject({ codeFromWorkflow: true });
+      // The import's run asked the workflow through the provider, with Code Timeout in ms.
+      expect(engine.adoptions[0].codeTimeoutMs).toBe(45_000);
+      expect(codes).toEqual([CODE]);
+      expect(subs).toEqual([{ info: { id: 'wf-code-1' }, items: [{ json: { requestedAt: '2026-11-10T10:00:00.000Z' } }] }]);
+      // The imported sign-in, as adopted and as it goes to approval, takes its code from the workflow.
+      expect(signInOf(engine.adoptions[0].draft)?.signIn.totp).toMatchObject({ source: 'workflow' });
+      expect(signInOf(repaired[0].json.steps as unknown as Script)?.signIn.totp).toMatchObject({ source: 'workflow' });
+
+      // Without the option: no provider, and the sign-in keeps the TOTP Secret (no source).
+      const plain = importEngine((input) => proved(input));
+      await run(plain);
+      expect(plain.imports[0][2]).not.toHaveProperty('codeFromWorkflow');
+      expect(plain.adoptions[0]).not.toHaveProperty('codeProvider');
+      expect(plain.adoptions[0]).not.toHaveProperty('codeTimeoutMs');
+      expect(signInOf(plain.adoptions[0].draft)?.signIn.totp).toBeDefined();
+      expect(signInOf(plain.adoptions[0].draft)?.signIn.totp).not.toHaveProperty('source');
+    });
+
+    it('without a workflow and without a seed the import says which is missing', async () => {
+      const message = 'Sign in: detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret';
+      const engine = importEngine(() => adoptFailure('auth_blocked', message));
+      const error = await run(engine, { credentials: NO_SEED as never, continueOnFail: false }).then(() => undefined, (e: unknown) => e);
+      expect(error).toBeInstanceOf(NodeOperationError);
+      // The engine's detected: mark is for the node, not for the reader: the message is shown without it.
+      expect((error as NodeOperationError).message).toBe('auth_blocked: Sign in: the site asked for a one-time code and the Site Login has no TOTP Secret');
+      expect((error as NodeOperationError).description).toBe(
+        `auth_blocked: ${NO_TOTP_SECRET_GUIDANCE}`,
+      );
+      expect(engine.adoptions[0]).not.toHaveProperty('codeProvider');
+    });
+
+    it('a code workflow that is not published ends the import with the code-workflow guidance', async () => {
+      const engine = importEngine(async (input) => {
+        // As the engine's sign-in reports a provider that failed (auth.ts codeFromWorkflow).
+        let why = '';
+        await input.codeProvider!({ requestedAt: '2026-11-10T10:00:00.000Z' }).catch((e: unknown) => { why = (e as Error).message; });
+        return adoptFailure('auth_blocked', `Sign in with an authentication code: detected:mfa_code: ${real.codeWorkflowFailed(why)}`);
+      });
+      const ctx = nodeContext({
+        params: params({}, { codeWorkflowId: 'wf-code-1' }), items: [fileItem(CHROME)], credentials: NO_SEED as never, continueOnFail: false,
+        executeWorkflow: async () => { throw new Error('Workflow is not active and cannot be executed.'); },
+      }) as Harness;
+      const error = await run(engine, {}, ctx).then(() => undefined, (e: unknown) => e);
+      expect(error).toBeInstanceOf(NodeOperationError);
+      expect((error as NodeOperationError).message).toBe(
+        'auth_blocked: Sign in with an authentication code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
+      );
+      expect((error as NodeOperationError).description).toBe(
+        `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`,
+      );
+    });
+
+    it('after a step list fails on the code, the item\'s other step lists are not tried: one sign-in in all', async () => {
+      const failure = 'Sign in with an authentication code: detected:mfa_code: the site rejected the one-time code from the workflow twice';
+      const engine = importEngine(() => adoptFailure('auth_blocked', failure), uipathResult(3));
+      const ctx = nodeContext({
+        params: params({ source: 'uipath', stepsName: 'sap-report' }, { codeWorkflowId: 'wf-code-1', codeTimeout: 45 }), items: [fileItem(projectZip(), 'p.zip', 'application/zip')],
+        credentials: NO_SEED as never, continueOnFail: true, executeWorkflow: async () => ({ executionId: 'sub-1', data: [[{ json: { code: CODE } }]] }),
+      }) as Harness;
+      const [data] = await run(engine, {}, ctx);
+      expect(engine.adoptions).toHaveLength(1);
+      const listed = details(data[0]).drafts as IDataObject[];
+      expect(listed.map((d) => [d.name, d.adopted, d.code ?? null])).toEqual([['sap-report-1', false, 'auth_blocked'], ['sap-report-2', false, null], ['sap-report-3', false, null]]);
+      const shown = 'Sign in with an authentication code: the site rejected the one-time code from the workflow twice';
+      expect(listed[0].reason).toBe(shown);
+      for (const d of listed.slice(1)) expect(d.reason).toBe(`not tried: sap-report-1 failed on its one-time code (${shown})`);
+      // The generated workflow's Run steps take their code from the same workflow.
+      const workflow = JSON.parse(binaryText(data[0], 'workflow').toString('utf8')) as WorkflowJson;
+      const runs = workflow.nodes.filter((n) => (n.parameters as { operation?: string }).operation === 'runSteps');
+      expect(runs).toHaveLength(3);
+      for (const n of runs) expect((n.parameters as { options: IDataObject }).options).toMatchObject({ codeWorkflowId: { __rl: true, mode: 'id', value: 'wf-code-1' }, codeTimeout: 45 });
+    });
   });
 
   it('ID Pattern goes to the import and the adoption as the row check', async () => {
@@ -661,7 +874,8 @@ describe('Import Steps: execution', () => {
     // One draft, every draft failed: the error item has `screenshot` and `trace`, as a Run Steps failure item does.
     const [failed] = await run(importEngine(drift), { params: params({}, { variables: VARIABLES, saveTrace: 'onFailure' }) });
     expect(failed[0].json.error).toMatch(/^drift_detected: /);
-    expect(Object.keys(failed[0].binary ?? {}).sort()).toEqual(['screenshot', 'trace']);
+    // The workflow file was built from what could be read, as for a UiPath project: the error item keeps it.
+    expect(Object.keys(failed[0].binary ?? {}).sort()).toEqual(['screenshot', 'trace', 'workflow']);
     expect(failed[0].binary?.trace).toMatchObject({ mimeType: 'application/zip', fileName: 'sap-export-trace.zip' });
     expect(failed[0].binary?.screenshot).toMatchObject({ mimeType: 'image/png', fileName: 'sap-export-failure.png' });
     expect(binaryText(failed[0], 'screenshot')).toEqual(png);
@@ -671,9 +885,9 @@ describe('Import Steps: execution', () => {
     expect(details(failed[0])).toMatchObject({ traceRef: 'trace' });
     expect((details(failed[0]).drafts as IDataObject[])[0]).toMatchObject({ traceRef: 'trace' });
 
-    // Debug Trace Never: no page capture leaves the node.
+    // Debug Trace Never: no page capture leaves the node (the workflow file does).
     const [never] = await run(importEngine(drift), { params: params({}, { variables: VARIABLES, saveTrace: 'never' }) });
-    expect(never[0].binary).toBeUndefined();
+    expect(Object.keys(never[0].binary ?? {})).toEqual(['workflow']);
     expect(details(never[0])).toMatchObject({ traceRef: null });
     expect((details(never[0]).drafts as IDataObject[])[0]).not.toHaveProperty('traceRef');
 
@@ -690,7 +904,7 @@ describe('Import Steps: execution', () => {
     // Several drafts, all failed: the first failure's are `screenshot` and `trace`, the others' `trace-<n>`.
     const allFailed = importEngine(drift, uipathResult(2));
     const [error] = await run(allFailed, { params: params({ source: 'uipath', stepsName: 'sap-report', options: { variables: VARIABLES, saveTrace: 'onFailure' } }) });
-    expect(String(error[0].json.error)).toMatch(/^None of the 2 imported step lists could be adopted\./);
+    expect(String(error[0].json.error)).toMatch(/^None of the 2 imported step lists could be replayed\./);
     expect(Object.keys(error[0].binary ?? {}).sort()).toEqual(['screenshot', 'trace', 'trace-1', 'workflow']);
     expect((details(error[0]).drafts as IDataObject[]).map((x) => x.traceRef)).toEqual(['trace', 'trace-1']);
   });
@@ -816,5 +1030,553 @@ describe('Import Steps: execution', () => {
     expect(repaired.map((r) => r.pairedItem)).toEqual([[{ item: 0 }], [{ item: 1 }]]);
     const [refused] = await run(engine, { items: [fileItem(CHROME), fileItem(CHROME)], params: params({}, { maxItems: 1 }) });
     expect(String(refused[0].json.error)).toContain('more than Options → Max Items (1)');
+  });
+});
+
+describe('Import Steps: a step document', () => {
+  /** Import Steps on a step document pasted as text. */
+  const docParams = (doc: unknown, over: Record<string, unknown> = {}, options: Record<string, unknown> = {}) =>
+    params({ source: 'steps', inputFrom: 'text', sourceText: JSON.stringify(doc), expectedFile: {}, ...over }, options);
+  const textItem = [{ json: {} }];
+  const sign = async (engine: Engine, json: IDataObject, writeSteps?: string) => {
+    const p = { ...signStepsParams(), ...(writeSteps !== undefined ? { writeSteps } : {}) };
+    const [out] = await executeSignSteps(nodeContext({ params: p, rawParameters: p, items: [{ json }], credentials: credentialsV2(SITE), continueOnFail: true }), engine);
+    return out[0].json;
+  };
+  const uia = (automationId: string, controlType = 'Edit') => ({ uia: { path: [{ controlType, automationId }] } });
+
+  it("the approval item's safety flags are computed from the steps, as for any import", async () => {
+    // The Chrome import's item, and the same steps written down as a step document, with a signature beside them.
+    const chrome = importEngine((input) => proved(input));
+    const [, fromChrome] = await run(chrome);
+    const doc = { ...(fromChrome[0].json.steps as IDataObject), signature: 'a'.repeat(64), approvedBy: 'someone@example.com' };
+    const engine = importEngine((input) => proved(input));
+    const [data, repaired] = await run(engine, { params: docParams(doc), items: textItem });
+
+    expect(engine.imports[0][0]).toBe('steps');
+    expect(engine.adoptions).toHaveLength(1);
+    expect(engine.adoptions[0].draft).toEqual(chrome.adoptions[0].draft);
+    // The same draft makes the same Repaired steps item: the safety flags come from the steps, never from the document.
+    // Only the Chrome import left steps out (the recording's waits and scrolls), so only its item lists them.
+    expect(repaired).toHaveLength(1);
+    const { leftOut: _l, leftOutList: _s, digest: _d, ...chromeRest } = fromChrome[0].json;
+    const { digest, ...docRest } = repaired[0].json;
+    expect(docRest).toEqual(chromeRest);
+    expect(repaired[0].json).not.toHaveProperty('leftOut');
+    expect(digest).toBe(real.proposalDigest(docRest as unknown as real.Proposal));
+    const flags = repaired[0].json.safetyFlags as string[];
+    expect(flags).toEqual(fullSafetyFlags(engine, real.parseScript(repaired[0].json.steps), { unverifiedCount: false, fieldsDropped: false }));
+    expect(flags).toContain('download step');
+    expect(flags.some((f) => f.includes(SITE.host))).toBe(true);
+    expect(data[0].json.report).toMatchObject({ source: 'steps', steps: 9 });
+    expect((data[0].json.report as { items: IDataObject[] }).items).toContainEqual(expect.objectContaining({ kind: 'converted', what: 'Signature' }));
+    expect(drafts(data[0])).toEqual([expect.objectContaining({ name: 'sap-export', adopted: true })]);
+
+    // Approved, it signs as any imported item does: the earlier signature played no part.
+    const record = await sign(engine, repaired[0].json);
+    expect(record).toMatchObject({ name: 'sap-export', version: 1, status: 'active', approvedBy: 'approver@example.com' });
+    expect(record.signature).not.toBe(doc.signature);
+  });
+
+  it('a desktop step set comes out for approval marked not replayed with its candidate writes', async () => {
+    const doc = {
+      surface: 'desktop', name: 'erp-orders', app: { exe: 'ErpDemo.exe' },
+      steps: [
+        { intent: 'Type the user name', fill: { field: uia('txtUser'), value: '{{var.user}}' } },
+        { intent: 'Type the order', fill: { field: uia('txtOrder'), value: '{{var.order}}' } },
+        { intent: 'Run the batch', click: uia('btnRun', 'Button'), write: true },
+        { intent: 'Click Save', click: uia('btnSave', 'Button') },
+      ],
+    };
+    // No RPA Browser credential: desktop steps never run in a browser, and nothing is replayed.
+    const engine = importEngine(() => { throw new Error('a desktop step set is never adopted in a browser'); });
+    const [data, repaired] = await run(engine, { params: docParams(doc, { stepsName: 'orders' }), items: textItem, credentials: {} });
+    expect(data[0].json.error).toBeUndefined();
+    expect(engine.adoptions).toHaveLength(0);
+    expect(drafts(data[0])).toEqual([expect.objectContaining({
+      name: 'orders', surface: 'desktop', adopted: false, forApproval: true, writeCandidates: [3, 4], variables: ['user', 'order'], secretVariables: [],
+      reason: 'Desktop steps are not replayed at import: they go to approval as imported. Review every step, and mark each step that saves, posts or submits as a write when you approve.',
+    })]);
+    const items = (data[0].json.report as { items: IDataObject[] }).items;
+    expect(items.filter((i) => i.kind === 'candidateWrite').map((i) => i.what)).toEqual(['Step 3: Run the batch', 'Step 4: Click Save']);
+
+    expect(repaired).toHaveLength(1);
+    const item = repaired[0].json;
+    expect(item).toMatchObject({ name: 'orders', baseVersion: null, version: 1, attachmentNames: '' });
+    expect(item.evidenceLine).toBe('Not replayed: desktop steps from a step document are reviewed as written (there is no desktop proof yet). Check every step, and mark each step that saves, posts or submits as a write.');
+    // The safety line is recomputed from the steps, as Sign Steps does: it names the steps that read like a write. Step 3,
+    // which the document marked a write, is a candidate on Data and in the report.
+    expect(String(item.safetyLine)).toContain('candidate write: step 4 (Click Save) may save, post or submit');
+    expect(String(item.safetyLine)).not.toContain('step 3');
+    expect((item.steps as { steps: object[] }).steps.some((s) => Object.hasOwn(s, 'write'))).toBe(false);
+
+    // The approver declares the writes; Sign Steps signs the item with the evidence line it carries.
+    const record = await sign(engine, item, '3');
+    expect(record).toMatchObject({ name: 'orders', version: 1, status: 'active', writeSteps: [{ step: 3, intent: 'Run the batch' }] });
+    // The UiPath wording is not accepted for something else: a line that is neither is refused.
+    expect(String((await sign(engine, { ...item, evidenceLine: 'Not replayed.' })).error)).toContain('changed after it was reviewed');
+  });
+
+  it('a desktop step set that types a variable into a password field: shown as a secret, the key in it unticked, no plain variable; what is signed is unchanged', async () => {
+    const password = { uia: { path: [{ controlType: 'Edit', name: 'Password' }] } };
+    const doc = {
+      surface: 'desktop', app: { exe: 'ErpDemo.exe' },
+      steps: [
+        { intent: 'Type the user name', fill: { field: uia('txtUser'), value: '{{var.username}}' } },
+        { intent: 'Type the password', fill: { field: password, value: '{{var.password}}' } },
+        { intent: 'Press Enter in Password', key: { key: 'Enter', target: password } },
+        { intent: 'Click Save', click: uia('btnSave', 'Button') },
+      ],
+    };
+    const engine = importEngine(() => { throw new Error('a desktop step set is never adopted in a browser'); });
+    const [data, repaired] = await run(engine, { params: docParams(doc, { stepsName: 'erp' }), items: textItem, credentials: {} });
+    expect(data[0].json.error).toBeUndefined();
+    expect(drafts(data[0])).toEqual([expect.objectContaining({ variables: ['username', 'password'], secretVariables: ['password'], writeCandidates: [3, 4], mayBeTypedInto: 'ErpDemo.exe' })]);
+    const item = repaired[0].json;
+    // The review page: the password is a secret variable, and the key pressed in its field signs in (asked unticked).
+    expect((item.reviewSteps as IDataObject[])[1]).toEqual({ text: 'Type into Password', marks: ['secret variable password'] });
+    expect(item.writeCandidates).toEqual([{ step: 3, intent: 'Press Enter in Password', signsIn: true }, { step: 4, intent: 'Click Save' }]);
+    // The generated workflow: no plain variable for it; the note names RPA Secret Variables.
+    const wf = JSON.parse(binaryText(data[0], 'workflow').toString('utf8')) as WorkflowJson;
+    const runNode = wf.nodes.find((n) => n.parameters.operation === 'runSteps')!;
+    expect((runNode.parameters.options as { variables: unknown }).variables).toEqual({ values: [{ name: 'username', value: '' }] });
+    expect(runNode.notes).toContain('password: put it in an RPA Secret Variables credential');
+
+    // What is signed does not change: the steps, hash and digest are those of the document's own proposal, the same as
+    // with no secret variable, and Sign Steps signs the item with and without the shown-only fields alike.
+    const proposal = real.desktopProposal(real.parseDesktopScript({ ...doc, name: 'erp', version: 1 }));
+    expect(item.steps).toEqual(proposal.steps);
+    expect(item.hash).toBe(proposal.hash);
+    expect(item.digest).toBe(real.proposalDigest(proposal));
+    const { secretVariables: _s, reviewSteps: _r, writeCandidates: _w, ...bare } = item;
+    const [withShown, without] = [await sign(engine, item, '4'), await sign(engine, bare, '4')];
+    expect(withShown).toMatchObject({ status: 'active', writeSteps: [{ step: 4, intent: 'Click Save' }] });
+    for (const key of ['steps', 'hash', 'signature', 'writeSteps']) expect(withShown[key], key).toEqual(without[key]);
+  });
+
+  it('a desktop step that finds its control by its row or its place says so on the review page (IW-6); Sign Steps checks the mark, and an item made before it existed still signs', async () => {
+    const doc = {
+      surface: 'desktop', app: { exe: 'ErpDemo.exe' },
+      steps: [
+        { intent: 'Click Vendor Row 1', click: { uia: { path: [{ controlType: 'DataItem', name: 'Vendor Row 1' }] } } },
+        { intent: 'Click the second tab', click: { uia: { path: [{ controlType: 'Tab', automationId: 'tabs' }, { controlType: 'TabItem', index: 1 }] } } },
+        // Found by what the row holds, or by an id: not by position, as the recorder judges it.
+        { intent: 'Click Acme Paper Co', click: { uia: { path: [{ controlType: 'DataItem', name: 'Acme Paper Co' }] } } },
+        { intent: 'Click Row 1', click: { uia: { path: [{ controlType: 'Button', automationId: 'btnRow1', name: 'Row 1' }] } } },
+        { intent: 'Type the amount', fill: { field: { uia: { path: [{ controlType: 'Edit', name: 'Amount Row 2' }] } }, value: '12' } },
+        { intent: 'Click Post', click: uia('btnPost', 'Button') },
+      ],
+    };
+    const engine = importEngine(() => { throw new Error('a desktop step set is never adopted in a browser'); });
+    const [data, repaired] = await run(engine, { params: docParams(doc, { stepsName: 'erp' }), items: textItem, credentials: {} });
+    expect(data[0].json.error).toBeUndefined();
+    const item = repaired[0].json;
+    const shown = item.reviewSteps as { text: string; marks: string[] }[];
+    expect(shown.map((r) => [r.text, r.marks])).toEqual([
+      ['Click Vendor Row 1', [BY_ROW]],
+      ['Click a control without a name', [BY_POSITION]],
+      ['Click Acme Paper Co', []],
+      ['Click Row 1', []],
+      ['Type "12" into Amount Row 2', [BY_ROW]],
+      ['Click btnPost', []],
+    ]);
+    // Signed with the marks, and without them (an item made before they existed); a mark put on another step, or the
+    // other mark, is refused. What is signed is the same either way.
+    const withMarks = await sign(engine, item, '6');
+    expect(withMarks).toMatchObject({ status: 'active' });
+    const older = shown.map((r) => ({ ...r, marks: r.marks.filter((m) => m !== BY_ROW && m !== BY_POSITION) }));
+    const before = await sign(engine, { ...item, reviewSteps: older as unknown as IDataObject[] }, '6');
+    expect(before).toMatchObject({ status: 'active' });
+    for (const key of ['steps', 'hash', 'writeSteps']) expect(before[key], key).toEqual(withMarks[key]);
+    const NOT_THE_STEPS = 'Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again';
+    expect((await sign(engine, { ...item, reviewSteps: shown.map((r, i) => (i === 2 ? { ...r, marks: [BY_ROW] } : r)) as unknown as IDataObject[] }, '6')).error).toBe(NOT_THE_STEPS);
+    expect((await sign(engine, { ...item, reviewSteps: shown.map((r, i) => (i === 0 ? { ...r, marks: [BY_POSITION] } : r)) as unknown as IDataObject[] }, '6')).error).toBe(NOT_THE_STEPS);
+  });
+
+  it("a document without a start address takes the Site Login's when Start URL is empty, as Run Steps does", async () => {
+    const engine = importEngine((input) => proved(input));
+    const doc = { steps: [
+      { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } },
+      { intent: 'Open the report', goto: '/acme/reports' },
+      { intent: 'Export', download: { trigger: { role: 'button', name: 'Export' }, check: { name: '^LINEITEMS_' } } },
+    ] };
+    const [data, repaired] = await run(engine, { params: docParams(doc), items: textItem });
+    expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+    expect(engine.adoptions).toHaveLength(1);
+    expect(engine.adoptions[0].draft.startUrl).toBe(`${SITE.url}/acme/login`);
+    expect(drafts(data[0])).toEqual([expect.objectContaining({ name: 'sap-export', adopted: true })]);
+    expect(repaired).toHaveLength(1);
+  });
+
+  it('an Expected File this source does not use neither refuses a CDP browser nor counts as a step not translated', async () => {
+    const cdp = { playwrightBrowserApi: { mode: 'cdp', wsUrl: 'ws://chrome.internal:9222/' }, playwrightSiteLoginApi: siteLoginData(SITE) };
+    const engine = importEngine((input) => proved(input));
+    const doc = { startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Open the report', goto: '/acme/reports' }, { intent: 'Read the items', extract: { scope: { css: 'main' }, idPattern: 'SKU-\\d{4}' } }] };
+    const [data] = await run(engine, { params: docParams(doc, { expectedFile: EXPECTED_FILE, idPattern: 'SKU-\\d{4}' }), items: textItem, credentials: cdp });
+    expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+    expect(engine.adoptions).toHaveLength(1);
+    const items = (data[0].json.report as { items: IDataObject[] }).items;
+    expect(items).toContainEqual({ at: '', kind: 'converted', what: 'Expected File', reason: 'the download steps of a step document carry their own checks: Expected File is not used' });
+    expect(items.filter((i) => i.kind === 'untranslated')).toEqual([]);
+  });
+
+  it("a step document's own ID Pattern is the row check when Import Steps has none, and the workflow file's Run steps carries it typed", async () => {
+    const extract = (idPattern?: string) => ({ intent: 'Read the items', extract: { scope: { css: 'main' }, ...(idPattern ? { idPattern } : { item: { css: 'li' } }) } });
+    const doc = (steps: IDataObject[]) => ({ startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Open the report', goto: '/acme/reports' }, ...steps] });
+    const runOptions = (item: INodeExecutionData) => (JSON.parse(binaryText(item, 'workflow').toString('utf8')) as WorkflowJson).nodes
+      .filter((n) => (n.parameters as { operation?: string }).operation === 'runSteps').map((n) => (n.parameters as { options: IDataObject }).options);
+    const cases: [IDataObject[], string, string | undefined, string | undefined][] = [
+      [[extract('SKU-\\d{4}')], '', 'SKU-\\d{4}', 'SKU-\\d{4}'],
+      [[extract('SKU-\\d{4}'), { intent: 'Read the grid', extractTable: { table: { css: 'table' }, idPattern: 'ORD-\\d+' } }], '', '(?:SKU-\\d{4})|(?:ORD-\\d+)', '(?:SKU-\\d{4})|(?:ORD-\\d+)'],
+      // Import Steps' own wins.
+      [[extract('SKU-\\d{4}')], 'SKU-\\d+', 'SKU-\\d+', 'SKU-\\d+'],
+      // A step that reads rows without one: nothing is made up (the engine refuses it).
+      [[extract('SKU-\\d{4}'), extract()], '', undefined, undefined],
+      // A pattern n8n would read as an expression is never written into the file.
+      [[extract('={{ 1 }}')], '', '={{ 1 }}', undefined],
+    ];
+    for (const [steps, typed, checked, inFile] of cases) {
+      const engine = importEngine((input) => proved(input));
+      const [data] = await run(engine, { params: docParams(doc(steps), { idPattern: typed, expectedFile: {} }), items: textItem });
+      expect(engine.adoptions[0].output, JSON.stringify(steps)).toEqual(checked ? { idPattern: checked } : undefined);
+      expect(runOptions(data[0])[0].idPattern, JSON.stringify(steps)).toBe(inFile);
+    }
+  });
+
+  it('a browser step document still needs the RPA Browser credential', async () => {
+    const engine = importEngine((input) => proved(input));
+    const doc = { startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Open the report', goto: '/acme/reports' }] };
+    const [data] = await run(engine, { params: docParams(doc), items: textItem, credentials: { playwrightSiteLoginApi: siteLoginData(SITE) } });
+    expect(data[0].json.error).toBe('This operation runs in a browser: attach an RPA Browser credential.');
+    expect(details(data[0]).report).toMatchObject({ source: 'steps', steps: 1 });
+    expect(engine.adoptions).toHaveLength(0);
+  });
+
+  it('a document that does not parse is refused with the parser\'s message and nothing runs', async () => {
+    const engine = importEngine((input) => proved(input));
+    const doc = { startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Open the report', goto: '/acme/reports', colour: 'red' }] };
+    const [data, repaired] = await run(engine, { params: docParams(doc), items: textItem });
+    expect(data[0].json.error).toBe('Nothing was imported: the step document is not valid steps: steps[0] has unknown key "colour"');
+    expect(details(data[0])).toMatchObject({ configError: true, report: { source: 'steps', steps: 0 } });
+    expect(repaired).toEqual([]);
+    expect(engine.adoptions).toHaveLength(0);
+  });
+
+  describe('steps the import cannot run go to approval marked not replayed', () => {
+    // Golden strings are written out here on purpose.
+    const NOT_REPLAYED = 'Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form\'s target and each download before you approve.';
+    const FOR_APPROVAL = 'These browser steps are not replayed at import, because they submit a form, download through a form, type a secret or change a password: they go to approval as written. Review every step, each form\'s target and each download, and supply the variables in Run steps.';
+    const EXPORT_PW = 'Zip-9f3k-2xq';
+    const NEW_PW = 'Next-pw-7731';
+    const START = `${SITE.url}/acme/login`;
+    const SIGN_IN = { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } };
+    const OPEN = { intent: 'Open the report', goto: '/acme/reports' };
+    const SUBMIT = { intent: 'Send the export', submit: { path: '/acme/reports/export', button: { role: 'button', name: 'Export CSV' } } };
+    const DOCS = {
+      'a download with via': { startUrl: START, steps: [SIGN_IN, OPEN, { intent: 'Export', download: { trigger: { role: 'button', name: 'Export CSV' }, via: { path: '/acme/reports/export' }, mime: ['text/csv'] } }] },
+      'a secret fill': { startUrl: START, steps: [SIGN_IN, OPEN, { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{var.exportPassword}}', secret: true } }] },
+      'a signIn with changePassword': { startUrl: START, steps: [{ ...SIGN_IN, signIn: { ...SIGN_IN.signIn, changePassword: {
+        detect: { role: 'heading', name: 'Change your password' }, new: [{ label: 'New password', exact: true }], submit: { role: 'button', name: 'Change password' }, value: '{{var.newPassword}}',
+      } } }, OPEN] },
+    };
+    const variables = { values: [...VARIABLES.values, { name: 'exportPassword', value: EXPORT_PW }, { name: 'newPassword', value: NEW_PW }] };
+    /** An engine whose adoption and browser sessions are counted, so a test can show that nothing ran. */
+    const watched = () => {
+      const engine = importEngine(() => { throw new Error('steps that go to approval as written are never adopted'); });
+      const sessions: unknown[] = [];
+      return Object.assign(engine, { sessions, openSession: async (...args: unknown[]) => { sessions.push(args); throw new Error('no browser may open'); } });
+    };
+    const notReplayed = async (doc: object, credentials: Record<string, IDataObject> = CREDS) => {
+      const engine = watched();
+      const [data, repaired] = await run(engine, { params: docParams(doc, {}, { variables }), items: textItem, credentials });
+      return { engine, data, repaired };
+    };
+
+    it('a step document with a submit goes to approval not replayed, and no browser is opened', async () => {
+      const { engine, data, repaired } = await notReplayed({ startUrl: START, steps: [SIGN_IN, OPEN, SUBMIT] });
+      expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+      expect(engine.adoptions).toHaveLength(0);
+      expect(engine.sessions).toHaveLength(0);
+      expect(drafts(data[0])).toEqual([{ name: 'sap-export', steps: expect.objectContaining({ steps: [SIGN_IN, OPEN, SUBMIT] }), adopted: false, forApproval: true, reason: FOR_APPROVAL }]);
+      expect(repaired).toHaveLength(1);
+      const item = repaired[0];
+      expect(item.binary).toBeUndefined();
+      expect(item.json).toMatchObject({
+        name: 'sap-export', baseVersion: null, version: 1, evidence: { count: 0, total: null, diff: { missing: [], extra: [] } }, evidenceLine: NOT_REPLAYED, attachmentNames: '',
+      });
+      expect((item.json.changes as IDataObject[]).map((c) => c.was)).toEqual([null, null, null]);
+      // Approved, Sign Steps signs it.
+      const record = await sign(engine, item.json);
+      expect(record, JSON.stringify(record).slice(0, 800)).toMatchObject({ name: 'sap-export', version: 1, status: 'active' });
+      // Nothing is run, so no RPA Browser credential is needed.
+      const without = await notReplayed({ startUrl: START, steps: [SIGN_IN, OPEN, SUBMIT] }, { playwrightSiteLoginApi: siteLoginData(SITE) });
+      expect(without.data[0].json.error).toBeUndefined();
+      expect(without.repaired).toHaveLength(1);
+    });
+
+    it('a step list that types a secret says which variables and where: the last page copies them into RPA Secret Variables', async () => {
+      // Names and the start site's host only: never a value.
+      const host = new URL(START).host;
+      for (const [doc, secret] of [[DOCS['a secret fill'], ['exportPassword']], [DOCS['a signIn with changePassword'], ['newPassword']]] as const) {
+        const { data } = await notReplayed(doc);
+        expect(drafts(data[0])).toEqual([expect.objectContaining({ forApproval: true, secretVariables: secret, mayBeTypedInto: host })]);
+        expect(JSON.stringify(data[0].json)).not.toContain(EXPORT_PW);
+        expect(JSON.stringify(data[0].json)).not.toContain(NEW_PW);
+      }
+      // No secret: neither field.
+      const { data } = await notReplayed(DOCS['a download with via']);
+      expect(drafts(data[0])[0]).not.toHaveProperty('secretVariables');
+      expect(drafts(data[0])[0]).not.toHaveProperty('mayBeTypedInto');
+    });
+
+    it('the review page words each step from the step, the description beside it; what is signed is unchanged', async () => {
+      // Descriptions that say something else than their steps do.
+      const doc = { startUrl: START, steps: [
+        SIGN_IN,
+        { intent: 'Open the help page', goto: '/acme/reports?session=abc' },
+        { intent: 'Read the total', fill: { field: { label: 'Amount' }, value: '9999' } },
+        { intent: 'Click Cancel', click: { role: 'button', name: 'Pay now' } },
+        { ...SUBMIT, intent: 'Close the dialog' },
+      ] };
+      const { engine, repaired } = await notReplayed(doc);
+      const item = repaired[0].json;
+      expect((item.reviewSteps as unknown as { text: string; describedAs?: string }[]).map(line)).toEqual([
+        'Sign in',
+        'Open /acme/reports (described differently as: Open the help page)',
+        'Type into Amount: "9999" (described differently as: Read the total)',
+        'Click Pay now (described differently as: Click Cancel)',
+        'Click Export CSV to submit a form to POST the start site at /acme/reports/export (described differently as: Close the dialog)',
+      ]);
+      // What is signed does not change: the steps with their intents and the hash are those of the document's own
+      // proposal, the digest covers the item without the shown-only list, and Sign Steps signs it with and without alike.
+      const script = real.parseScript({ ...doc, name: 'sap-export', version: 1 });
+      const proposal = real.notReplayedProposal(script);
+      expect(item.steps).toEqual(proposal.steps);
+      expect((item.steps as { steps: { intent: string }[] }).steps.map((s) => s.intent)).toEqual(doc.steps.map((s) => s.intent));
+      expect(item.hash).toBe(proposal.hash);
+      const { reviewSteps: _r, ...bare } = item;
+      expect(item.digest).toBe(real.proposalDigest({ ...(bare as unknown as real.Proposal) }));
+      const [withShown, without] = [await sign(engine, item), await sign(engine, bare)];
+      expect(withShown).toMatchObject({ status: 'active' });
+      for (const key of ['steps', 'hash', 'signature']) expect(withShown[key], key).toEqual(without[key]);
+    });
+
+    it('a paginate\'s inner lines are checked by Sign Steps too: honest, the item signs; one inner line forged, it is refused', async () => {
+      const doc = { startUrl: START, steps: [SIGN_IN, OPEN,
+        { intent: 'Go through the pages', paginate: { next: { role: 'button', name: 'Next' }, until: 'absent', max: 3, each: [{ intent: 'Open the row', click: { text: 'Row' } }] } },
+        SUBMIT] };
+      const { engine, repaired } = await notReplayed(doc);
+      const item = repaired[0].json;
+      const shown = item.reviewSteps as { text: string; marks: string[]; each?: { text: string; marks: string[] }[] }[];
+      // A click may open: the description is shown quietly, as the author's words.
+      expect(shown[2].each).toEqual([{ text: 'Click Row', describedAs: 'Open the row', quiet: true, marks: [] }]);
+      expect(await sign(engine, item)).toMatchObject({ status: 'active' });
+      const forged = shown.map((r, i) => (i === 2 ? { ...r, each: [{ text: 'Open the row', marks: [] }] } : r));
+      const out = await sign(engine, { ...item, reviewSteps: forged as unknown as IDataObject[] });
+      expect(out.error).toBe('Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again');
+      expect(out).not.toHaveProperty('signature');
+      // An inner list dropped is refused as well.
+      expect((await sign(engine, { ...item, reviewSteps: shown.map(({ each: _e, ...r }) => r) as unknown as IDataObject[] })).error).toMatch(/not the steps to sign/);
+    });
+
+    it('a browser step whose selector picks by place (an nth child, a first row, an XPath index) says so (IW-6); a named control does not; Sign Steps checks it', async () => {
+      const doc = { startUrl: START, steps: [SIGN_IN, OPEN,
+        { intent: 'Click the first row', click: { css: 'table.results tbody tr:nth-child(1) a' } },
+        { intent: 'Click the last row', click: { css: 'tr:last-child td' } },
+        { intent: 'Type the amount', fill: { field: { css: 'input.amount', within: { css: 'tbody > tr:nth-of-type(2)' } }, value: '5' } },
+        { intent: 'Click Edit', click: { css: 'xpath=//table//tr[3]//button' } },
+        // Picked by what it is: not marked.
+        { intent: 'Click Approve', click: { role: 'button', name: 'Approve' } },
+        { intent: 'Click the row', click: { css: 'tr[data-id="42"] a' } },
+        // A read takes columns by place by nature: not marked.
+        { intent: 'Read the rows', extract: { scope: { css: 'table' }, item: { css: 'tbody tr' }, fields: { code: { locator: { css: 'td:nth-child(1)' } } } } },
+        SUBMIT] };
+      const { engine, repaired } = await notReplayed(doc);
+      const item = repaired[0].json;
+      const shown = item.reviewSteps as { text: string; marks: string[] }[];
+      expect(shown.slice(2, 9).map((r) => r.marks)).toEqual([[BY_POSITION], [BY_POSITION], [BY_POSITION], [BY_POSITION], [], [], []]);
+      expect(await sign(engine, item)).toMatchObject({ status: 'active' });
+      const older = shown.map((r) => ({ ...r, marks: r.marks.filter((m) => m !== BY_POSITION) }));
+      expect(await sign(engine, { ...item, reviewSteps: older as unknown as IDataObject[] })).toMatchObject({ status: 'active' });
+      expect((await sign(engine, { ...item, reviewSteps: shown.map((r, i) => (i === 6 ? { ...r, marks: [BY_POSITION] } : r)) as unknown as IDataObject[] })).error).toMatch(/not the steps to sign/);
+    });
+
+    it('the description is its own field: a marker phrase, brackets or angle brackets in a name, a value or a description stay where they are; Sign Steps refuses a forged, removed or older entry', async () => {
+      const MARK = ' (described differently as: ';
+      const doc = { startUrl: START, steps: [
+        SIGN_IN,
+        // A description that holds the marker and brackets.
+        { intent: `Open the list${MARK}Click Pay now) <b>`, fill: { field: { label: 'Amount' }, value: '1' } },
+        // A control name and a typed value that hold it.
+        { intent: 'Click it', click: { role: 'button', name: `Save${MARK}Delete all) <i>` } },
+        { intent: 'Type it', fill: { field: { label: 'Note' }, value: `x${MARK}y) <b>z</b>` } },
+        SUBMIT,
+      ] };
+      const { engine, repaired } = await notReplayed(doc);
+      const item = repaired[0].json;
+      const shown = item.reviewSteps as { text: string; describedAs?: string; quiet?: true; marks: string[] }[];
+      expect(shown.slice(1, 4)).toEqual([
+        { text: 'Type into Amount: "1"', describedAs: `Open the list${MARK}Click Pay now) <b>`, marks: [] },
+        // A name with a bracket is quoted (shownName), so it reads as one name; the description stays apart.
+        { text: `Click "Save${MARK}Delete all) <i>"`, describedAs: 'Click it', quiet: true, marks: [] },
+        { text: `Type into Note: "x${MARK}y) <b>z</b>"`, describedAs: 'Type it', quiet: true, marks: [] },
+      ]);
+      expect(await sign(engine, item)).toMatchObject({ status: 'active' });
+      const refused = async (reviewSteps: object[]) => (await sign(engine, { ...item, reviewSteps: reviewSteps as unknown as IDataObject[] })).error;
+      const NOT_THE_STEPS = 'Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again';
+      // A forged description, a description removed, one added where the steps have none.
+      expect(await refused(shown.map((r, i) => (i === 1 ? { ...r, describedAs: 'Type the amount' } : r)))).toBe(NOT_THE_STEPS);
+      expect(await refused(shown.map((r, i) => (i === 1 ? { text: r.text, marks: r.marks } : r)))).toBe(NOT_THE_STEPS);
+      expect(await refused(shown.map((r, i) => (i === 0 ? { ...r, describedAs: 'Sign in as the admin' } : r)))).toBe(NOT_THE_STEPS);
+      // The warning ("Open the list" on a step that types) made quiet is refused; a quiet one shown as a warning, as an
+      // item made before the mark shows it, says more and is signed.
+      expect(await refused(shown.map((r, i) => (i === 1 ? { ...r, quiet: true } : r)))).toBe(NOT_THE_STEPS);
+      expect(await refused(shown.map((r, i) => (i === 2 ? { ...r, quiet: 'yes' } : r)))).toBe(NOT_THE_STEPS);
+      expect((await sign(engine, { ...item, reviewSteps: shown.map(({ quiet: _q, ...r }) => r) as unknown as IDataObject[] })).status).toBe('active');
+      // An item made before the description had its own field carries it inside the sentence: refused, never signed.
+      const older = shown.map(({ describedAs, ...r }) => (describedAs === undefined ? r : { ...r, text: `${r.text} (described as: ${describedAs})` }));
+      expect(await refused(older)).toBe(NOT_THE_STEPS);
+    });
+
+    it.each(Object.entries(DOCS))('the same for %s', async (_kind, doc) => {
+      const { engine, data, repaired } = await notReplayed(doc);
+      expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+      expect(engine.adoptions).toHaveLength(0);
+      expect(engine.sessions).toHaveLength(0);
+      expect(drafts(data[0])).toEqual([expect.objectContaining({ adopted: false, forApproval: true, reason: FOR_APPROVAL })]);
+      expect(repaired).toHaveLength(1);
+      expect(repaired[0].json.evidenceLine).toBe(NOT_REPLAYED);
+      // The import no longer says to sign them with Sign Steps: Sign Steps takes this item.
+      expect(JSON.stringify(data)).not.toContain('script_untrusted');
+      expect((await sign(engine, repaired[0].json)).status).toBe('active');
+      expect(JSON.stringify([data, repaired])).not.toContain(EXPORT_PW);
+      expect(JSON.stringify([data, repaired])).not.toContain(NEW_PW);
+    });
+
+    it("its safety flags name the form's method, host and path, and the secret fill's variable name, never a value", async () => {
+      const fill = DOCS['a secret fill'].steps[2];
+      const { data, repaired } = await notReplayed({ startUrl: START, steps: [SIGN_IN, OPEN, fill, SUBMIT] });
+      const item = repaired[0].json;
+      expect(item.safetyFlags).toEqual([
+        `form submission: POST ${SITE.host}/acme/reports/export`, `host: ${SITE.host}`, 'secret fill: a step types the run variable {{var.exportPassword}}',
+      ]);
+      expect(item.safetyLine).toBe((item.safetyFlags as string[]).join('; '));
+      expect(repaired[0].json.digest).toBe(real.proposalDigest({ ...(item as unknown as real.Proposal) }));
+      expect(JSON.stringify([data, repaired])).not.toContain(EXPORT_PW);
+      const password = DOCS['a signIn with changePassword'];
+      const changed = await notReplayed(password);
+      expect(changed.repaired[0].json.safetyFlags).toContain('password change: a step sets a new password from the run variable {{var.newPassword}}');
+      expect(JSON.stringify(changed.repaired)).not.toContain(NEW_PW);
+    });
+
+    it('a document Sign Steps would refuse (a submit to a host that is not allowed) is refused at import with that reason', async () => {
+      const elsewhere = { ...SUBMIT, submit: { ...SUBMIT.submit, host: 'forms.other.net', path: '/send' } };
+      const doc = { startUrl: START, steps: [SIGN_IN, OPEN, elsewhere] };
+      const { engine, data, repaired } = await notReplayed(doc);
+      expect(repaired).toEqual([]);
+      expect(engine.sessions).toHaveLength(0);
+      const reason = 'step "Send the export": POST forms.other.net/send is not an allowed submission';
+      expect(data[0].json.error).toBe(`policy_violation: ${reason}`);
+      expect(details(data[0]).drafts).toEqual([expect.objectContaining({ adopted: false, code: 'policy_violation', reason })]);
+      // Nothing ran, and the guidance says so.
+      const thrown = await run(watched(), { params: docParams(doc, {}, { variables }), items: textItem, continueOnFail: false }).catch((e: unknown) => e);
+      expect(thrown).toBeInstanceOf(NodeOperationError);
+      expect((thrown as NodeOperationError).description).toBe(
+        'policy_violation: The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the message says which rule they break. Correct the step document, or the Site Login\'s settings, and import it again.',
+      );
+      // Sign Steps, given the same steps for approval, refuses them with the same reason.
+      const script = real.parseScript({ ...doc, name: 'sap-export', version: 1 });
+      const item = repairedStepsJson(engine, real.notReplayedProposal(script), '', { notReplayed: true });
+      expect(String((await sign(engine, item)).error)).toContain(reason);
+    });
+  });
+});
+
+describe('Import Steps: what an import left out', () => {
+  // The Chrome fixture's report has one step not translated and five drops that change nothing the bot does (a viewport
+  // change, a scroll, focus clicks, XPath and pierce selectors): only the step that matters is left out.
+  const LEFT_OUT = [
+    'step 11, Wait for a JavaScript condition: steps do not run page JavaScript: add a waitFor on what the page shows when it is ready',
+  ];
+  const sign = async (engine: Engine, json: IDataObject, writeSteps?: string) => {
+    const p = { ...signStepsParams(), ...(writeSteps !== undefined ? { writeSteps } : {}) };
+    const [out] = await executeSignSteps(nodeContext({ params: p, rawParameters: p, items: [{ json }], credentials: credentialsV2(SITE), continueOnFail: true }), engine);
+    return out[0].json;
+  };
+
+  it('an import with an untranslated step puts it into leftOut, bound by the digest, and the item signs', async () => {
+    const engine = importEngine((input) => proved(input));
+    const [data, repaired] = await run(engine);
+    const item = repaired[0].json;
+    expect(item.leftOut).toEqual(LEFT_OUT);
+    expect(item.leftOutList).toBe(LEFT_OUT.join('\n'));
+    // Never a note of another kind (a typed value removed as a secret, a converted step).
+    const report = (data[0].json.report as { items: IDataObject[] }).items;
+    expect(report.some((i) => i.kind === 'secret')).toBe(true);
+    expect(JSON.stringify(item.leftOut)).not.toContain('sign-in value');
+    const { leftOut: _l, leftOutList: _s, ...rest } = item;
+    expect(item.digest).toBe(real.proposalDigest({ ...(rest as unknown as real.Proposal), leftOut: LEFT_OUT }));
+    expect((await sign(engine, item)).status).toBe('active');
+    expect(String((await sign(engine, rest)).error)).toContain('the repaired steps changed after they were reviewed');
+  });
+
+  it('a drop marked notNeeded stays in the report and is not left out; a drop for want of a selector is', async () => {
+    const result = () => ({
+      drafts: [chromeDraft('sap-export')], report: { source: 'chrome' as const, steps: 9, items: [
+        { at: 'step 1', kind: 'dropped' as const, what: 'Viewport changes (1)', reason: "the node's Viewport option sets the window size", notNeeded: true as const },
+        { at: 'step 3', kind: 'dropped' as const, what: 'Clicks into a field before typing (2)', reason: 'typing into a field focuses it, so the click before it is not needed', notNeeded: true as const },
+        { at: 'step 4', kind: 'dropped' as const, what: 'Click Status', reason: 'no selector the import can use' },
+      ] },
+    });
+    const [data, repaired] = await run(importEngine((input) => proved(input), result));
+    const report = (data[0].json.report as { items: IDataObject[] }).items;
+    expect(report.filter((i) => i.notNeeded === true).map((i) => i.what)).toEqual(['Viewport changes (1)', 'Clicks into a field before typing (2)']);
+    expect(repaired[0].json.leftOut).toEqual(['step 4, Click Status: no selector the import can use']);
+  });
+
+  it('no typed value appears in leftOut', async () => {
+    // A report line that quotes a Site Login value (as a source might) is masked as the report is.
+    const withValue = () => {
+      const r = chromeDraft('sap-export');
+      return {
+        drafts: [r], report: { source: 'chrome' as const, steps: 9, items: [
+          { at: 'step 7', kind: 'untranslated' as const, what: `Type "${SECRETS.password}" into Notes`, reason: `the value ${SECRETS.username} is not imported` },
+        ] },
+      };
+    };
+    const engine = importEngine((input) => proved(input), withValue);
+    const [data, repaired] = await run(engine);
+    const text = JSON.stringify([data, repaired]);
+    for (const secret of [SECRETS.username, SECRETS.password, SECRETS.totpSecret]) expect(text).not.toContain(secret);
+    expect(repaired[0].json.leftOut).toEqual(['step 7, Type "[secret]" into Notes: the value [secret] is not imported']);
+    // The real import of the fixture types three sign-in values; none is in leftOut.
+    const [, fromFixture] = await run(importEngine((input) => proved(input)));
+    for (const secret of [SECRETS.username, SECRETS.password, SECRETS.totpSecret]) expect(JSON.stringify(fromFixture[0].json.leftOut)).not.toContain(secret);
+  });
+
+  it('a desktop item and a not-replayed item carry the left-out lines too; with none, no field', async () => {
+    const uia = (automationId: string, controlType = 'Edit') => ({ uia: { path: [{ controlType, automationId }] } });
+    const desktopScript = real.parseDesktopScript({
+      surface: 'desktop', name: 'orders', version: 1, app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: uia('btnSave', 'Button') }],
+    });
+    const line = { at: 'Main.xaml', kind: 'untranslated' as const, what: 'Take a screenshot', reason: 'image activities are not imported' };
+    const engine = importEngine(() => { throw new Error('never adopted'); }, () => ({
+      drafts: [], desktopDrafts: [{ name: 'orders', script: desktopScript, writeCandidates: [1], variables: [], secretVariables: [] }],
+      report: { source: 'uipath', steps: 1, items: [line] },
+    }));
+    const [, repaired] = await run(engine, { params: params({ source: 'uipath', stepsName: 'orders', expectedFile: {} }), credentials: {} });
+    expect(repaired[0].json.leftOut).toEqual(['Main.xaml, Take a screenshot: image activities are not imported']);
+    expect((await sign(engine, repaired[0].json, '1')).status).toBe('active');
+    const { leftOut: _l, leftOutList: _s, ...removed } = repaired[0].json;
+    expect(String((await sign(engine, removed, '1')).error)).toContain('the repaired steps changed after they were reviewed');
+
+    // A step document that writes: nothing was left out, so no field.
+    const doc = { startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Send the export', submit: { path: '/acme/reports/export', button: { role: 'button', name: 'Export CSV' } } }] };
+    const [, notReplayed] = await run(importEngine(() => { throw new Error('never adopted'); }), {
+      params: params({ source: 'steps', inputFrom: 'text', sourceText: JSON.stringify(doc), expectedFile: {} }), items: [{ json: {} }],
+    });
+    expect(notReplayed).toHaveLength(1);
+    expect(notReplayed[0].json).not.toHaveProperty('leftOut');
+    expect(notReplayed[0].json).not.toHaveProperty('leftOutList');
   });
 });

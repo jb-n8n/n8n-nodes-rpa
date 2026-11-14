@@ -371,6 +371,39 @@ describe('every write that leaves the browser counts', () => {
     expect(model.invocations).toHaveLength(0);
     expect((await counters()).posts).toEqual([]);
   });
+
+  // press is not a declared write: the network check decides, as for the click above.
+  it('Enter on a form that posts is a policy violation and nothing is sent', async () => {
+    const ENTER: Step = { intent: 'Press Enter', press: { key: 'Enter', target: { label: 'Name' } } };
+    const r = await runScriptLane(input([open('/public/form'), FILL_NAME, ENTER, { intent: 'Thanks shown', waitFor: { target: { css: '#echo' } } }], {}, {
+      allowedSubmits: SUBMIT_TARGET(),
+    }));
+    expect(r).toMatchObject({ ok: false, code: 'policy_violation', failure: { intent: 'Press Enter' } });
+    if (!r.ok) {
+      expect(r.submitted).toBeUndefined();
+      expect(r.violations).toContainEqual(expect.objectContaining({ kind: 'write', method: 'POST', fatal: true, url: `${portal.url}/public/form/submit` }));
+    }
+    expect((await counters()).posts).toEqual([]);
+  });
+
+  it('Enter right after a declared submit step cannot post through that step\'s window', async () => {
+    const NOTE: Step = { intent: 'Type a note', fill: { field: { label: 'Note' }, value: 'first' } };
+    const SAVE: Step = { intent: 'Save the note', submit: { button: { role: 'button', name: 'Save' }, path: '/public/keys/note' }, expect: { visible: { css: '#saved' } } };
+    const ENTER: Step = { intent: 'Press Enter', press: { key: 'Enter', target: { label: 'Note' } } };
+    const steps = [open('/public/keys'), NOTE, SAVE, ENTER, { intent: 'Never saved again', waitFor: { target: { css: '#never-there' } }, timeoutMs: 1500 }];
+    const r = await runScriptLane(input(steps, { trust: { required: false, allowUnsignedWrites: true } }, { startUrl: `${portal.url}/public/keys`, submitsFromSteps: true }));
+    expect(r).toMatchObject({ ok: false, code: 'policy_violation', failure: { intent: 'Press Enter' } });
+    if (!r.ok) expect(r.violations).toContainEqual(expect.objectContaining({ kind: 'write', method: 'POST', fatal: true, url: `${portal.url}/public/keys/note` }));
+    expect((await counters()).posts).toEqual([{ path: '/public/keys/note', name: 'first' }]);
+  });
+
+  it('the Fill and Submit window opens on a click step only: a press there is refused before the browser opens', async () => {
+    const ENTER: Step = { intent: 'Press Enter', press: { key: 'Enter', target: { label: 'Name' } } };
+    const r = await runScriptLane(input([open('/public/form'), FILL_NAME, ENTER], {}, { writeWindow: { step: 2, maxPosts: 3, hosts: [portal.host] } }));
+    expect(r).toMatchObject({ ok: false, code: 'policy_violation' });
+    expect(sessions).toHaveLength(0);
+    expect((await counters()).posts).toEqual([]);
+  });
 });
 
 describe('declared submits without a Site Login', () => {

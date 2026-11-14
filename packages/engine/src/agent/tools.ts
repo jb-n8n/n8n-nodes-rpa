@@ -27,7 +27,6 @@ export interface ToolCall {
   name: string;
   args: Record<string, unknown>;
 }
-export type AgentToolName = 'look' | 'click' | 'fill' | 'select' | 'sign_in' | 'enter_code' | 'dismiss' | 'expand_all' | 'next_page' | 'extract' | 'download' | 'back' | 'done';
 export type DoneOutcome = 'found' | 'not_found' | 'blocked';
 
 /** One tool call as it was executed. Compile uses only `ok` actions. */
@@ -438,7 +437,7 @@ export class AgentTools {
     } catch (err) {
       const message = (err as Error).message;
       this.logSignIn(started, false, message);
-      if (message === `${DETECTED_PREFIX}login_failed`) {
+      if (message.startsWith(`${DETECTED_PREFIX}login_failed`)) {
         this.signInStage = 'username_rejected';
         return this.refuse('sign_in', url, 'the site rejected the username');
       }

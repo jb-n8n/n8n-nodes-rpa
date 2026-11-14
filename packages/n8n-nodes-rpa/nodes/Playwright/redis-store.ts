@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 import { ConfigError, type CredentialData } from './config.js';
-import { isRecord } from './breaker-record.js';
+import { readRecord } from './breaker-record.js';
 import type { BreakerRecord, GuardStore, Lock } from './guard-store.js';
 
 export const REDIS_KEY_PREFIX = 'playwrightGuard:';
@@ -82,8 +82,10 @@ function bounded<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
-/** The serialisation setBreaker writes and deleteBreaker compares: keys in a fixed order. */
-const serialise = (r: BreakerRecord): string => JSON.stringify({ code: r.code, at: r.at, resetKey: r.resetKey, message: r.message });
+/** The serialisation setBreaker writes and deleteBreaker compares: keys in a fixed order, `login` only when present. */
+const serialise = (r: BreakerRecord): string => JSON.stringify({
+  code: r.code, at: r.at, resetKey: r.resetKey, message: r.message, ...(r.login ? { login: { salt: r.login.salt, hash: r.login.hash } } : {}),
+});
 
 function parseBreaker(raw: string | null): BreakerRecord | undefined {
   if (raw === null) return undefined;
@@ -93,7 +95,7 @@ function parseBreaker(raw: string | null): BreakerRecord | undefined {
   } catch {
     return undefined;
   }
-  return isRecord(value) ? { code: value.code, at: value.at, resetKey: value.resetKey, message: value.message } : undefined;
+  return readRecord(value);
 }
 
 /** The commands the store sends: a connected node-redis client, or a fake in tests. */

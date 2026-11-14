@@ -1,13 +1,7 @@
 import type * as EngineModule from 'n8n-rpa-engine';
 
-export type Engine = Pick<
-  typeof EngineModule,
-  'runTask' | 'signSteps' | 'proposalDigest' | 'openSession' | 'createMasker' | 'scriptHash' | 'PLAYWRIGHT_VERSION' | 'parseScript' | 'repairPrecondition'
-  | 'validateScript' | 'UNVERIFIED_COUNT_FLAG' | 'EXTRACT_FIELDS_DROPPED' | 'changeListMatches' | 'describeCheck' | 'MIME'
-  | 'DOWNLOAD_NEEDS_BROWSER_SERVER' | 'importSource' | 'adoptDraft' | 'scrubTrace'
-  | 'runDesktopTask' | 'probeRunner' | 'isDesktopDocument' | 'runnerConnected'
-  | 'desktopProposal' | 'desktopSafetyFlags' | 'signDesktopSteps' | 'parseWriteSteps' | 'parseDesktopScript'
->;
+/** The engine module as the node loads it (loadEngine). */
+export type Engine = typeof EngineModule;
 
 let cached: Promise<Engine> | undefined;
 

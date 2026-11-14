@@ -7,12 +7,12 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
 
   icon: Icon = { light: 'file:rpa.svg', dark: 'file:rpa.svg' };
 
-  documentationUrl = 'https://docs.n8n.io/integrations/community-nodes/';
+  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/reference/security.md#browser-runs';
 
   properties: INodeProperties[] = [
     {
       displayName:
-        'What the browser signs in with, and the only sites it may open, load files from or post to. Anything outside these lists is blocked and the run fails as policy_violation. Used by Run Steps and Sign Steps only.',
+        'What the browser signs in with, and the only sites it may open, load files from or post to. Anything outside these lists is blocked and the run fails as policy_violation. Used by Run Steps, Sign Steps and Import Steps. n8n\'s connection test checks these fields, not the password: the password is tried on the first run.',
       name: 'notice',
       type: 'notice',
       default: '',
@@ -20,11 +20,14 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Login Page URL',
       name: 'loginUrl',
+      // Decides where the browser may go and where the password may be typed: typed by the credential's owner, never read
+      // from an item. (The editor then offers no Expression switch for it.)
+      noDataExpression: true,
       type: 'string',
       default: '',
       required: true,
       placeholder: 'https://example.com/login',
-      description: 'Where every run with this credential starts. Its site is always allowed.',
+      description: 'Where a run starts when neither the steps nor the Start URL name a start. Its site is always allowed.',
     },
     { displayName: 'Username', name: 'username', type: 'string', default: '', required: true, description: 'The account the browser signs in as' },
     {
@@ -47,6 +50,7 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Sites the Browser May Open',
       name: 'navHosts',
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 3 },
       default: '',
@@ -56,6 +60,7 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Sites It May Load Files From',
       name: 'subresourceHosts',
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 3 },
       default: '',
@@ -65,6 +70,7 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Sites Allowed in Embedded Frames',
       name: 'frameHosts',
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 2 },
       default: '',
@@ -74,15 +80,19 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Pages Where the Password May Be Typed',
       name: 'login',
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 2 },
       default: '',
       placeholder: 'example.com/login',
-      description: 'As host/path, one per line. Empty means the login page.',
+      description:
+        "Every address of the sign-in, as host/path, one per line: each page the address bar shows (user name, password, code) and each address a sign-in form posts to, which the address bar does not show (the run's error names it). Empty means the login page.",
     },
     {
       displayName: 'Forms It May Submit',
       name: 'allowedSubmits',
+      // Decides what approved steps may post: typed by the credential's owner, never read from an item.
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 2 },
       default: '',
@@ -92,6 +102,8 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Requests That Only Read',
       name: 'readPosts',
+      // Decides what approved steps may post: typed by the credential's owner, never read from an item.
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 2 },
       default: '',

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The recorder's rules, with no Windows API: raw observations of a person's work in, the steps the recorder's bar
+       shows, the recording file and the policy change file out. The Windows program (Rpa.Recorder) feeds it; the tests
+       feed it fakes. The credential-like names are compiled in from the runner (CredentialNames.cs), so the recorder
+       and the runner hide the same fields. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Rpa.Recorder.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\..\runner\src\Rpa.Runner.Core\Ui\CredentialNames.cs" Link="CredentialNames.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rpa.Recorder.Core.Tests" />
+  </ItemGroup>
+</Project>

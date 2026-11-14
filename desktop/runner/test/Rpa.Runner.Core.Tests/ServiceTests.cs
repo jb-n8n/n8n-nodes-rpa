@@ -56,12 +56,22 @@ public sealed class ServiceTests : IDisposable
     }
 
     [Fact]
-    public void Run_end_closes_the_processes_the_run_launched()
+    public async Task Run_end_asks_the_apps_the_run_launched_to_close_and_stops_them_after_the_wait()
     {
-        _h.BeginWithApp();
-        var pid = _h.Processes.Names.Keys.Single();
-        _h.Ok("run.end", new { runId = Harness.RunId });
-        Assert.Equal([pid], _h.Processes.Killed);
+        using var h = new Harness(realTime: false);
+        h.BeginWithApp();
+        var pid = h.Processes.Names.Keys.Single();
+        h.Ok("run.end", new { runId = Harness.RunId });
+        Assert.Equal([pid], h.Processes.CloseRequested);
+        Assert.Empty(h.Processes.Killed);
+        var done = h.Runs.WaitForCleanupAsync();
+        for (var i = 0; i < 100 && !done.IsCompleted; i++)
+        {
+            h.Time!.Advance(TimeSpan.FromMilliseconds(100));
+            await Task.WhenAny(done, Task.Delay(10));
+        }
+        await done.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal([pid], h.Processes.Killed);
     }
 
     [Fact]
@@ -235,6 +245,25 @@ public sealed class ServiceTests : IDisposable
         Assert.Empty(_h.Desktop.Performed);
         _h.Ok("act", Act(Id("btnPost"), "click", new { write = true }));
         Assert.Single(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void A_double_click_is_gated_as_a_click_is()
+    {
+        // The write gate keys on the control, never on the action: a double click on a declared write control, on a
+        // child of one, or landing on one, needs write: true exactly as a click does.
+        var w = _h.BeginWithApp();
+        var e = _h.Err("act", Act(Id("btnPost"), "doubleClick"), RpcErrors.PolicyRefusedCode);
+        Assert.Contains("write: true", e["message"]!.GetValue<string>());
+        _h.Err("act", Act(Id("lblPostCaption"), "doubleClick"), RpcErrors.PolicyRefusedCode);
+        _h.Desktop.InputReceiver = w.Find("btnPost");
+        _h.Err("act", Act(Id("btnSignIn"), "doubleClick"), RpcErrors.PolicyRefusedCode);
+        Assert.Empty(_h.Desktop.Performed);
+        _h.Ok("act", Act(Id("btnSignIn"), "doubleClick", new { write = true }));
+        _h.Desktop.InputReceiver = null;
+        _h.Ok("act", Act(Id("btnPost"), "doubleClick", new { write = true }));
+        Assert.Equal([ActionKind.DoubleClick, ActionKind.DoubleClick], _h.Desktop.Performed.Select(o => o.Action));
+        Assert.Equal("btnPost", _h.Desktop.Performed[^1].Element.AutomationId);
     }
 
     [Fact]
@@ -679,7 +708,7 @@ public sealed class ServiceTests : IDisposable
         var calls = 0;
         _h.Desktop.OnPerform = _ =>
         {
-            if (++calls < 3) throw new RetryableActionException("the element is disabled");
+            if (++calls < 3) throw RetryableActionException.Disabled();
             return null;
         };
         _h.Ok("act", Act(Id("btnSignIn"), "click", new { timeoutMs = 3000 }));
