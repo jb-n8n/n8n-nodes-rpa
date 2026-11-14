@@ -10,7 +10,8 @@ export const WORKFLOW_NODE_TYPES: Record<string, number> = {
   'n8n-nodes-base.manualTrigger': 1,
   'n8n-nodes-base.stickyNote': 1,
   'n8n-nodes-base.dataTable': 1.1,
-  [RPA_NODE_TYPE]: 1,
+  // Version 2: Signature and Approved By on the Settings tab, RPA Redis behind a switch.
+  [RPA_NODE_TYPE]: 2,
   'n8n-nodes-base.awsS3': 2,
   'n8n-nodes-base.extractFromFile': 1.1,
   'n8n-nodes-base.convertToFile': 1.1,

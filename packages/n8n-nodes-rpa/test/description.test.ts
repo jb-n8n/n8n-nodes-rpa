@@ -124,11 +124,22 @@ describe('Run Steps and Sign Steps fields', () => {
     return p;
   };
   it('Run Steps shows Steps, Start URL, Require Signed Steps, Signature, Approved By and AI Repair; Goal only with AI Repair on', () => {
-    const always = d.properties
-      .filter((p) => p.displayOptions?.show?.operation?.includes('runSteps'))
-      .filter((p) => Object.keys(p.displayOptions?.show ?? {}).every((k) => k === 'operation'))
-      .map((p) => p.name);
-    expect(always).toEqual(['runsOn', 'steps', 'startUrl', 'requireSignedSteps', 'signature', 'approvedBy', 'aiRepair', 'options']);
+    // As n8n shows a Run Steps node of each version with nothing else set: the Parameters tab, then the Settings tab.
+    const shown = (typeVersion: number, settings: boolean) => {
+      const nodeTypes = { getByName: () => node, getByNameAndVersion: () => node, getKnownTypes: () => ({}) } as unknown as INodeTypes;
+      const n = { id: 'n1', name: 'RPA', type: 'n8n-nodes-rpa.playwright', typeVersion, position: [0, 0] as [number, number], parameters: { operation: 'runSteps' } };
+      const loaded = new Workflow({ nodes: [n], connections: {}, active: false, nodeTypes }).getNode('RPA')!;
+      return d.properties
+        .filter((p) => p.name !== 'operation' && p.type !== 'notice' && p.type !== 'hidden' && !!p.isNodeSetting === settings)
+        .filter((p) => NodeHelpers.displayParameter(loaded.parameters, p, loaded, d))
+        .filter((p) => !p.displayOptions?.show?.aiRepair)
+        .map((p) => p.name);
+    };
+    expect(shown(1, false)).toEqual(['runsOn', 'steps', 'startUrl', 'requireSignedSteps', 'signature', 'approvedBy', 'aiRepair', 'options']);
+    expect(shown(1, true)).toEqual([]);
+    // Version 2: Signature and Approved By, which the import sets, are on the node's Settings tab; the Redis switch is new.
+    expect(shown(2, false)).toEqual(['runsOn', 'steps', 'startUrl', 'requireSignedSteps', 'aiRepair', 'shareAcrossWorkers', 'options']);
+    expect(shown(2, true)).toEqual(['signature', 'approvedBy']);
     expect(field('requireSignedSteps')).toMatchObject({ displayName: 'Require Signed Steps', type: 'boolean', default: true, noDataExpression: true });
     expect(field('aiRepair')).toMatchObject({ displayName: 'AI Repair', type: 'boolean', default: false });
     expect(field('goal').displayOptions?.show).toEqual({ operation: ['runSteps'], aiRepair: [true] });

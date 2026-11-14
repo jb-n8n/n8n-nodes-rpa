@@ -195,7 +195,8 @@ const drafts = (item: INodeExecutionData) => item.json.drafts as IDataObject[];
 describe('Import Steps: the description', () => {
   const d = new Playwright().description;
   // Runs On is shared with Run Steps (test/runs-on.test.ts).
-  const own = d.properties.filter((p) => p.name !== 'options' && p.name !== 'runsOn' && p.displayOptions?.show?.operation?.includes('importSteps'));
+  // Runs On and version 2's Share Login Breaker Across Workers are Run Steps' and Import Steps' alike (runs-on.test.ts, node-v2.test.ts).
+  const own = d.properties.filter((p) => !['options', 'runsOn', 'shareAcrossWorkers'].includes(p.name) && p.displayOptions?.show?.operation?.includes('importSteps'));
   const field = (name: string): INodeProperties => {
     const p = own.find((x) => x.name === name);
     if (!p) throw new Error(`no Import Steps field "${name}"`);

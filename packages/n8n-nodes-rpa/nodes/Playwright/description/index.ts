@@ -6,7 +6,7 @@ import { extractProperties } from './extract.js';
 import { fillFormProperties } from './fillForm.js';
 import { optionsProperty, QUICK_OPERATIONS } from './options.js';
 import { pdfProperties } from './pdf.js';
-import { RUNS_ON_PROPERTY, runStepsProperties } from './runSteps.js';
+import { RUNS_ON_PROPERTY, RUNS_ON_PROPERTY_V2, runStepsProperties, SHARE_ACROSS_WORKERS_PROPERTY, SHARE_ACROSS_WORKERS_V1_PROPERTY } from './runSteps.js';
 import { screenshotProperties } from './screenshot.js';
 import { signStepsProperties } from './signSteps.js';
 
@@ -85,4 +85,7 @@ export const OPERATIONS: INodeProperties = {
 const SUBTITLE_NAMES = Object.fromEntries(OPERATION_OPTIONS.map((o) => [String(o.value), o.name]));
 export const SUBTITLE = `={{ (${JSON.stringify(SUBTITLE_NAMES)})[$parameter["operation"]] }}`;
 
-export const properties: INodeProperties[] = [OPERATIONS, RUNS_ON_PROPERTY, URL_PROPERTY, ...QUICK_PROPERTIES, ...runStepsProperties, ...signStepsProperties, ...importStepsProperties, optionsProperty];
+export const properties: INodeProperties[] = [
+  OPERATIONS, RUNS_ON_PROPERTY, RUNS_ON_PROPERTY_V2, URL_PROPERTY, ...QUICK_PROPERTIES, ...runStepsProperties, ...signStepsProperties, ...importStepsProperties,
+  SHARE_ACROSS_WORKERS_V1_PROPERTY, SHARE_ACROSS_WORKERS_PROPERTY, optionsProperty,
+];

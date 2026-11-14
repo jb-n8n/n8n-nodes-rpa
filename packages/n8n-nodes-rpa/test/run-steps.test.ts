@@ -60,6 +60,8 @@ const many = (n: number) => Array.from({ length: n }, (_, i) => ({ json: { i } }
 const REDIS_CRED = { host: 'redis.internal', port: 6380, password: 'redis-pass-1' };
 const QUEUE_NEEDS_REDIS =
   "n8n runs in queue mode, so Run Steps and Import Steps with an RPA Site Login need an RPA Redis credential: without it the login breaker and run lock would not be shared between workers. Attach an RPA Redis credential (the Redis that n8n's queue uses works).";
+const QUEUE_NEEDS_REDIS_V2 =
+  "n8n runs in queue mode, so Run Steps and Import Steps with an RPA Site Login need an RPA Redis credential: without it the login breaker and run lock would not be shared between workers. Turn on Share Login Breaker Across Workers (RPA Redis) and attach an RPA Redis credential (the Redis that n8n's queue uses works).";
 
 describe('Run Steps: the guard store (Redis, queue mode)', () => {
   it('queue mode without Redis is a configuration error, before the browser', async () => {
@@ -97,6 +99,24 @@ describe('Run Steps: the guard store (Redis, queue mode)', () => {
     expect(closed).toEqual([1, 2]);
     expect(engine.calls).toHaveLength(2);
   });
+  it('version 2 with Share Login Breaker Across Workers off runs as version 1 without RPA Redis: the credential is never opened', async () => {
+    const opened: unknown[] = [];
+    const redis = async (credentials: unknown): Promise<GuardStore> => {
+      opened.push(credentials);
+      return memoryGuardStore();
+    };
+    const withRedis = { credentials: { ...ALL, playwrightRedisApi: REDIS_CRED }, credentialIds: { ...IDS, playwrightRedisApi: 'redis-1' }, continueOnFail: true, typeVersion: 2 };
+    const engine = fakeEngine(() => scriptOk());
+    const [queued] = await executeRunSteps(ctx(withRedis), engine, { redis, executionsMode: 'queue' });
+    expect(errorOf(queued[0])).toBe(QUEUE_NEEDS_REDIS_V2);
+    const [regular] = await executeRunSteps(ctx(withRedis), engine, { redis, executionsMode: 'regular' });
+    expect(errorOf(regular[0])).toBeUndefined();
+    expect(opened).toEqual([]);
+    // Turned on, it opens the credential, as version 1 always does.
+    await executeRunSteps(ctx({ ...withRedis, params: params({ shareAcrossWorkers: true }) }), engine, { redis, executionsMode: 'queue' });
+    expect(opened).toEqual([REDIS_CRED]);
+    expect(engine.calls).toHaveLength(2);
+  });
   it('an unreachable Redis is a configuration error and no login is tried', async () => {
     const redis = async (): Promise<GuardStore> => { throw new ConfigError('The Redis server could not be reached (ECONNREFUSED), so no login was tried.'); };
     const engine = fakeEngine(() => scriptOk());
@@ -132,6 +152,16 @@ describe('Run Steps: trust and engine input', () => {
     expect(input.endpoint).toEqual(BROWSER);
     expect(input.repair).toBeUndefined();
     expect(input).toMatchObject({ budgetMs: 180_000, defaultStepTimeoutMs: 30_000, viewport: { width: 1280, height: 800 }, saveTrace: 'never', vars: {} });
+  });
+  it("the node's version takes no part in the trust check: a version 2 node hands the engine the same input", async () => {
+    const inputs = [];
+    for (const typeVersion of [1, 2]) {
+      const engine = fakeEngine(() => scriptOk());
+      await executeRunSteps(ctx({ params: params({}, { name: 'items', expectedVersion: 3 }), typeVersion }), engine);
+      inputs.push(engine.calls[0]);
+    }
+    expect(inputs[1]).toEqual(inputs[0]);
+    expect(inputs[1].trust).toMatchObject({ signature: SIGNATURE, approvedBy: APPROVER, expect: { name: 'items', version: 3, siteLoginId: 'site-a' } });
   });
   it('an unsigned run without a Site Login uses the Start URL allowlist, no secrets and no output checks', async () => {
     const engine = fakeEngine(() => scriptOk());
