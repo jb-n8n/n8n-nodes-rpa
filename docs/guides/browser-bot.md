@@ -137,6 +137,31 @@ After a failed run, open the RPA node: the failed item on its error output has `
 to do. **Stop and Error** and the run log's row show it too.
 To run the bot on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow.
 
+**When the site changes.** To see it, open http://localhost:8080/admin (user `admin`, password `change-me`) and set
+**Report screen** to **Renamed labels**: the sandbox renames Line Item Report to G/L Line Items, Execute to Run and
+Export to Download spreadsheet. Run the bot again. It fails `drift_detected` at the first control it cannot find,
+and the message says what the page shows instead:
+
+```
+Click Line Item Report: No element found for Role and Name button "Line Item Report" on
+http://sandbox:8080/sap(…)/bc/gui/sap/its/webgui after 30 s. The page shows these links and buttons: "G/L Line Items",
+"Enter". The page no longer has that control. To go on, change the bot on the import form, or let self-repair fix it
+if it is set up (AI Repair on the RPA node).
+```
+
+There are two ways on:
+- **Change the bot on the import form.** Open the form, leave **Bot file** empty, type `sandbox-line-items`, choose
+  **Change the steps as JSON**, and paste the steps with the name the message listed (`"name": "G/L Line Items"` in
+  place of `"name": "Line Item Report"`). A control's name is changed as JSON: **Change values** changes only what the
+  steps type, choose or open. The import runs the changed steps once. When a control is still not there, its page
+  names what it shows instead, and the steps after it that act on the same page are checked too, without acting:
+  one replay names every renamed field of a form. The sandbox's three labels are on three pages (each click opens
+  the next), so each replay names the one on the page it reached; change it and choose **Review** again.
+- **Let it repair itself**, with a chat model: [Part 2](#part-2-let-it-repair-itself).
+
+[Errors](../reference/errors.md#a-control-that-is-not-there) says what the list holds. Set **Report screen** back to
+**Baseline** afterwards.
+
 **A bot that reads rows.** `docs/samples/sandbox-rows.steps.json` signs in and reads the sample site's notices. Import
 it as in step 4, with the name `sandbox-rows`. Run its workflow as in step 5.
 The RPA node returns one item with a `rows` list: one entry per notice, with its `id`, `Bulletin`, `Date`, `Type`,
