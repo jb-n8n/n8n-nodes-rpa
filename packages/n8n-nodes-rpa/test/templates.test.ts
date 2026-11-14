@@ -217,18 +217,19 @@ describe('every Data Table is made before anything reads or writes it, on every 
   it('the reads of template 5 are covered: the check finds the round 12 wiring, where the tables were made late', () => {
     const t = load('5-import-a-bot.json');
     expect(t.nodes.filter((n) => used(n) !== undefined).map((n) => n.name).sort()).toEqual([
-      'Approved bots', 'Record rejection', 'Running versions', 'Save signed steps', 'Supersede older versions', 'Versions now',
+      'Approved bots', 'Record rejection', 'Running versions', 'Save signed steps', 'Supersede older active rows', 'Supersede older versions', 'Versions now',
     ]);
     // As at 1ac5167: Settings → Change an approved bot? only, and the tables made after Approve on this form?.
     const late = structuredClone(t);
     late.connections['Settings'] = { main: [[{ node: 'Change an approved bot?', type: 'main', index: 0 }]] };
     late.connections['Approve on this form?'].main[0] = [{ node: 'Create steps table', type: 'main', index: 0 }];
     late.connections['Create run log table'] = { main: [[{ node: 'Compared with the running version', type: 'main', index: 0 }]] };
-    expect(tablesNotMadeFirst(late)).toEqual(['Running versions uses playwright_steps', 'Approved bots uses playwright_steps']);
+    // The change path reaches Sign steps' check, and through it the review page, before Approve on this form? there.
+    expect(tablesNotMadeFirst(late)).toEqual(['Running versions uses playwright_steps', 'Approved bots uses playwright_steps', 'Versions now uses playwright_steps', 'Save signed steps uses playwright_steps', 'Supersede older versions uses playwright_steps', 'Record rejection uses playwright_steps', 'Supersede older active rows uses playwright_steps']);
     // The order matters too: the tables' branch below the rest would run after it, so nothing is made first.
     const below = structuredClone(t);
     byName(below, 'Create steps table').position = [660, 600];
-    expect(tablesNotMadeFirst(below)).toEqual(['Running versions uses playwright_steps', 'Approved bots uses playwright_steps', 'Versions now uses playwright_steps', 'Save signed steps uses playwright_steps', 'Supersede older versions uses playwright_steps', 'Record rejection uses playwright_steps']);
+    expect(tablesNotMadeFirst(below)).toEqual(['Running versions uses playwright_steps', 'Approved bots uses playwright_steps', 'Versions now uses playwright_steps', 'Save signed steps uses playwright_steps', 'Supersede older versions uses playwright_steps', 'Record rejection uses playwright_steps', 'Supersede older active rows uses playwright_steps']);
   });
   it('no read of a Data Table goes on with an error item: none has onError set', () => {
     for (const file of Object.keys(FILES)) for (const n of load(file).nodes.filter((x) => used(x) !== undefined && table(x).operation === 'get')) expect(n.onError, `${file}: ${n.name}`).toBeUndefined();
@@ -1277,7 +1278,15 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(byName(t, 'Read the upload')).toMatchObject({ type: 'n8n-nodes-base.extractFromFile', typeVersion: 1.1, onError: 'continueRegularOutput', parameters: { operation: 'text', destinationKey: 'text' } });
     expect(targets(t, 'Approved bots')).toEqual([['The bot to change']]);
     expect(targets(t, 'The bot to change')).toEqual([['Approved bot found?']]);
-    expect(targets(t, 'Approved bot found?')).toEqual([['Change or sign again'], ['No approved bot']]);
+    // An approved bot found: other active rows of its name are marked superseded (IB-5), then Sign steps checks it before
+    // the change page. One that does not fit this form asks the person why before any step is shown (IB-4).
+    expect(targets(t, 'Approved bot found?')).toEqual([['Supersede older active rows'], ['No approved bot']]);
+    expect(targets(t, 'Supersede older active rows')).toEqual([['The approved version']]);
+    expect(targets(t, 'Change page next?')).toEqual([['Fits this form?'], [REVIEW]]);
+    expect(targets(t, 'Fits this form?')).toEqual([['Change or sign again'], ['Approved on another form?']]);
+    expect(targets(t, 'Approved on another form?')).toEqual([['Sign it again here?']]);
+    expect(targets(t, 'Sign it again here?')).toEqual([['Change or sign again'], ['Change it on its own form']]);
+    expect(targets(t, 'Change it on its own form')).toEqual([]);
     expect(targets(t, 'Change or sign again')).toEqual([['Choice fits the box?']]);
     expect(targets(t, 'Choice fits the box?')).toEqual([['Change values?'], ['Page answered?']]);
     expect(targets(t, 'Page answered?')).toEqual([['Change or sign again'], ['Choice and box differ']]);
@@ -1315,7 +1324,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(targets(t, 'Approve on this form?')).toEqual([['Compared with the running version'], ['Workflow file?']]);
     expect(targets(t, 'Compared with the running version')).toEqual([['The approved version']]);
     expect(targets(t, 'The approved version')).toEqual([['Sign steps']]);
-    expect(targets(t, 'Checked?')).toEqual([[REVIEW], ['Signed?']]);
+    expect(targets(t, 'Checked?')).toEqual([['Change page next?'], ['Signed?']]);
     // v1 order runs the topmost child's branch to its end first: every step list is signed and saved before the last page.
     // Once the review page is answered, the steps table is read again, and only if no other approval or rejection of a
     // name on the page came first do Step lists (to sign) and the last pages follow (IB-5).
@@ -1347,12 +1356,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(byName(t, 'Approval by email?').position[1]).toBeLessThan(Math.min(...['Approve on this form?', 'Import failed'].map((n) => byName(t, n).position[1])));
     const working = t.nodes.filter((n) => n.type !== STICKY).map((n) => n.name).sort();
     expect(working).toEqual([
-      'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Approved meanwhile', 'Asks about a download?', 'Change an approved bot?',
-      'Change or sign again', 'Change values', 'Change values?', 'Checked?', 'Choice and box differ', 'Choice fits the box?', 'Compared with the approved version', 'Compared with the running version', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
-      'No approved bot', 'Page answered?', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older versions',
+      'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Approved meanwhile', 'Approved on another form?', 'Asks about a download?', 'Change an approved bot?',
+      'Change it on its own form', 'Change or sign again', 'Change page next?', 'Change values', 'Change values?', 'Checked?', 'Choice and box differ', 'Choice fits the box?', 'Compared with the approved version', 'Compared with the running version', 'Create run log table', 'Create steps table', 'Fits this form?', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
+      'No approved bot', 'Page answered?', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign it again here?', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older active rows', 'Supersede older versions',
       'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Value not taken', 'Values taken?', 'Values to steps', 'Versions now', 'What it replaces', 'Workflow file?',
     ]);
-    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual(Array(13).fill(2.5));
+    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual(Array(15).fill(2.5));
     // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
     for (const n of t.nodes.filter((x) => x.type === COMPLETION)) {
       expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours' });
@@ -1389,7 +1398,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(into('Save signed steps')).toEqual([['Signed?', 0]]);
     expect(into('Signed?')).toEqual([['Checked?', 1]]);
     expect(into('Checked?')).toEqual([['Sign steps', 0]]);
-    expect(into(REVIEW)).toEqual([['Checked?', 0]]);
+    // The review page only after Import steps: the check before the change page goes to Fits this form? instead.
+    expect(into(REVIEW)).toEqual([['Change page next?', 1]]);
+    expect(into('Change page next?')).toEqual([['Checked?', 0]]);
+    const reviewNext = (byName(t, 'Change page next?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    expect([true, false].map((imported) => evaluate(reviewNext, { $: (n: string) => ({ isExecuted: n === 'Import steps' ? imported : true }) }))).toEqual([false, true]);
     const checkedCond = (byName(t, 'Checked?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } }).conditions.conditions;
     expect(checkedCond).toEqual([expect.objectContaining({ leftValue: '={{ $json.checkOnly === true }}', operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
     // A record never carries checkOnly, and the check never carries a status: neither can reach the other's path.
@@ -1429,7 +1442,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { keyName: 'name', condition: 'eq', keyValue: '={{ $json.name }}' },
       { keyName: 'status', condition: 'eq', keyValue: 'active' },
       { keyName: 'version', condition: 'lte', keyValue: "={{ $('Step lists to sign').item.json.baseVersion === null ? 2147483647 : $('Step lists to sign').item.json.version }}" },
-      { keyName: 'id', condition: 'neq', keyValue: '={{ $json.id }}' },
+      // Older: saved before this row. Of two approvals saved at the same moment, the one saved last stays active (IB-5).
+      { keyName: 'id', condition: 'lt', keyValue: '={{ $json.id }}' },
     ]);
   });
 
@@ -3080,11 +3094,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { error: 'The Data Table playwright_steps does not exist' }, {},
     ];
     // next: one more than the highest version any row of the name has (an active row without steps counts too).
-    const found = { name: 'erp', found: true, version: 3, steps: JSON.stringify(doc), signature: '', approvedBy: '', names: ['erp', 'other<b>'], next: 10, values: [] };
+    // id: the row's, for marking the others superseded; active: how many active rows with steps the name has (IB-5).
+    const found = { name: 'erp', found: true, id: 2, active: 2, version: 3, steps: JSON.stringify(doc), signature: '', approvedBy: '', names: ['erp', 'other<b>'], next: 10, values: [] };
     expect(changePath('erp', rows).bot).toEqual(found);
     expect(changePath('  erp ', rows).bot).toEqual(found);
     // Exactly the name: another casing is another bot.
-    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, version: null, steps: '', signature: '', approvedBy: '', names: ['erp', 'other<b>'], next: 1, values: [] });
+    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, id: null, active: 0, version: null, steps: '', signature: '', approvedBy: '', names: ['erp', 'other<b>'], next: 1, values: [] });
     // A rejected or superseded row is not a running version, but its number is used: the next attempt takes the one after
     // the highest of them, so the table never holds two rows of one name and version.
     const used: IDataObject[] = [
@@ -3095,7 +3110,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // A row whose steps are not JSON is shown as it is: Import steps then says what is wrong with it.
     expect(changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: '{broken', status: 'active' }]).bot).toMatchObject({ found: true, steps: '{broken' });
     // No row (the table was made first: there is never an error item to read).
-    expect(changePath('erp', []).bot).toEqual({ name: 'erp', found: false, version: null, steps: '', signature: '', approvedBy: '', names: [], next: 1, values: [] });
+    expect(changePath('erp', []).bot).toEqual({ name: 'erp', found: false, id: null, active: 0, version: null, steps: '', signature: '', approvedBy: '', names: [], next: 1, values: [] });
     // The row's signature and approver come along for Sign steps' check, as the table holds them (never shown on a page).
     expect(changePath('erp', [{ id: 2, name: 'erp', version: 3, steps: '{}', signature: 'ab12', approvedBy: 'approver@example.com', status: 'active' }]).bot)
       .toMatchObject({ found: true, signature: 'ab12', approvedBy: 'approver@example.com' });
@@ -3325,11 +3340,15 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const matches = (row: IDataObject) => supersede.every((c) => {
       const want = typeof c.keyValue === 'string' && c.keyValue.startsWith('=') ? evaluate(c.keyValue, { $json: newRow, $: () => ({ item: { json: lists[0] } }) }) : c.keyValue;
       const have = row[c.keyName];
-      return c.condition === 'eq' ? have === want : c.condition === 'neq' ? have !== want : Number(have) <= Number(want);
+      return c.condition === 'eq' ? have === want : c.condition === 'neq' ? have !== want : c.condition === 'lt' ? Number(have) < Number(want) : Number(have) <= Number(want);
     });
     expect(matches(oldRow)).toBe(true);
     expect(matches(newRow)).toBe(false);
     expect(matches({ ...oldRow, id: 3, name: 'other' })).toBe(false);
+    // Another approval of the same version saved just before this one is superseded by it; one saved just after it is
+    // not (its own supersede marks this one): of two approvals at the same moment, the last saved stays active (IB-5).
+    expect(matches({ ...newRow, id: 7 })).toBe(true);
+    expect(matches({ ...newRow, id: 9 })).toBe(false);
     // The last page gives no workflow file: the bot's workflow exists already.
     const fileCond = (byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
     const withReview = { ...again.after, [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[{ json: { status: 'active' } }], []] };
@@ -3454,6 +3473,107 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const last = render(completion('Imported').completionMessage, { $: nodesRan({ ...fresh, 'Import steps': [[{ json: { drafts: [], report: { steps: 1, items: [] } } }], [next()]], [REVIEW]: [[{ json: {} }]] }) });
     expect(last).toContain('Nothing was signed: the review page was not answered in time.');
     expect(last).not.toContain('Rejected');
+  });
+
+  it('a bot whose approved version does not fit this form: before any step is shown, the person says why, and only a new key or a changed row goes on (IB-4)', async () => {
+    const KEY = 'k'.repeat(32);
+    const doc = { startUrl: `${SITE.url}/list`, name: 'feed', version: 4, steps: [{ intent: 'Open the list', goto: `${SITE.url}/list` }] };
+    const row = (key: string, siteLoginId?: string): IDataObject => ({
+      id: 9, name: 'feed', version: 4, steps: JSON.stringify(doc), signature: signScript(doc, key, { approvedBy: APPROVER, ...(siteLoginId ? { siteLoginId } : {}) }).signature,
+      approvedBy: APPROVER, status: 'active',
+    });
+    const SHOP = { id: 'site-a', name: 'Shop <login>' };
+    const BACK = 'This bot was approved on another import form: take me back';
+    const AGAIN = 'I changed the signing key or the row was changed: show me the steps to read and sign again';
+    const cond = (node: string) => (byName(t, node).parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    /** The change path up to Sign steps' check before the change page: The bot to change, The approved version, Sign steps. */
+    const before = async (r: IDataObject, key: string, siteLogin?: { id: string; name: string }) => {
+      const { ran } = changePath('feed', [r]);
+      const { 'Import steps': _i, [RUNNING]: _r, ...after } = await checkBeforeReview({ ...ran, 'Import steps': [[], []] }, key, siteLogin);
+      return after;
+    };
+    const fitsForm = async (r: IDataObject) => evaluate(cond('Fits this form?'), { $json: (await before(r, KEY, SHOP))['Sign steps'][0][0].json });
+    // Sign steps checks the version that runs now before the change page (Import steps has not run), and again before
+    // the review page: Change page next? sends the first to Fits this form? and the second to the review page.
+    const fits = await before(row(KEY, SHOP.id), KEY, SHOP);
+    expect(evaluate(cond('Change page next?'), { $: nodesRan(fits) })).toBe(true);
+    expect(evaluate(cond('Change page next?'), { $: nodesRan({ ...fits, 'Import steps': [[], []] }) })).toBe(false);
+    expect(await fitsForm(row(KEY, SHOP.id))).toBe(true);
+    // Another Site Login, another key, a row changed in the table: the question, not the steps.
+    const edited = { ...row(KEY, SHOP.id), steps: JSON.stringify({ ...doc, steps: [{ intent: 'Open the list', goto: `${SITE.url}/other` }] }) };
+    for (const r of [row(KEY, 'site-b'), row('o'.repeat(32), SHOP.id), edited]) expect(await fitsForm(r)).toBe(false);
+    // No signature, or not checked (no key on Sign steps): on to the change page, as before; its review page warns then.
+    expect([{ approvedVersion: { version: 4, desktop: false, signatureFits: null } }, { approvedVersion: null }, {}].map(($json) => evaluate(cond('Fits this form?'), { $json }))).toEqual([true, true, true]);
+    // The question names what the form cannot tell apart and shows no step: two answers, none chosen, one required.
+    const misfit = await before(row(KEY, 'site-b'), KEY, SHOP);
+    const page = byName(t, 'Approved on another form?');
+    expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, resumeAmount: 1, resumeUnit: 'hours', options: { buttonLabel: 'Next' } } });
+    expect(render(String((page.parameters.options as IDataObject).formTitle), { $: nodesRan(misfit) })).toBe('Before you change feed');
+    const asked = jsonFormFields(String(page.parameters.jsonOutput), { $: nodesRan(misfit) });
+    expect(asked).toEqual([
+      {
+        fieldType: 'html',
+        html: '<p><strong>⚠ feed version 4 does not fit this form: it was signed for another Site Login than "Shop &lt;login&gt;", or with another signing key, or its row was changed after it was approved. This form cannot tell which.</strong></p>'
+          + '<p>A bot is changed and signed again on the import form that approved it. Signed here, a bot of another Site Login runs only with the Site Login "Shop &lt;login&gt;", and its workflow stops working. Its steps are shown only after you answer.</p>',
+      },
+      { fieldLabel: 'Which is it?', fieldName: 'answer', fieldType: 'radio', fieldOptions: { values: [{ option: BACK }, { option: AGAIN }] }, requiredField: true },
+    ]);
+    expect(JSON.stringify(asked)).not.toContain('/list');
+    for (const secret of [KEY, String(row(KEY, 'site-b').signature), 'site-a', 'site-b']) expect(JSON.stringify(asked)).not.toContain(secret);
+    // Desktop steps bind no Site Login: the question leaves it out.
+    const desk = { ...misfit, 'Sign steps': [[{ json: { checkOnly: true, siteLogin: SHOP.name, approvedVersion: { version: 4, desktop: true, signatureFits: false } } }]] };
+    expect(String(jsonFormFields(String(page.parameters.jsonOutput), { $: nodesRan(desk) })[0].html))
+      .toBe('<p><strong>⚠ feed version 4 does not fit this form: it was signed with another signing key, or its row was changed after it was approved. This form cannot tell which.</strong></p><p>A bot is changed and signed again on the import form that approved it. Its steps are shown only after you answer.</p>');
+    // Only that one answer goes on to the change page (and from there to today's review page and its warning).
+    const goesOn = (answer?: unknown) => evaluate(cond('Sign it again here?'), { $json: answer === undefined ? {} : { answer } });
+    expect([AGAIN, BACK, undefined, '', 'show me the steps to read and sign again', `${AGAIN} `, [AGAIN]].map(goesOn)).toEqual([true, false, false, false, false, false, false]);
+    // The other answer, or none in time: nothing is shown, imported or signed, and the page says where to go.
+    const end = completion('Change it on its own form');
+    expect(end).toMatchObject({ operation: 'completion', respondWith: 'text', completionTitle: 'Change it on its own form' });
+    const say = (answer?: string) => render(end.completionMessage, { $: nodesRan({ ...misfit, 'Approved on another form?': [[{ json: answer === undefined ? {} : { answer } }]] }) });
+    expect(say(BACK)).toBe('Nothing was shown, imported or signed: feed version 4 keeps running.\nChange it on the import form that approved it: the About note of the bot\'s workflow in n8n names that form, in the line To change the steps or sign them again. This form cannot list the other import forms.');
+    expect(say()).toBe('This page was not answered in time.\nNothing was shown, imported or signed: feed version 4 keeps running. Open the form again, leave Bot file empty and type the bot\'s name.');
+    // The question cannot be skipped by an address: the first page refuses any field value in its address, so the
+    // question's answer cannot be pre-set either, and nothing reaches the change page but the If on its answer.
+    const plain = (query: unknown) => evaluate(cond('Plain address?'), { $json: { formQueryParameters: query } });
+    expect([{ answer: AGAIN }, { answer: BACK }].map(plain)).toEqual([false, false]);
+    const into = (node: string) => Object.entries(t.connections).flatMap(([from, byType]) => (byType.main ?? []).flatMap((out, index) => out.filter((c) => c.node === node).map(() => [from, index])));
+    expect(into('Change or sign again')).toEqual([['Page answered?', 0], ['Fits this form?', 0], ['Sign it again here?', 0]]);
+  });
+
+  it('two active rows of one name (IB-5): The bot to change takes the one runs use, the others are marked superseded before the change page, and the page says so', () => {
+    const doc = (to: string) => JSON.stringify({ startUrl: `${SITE.url}/a`, name: 'erp', version: 7, steps: [{ intent: 'Type the To date', fill: { field: { label: 'To' }, value: to } }] });
+    // As n8n's Data Table gives them (by id): version 6, then two of version 7 saved at the same moment.
+    const rows: IDataObject[] = [
+      { id: 1, name: 'erp', version: 5, steps: doc('2026-01-01'), status: 'superseded' },
+      { id: 2, name: 'erp', version: 6, steps: doc('2026-06-30'), status: 'active' },
+      { id: 3, name: 'erp', version: 7, steps: doc('2026-09-15'), status: 'active' },
+      { id: 4, name: 'erp', version: 7, steps: doc('2026-09-30'), status: 'active' },
+      { id: 5, name: 'other', version: 7, steps: doc('2026-09-30'), status: 'active' },
+    ];
+    // Get active steps reads the highest version, and of two of one version the first saved (n8n orders ties by id):
+    // The bot to change takes the same row.
+    const { $, bot } = changePath('erp', rows);
+    expect(bot).toMatchObject({ found: true, id: 3, active: 3, version: 7, steps: doc('2026-09-15'), next: 8 });
+    const tidy = byName(t, 'Supersede older active rows');
+    expect(tidy).toMatchObject({ type: DATA_TABLE, typeVersion: 1.1, alwaysOutputData: true, executeOnce: true });
+    expect(table(tidy)).toMatchObject({ resource: 'row', operation: 'update', dataTableId: { mode: 'name', value: STEPS_TABLE }, matchType: 'allConditions', columns: { value: { status: 'superseded' } } });
+    const conditions = table(tidy).filters!.conditions;
+    expect(conditions.map((c) => [c.keyName, c.condition])).toEqual([['name', 'eq'], ['status', 'eq'], ['version', 'lte'], ['id', 'neq']]);
+    const matches = (r: IDataObject) => conditions.every((c) => {
+      const want = typeof c.keyValue === 'string' && c.keyValue.startsWith('=') ? evaluate(c.keyValue, { $ }) : c.keyValue;
+      const have = r[c.keyName];
+      return c.condition === 'eq' ? have === want : c.condition === 'neq' ? have !== want : Number(have) <= Number(want);
+    });
+    expect(rows.filter(matches).map((r) => r.id)).toEqual([2, 4]);
+    // One active row: nothing matches, and the run goes on (Always Output Data).
+    const one = changePath('erp', rows.filter((r) => r.id !== 2 && r.id !== 4));
+    expect(one.bot).toMatchObject({ id: 3, active: 1 });
+    // The change page says what it met, quietly, after the steps it shows; with one active row it says nothing.
+    const changePage = (scope: ReturnType<typeof changePath>) => String(jsonFormFields(String(byName(t, 'Change or sign again').parameters.jsonOutput), { $: scope.$ })[0].html);
+    expect(changePage(changePath('erp', rows))).toContain('</pre><p><em>The steps table held 3 active rows of this name, as when two approvals are saved at the same moment. The one runs use is kept (version 7, shown here); the others are now marked superseded.</em></p>');
+    expect(changePage(changePath('erp', rows.filter((r) => r.id !== 2)))).toContain('held 2 active rows of this name, as when two approvals are saved at the same moment. The one runs use is kept (version 7, shown here); the other is now marked superseded.');
+    expect(changePage(one)).not.toContain('active rows');
   });
 
   it('the write ticks start from the approved version\'s marks only when its signature fits; otherwise, and for a changed step, from the rule (IW-8)', async () => {
