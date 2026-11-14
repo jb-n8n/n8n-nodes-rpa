@@ -603,3 +603,16 @@ const IMPORTED_SECRETS =
       ESCAPE_HTML_QUOTED
     )
     : '';
+
+// Text from a run, for an email: &, < and > become look-alike characters, a backslash before n a full-width one, a line
+// break a space (unless lines), and each address gets a zero-width space after :// and each dot, so mail programs do
+// not make a link of it (file names such as report.pdf are left alone). Template 3.
+const LOOKALIKE =
+  (s, lines) =>
+    String(s ?? '').replace(
+      lines ? /[&<>]|\\(?=n)/g : /[&<>\r\n\u2028\u2029]|\\(?=n)/g,
+      (c) => ({ '&': '\uff06', '<': '\u2039', '>': '\u203a', '\\': '\uff3c' })[c] ?? ' '
+    ).replace(
+      /\b[a-z][a-z0-9+.-]*:\/\/[^\s\u2039\u203a]*|\b(?:[a-z0-9-]+\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\b)[a-z]{2,}\b[^\s\u2039\u203a]*/gi,
+      (u) => u.split('://').join(':\u200b//').split('.').join('.\u200b')
+    );
