@@ -88,7 +88,8 @@ first, before anything reads or writes them.
 - Before the review page, **Sign steps** runs with **Check Only** on (on the change path it has already run so once,
   before the change page): it signs nothing. It gives the name of the
   RPA Site Login it signs for, and after **Change or sign again** it checks the approved version's signature with its
-  own signing key and Site Login, as a run checks it. **Checked?** and **Change page next?** send that to the review page. The page's opening
+  own signing key and Site Login, and that the row's name and version are the ones its steps were signed with, as a run
+  checks them. **Checked?** and **Change page next?** send that to the review page. The page's opening
   lines name the Site Login (desktop steps are signed for the app they start, without one). When the approved version
   does not fit, a warning at the top says so: it was signed for another Site Login than this form's (browser steps),
   or with another signing key, or its row was changed after it was approved. The page cannot tell which, so it says to
