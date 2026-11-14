@@ -426,9 +426,10 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     const first = failed[0];
     const what = `${first.code ? `${first.code}: ` : ''}${shownMessage(mask(first.reason))}`;
     const message = outcomes.length === 1 ? what : NONE_ADOPTED(outcomes.length, `${first.draft.name}: ${what}`);
-    const error = new NodeOperationError(node, message, {
-      itemIndex: i, description: first.code ? `${first.code}: ${first.guidance ?? guidanceFor(first.code, first.reason)}` : 'No step list was replayed. The reasons are in details.drafts.',
-    });
+    // No description when the message itself says what to do (guidanceFor gives '').
+    const guidance = first.code ? first.guidance ?? guidanceFor(first.code, first.reason) : '';
+    const description = first.code ? (guidance ? `${first.code}: ${guidance}` : undefined) : 'No step list was replayed. The reasons are in details.drafts.';
+    const error = new NodeOperationError(node, message, { itemIndex: i, ...(description ? { description } : {}) });
     error.message = message;
     Object.assign(error.context, { code: first.code ?? null, name: p.name });
     const item: INodeExecutionData = {

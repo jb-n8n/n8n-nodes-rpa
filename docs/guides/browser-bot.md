@@ -91,7 +91,7 @@ already (the command says so). Run the command again at any time: it reuses what
 asks `Update this form to this version? (y/N)`. `y` updates it in place and keeps its address, approvers and
 credentials. Anything else changed by hand in it is lost, and the question names what. The signing key stays in n8n,
 and n8n does not show it again. The `Signing key:` line says how to keep a copy: you need one only to move signed bots
-to another n8n, so otherwise skip it. The command's other options are in step 2 of the
+to another n8n or for a lost n8n, so most people skip it. The command's other options are in step 2 of the
 [desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command), with the way for an n8n where you cannot run a
 command (an API key).
 
@@ -157,11 +157,16 @@ There are two ways on:
   steps type, choose or open. The import runs the changed steps once. When a control is still not there, its page
   names what it shows instead, and the steps after it that act on the same page are checked too, without acting:
   one replay names every renamed field of a form. The sandbox's three labels are on three pages (each click opens
-  the next), so each replay names the one on the page it reached; change it and choose **Review** again.
+  the next), so each replay names the one on the page it reached and says to change the step's control name to one
+  the page shows; change it and choose **Review** again. A step's description is your own text and is not rewritten:
+  `Click Line Item Report` stays as it is until you change its `intent` in the same paste. The review page shows it
+  beside what the step does (grey, or red when it quotes a value the step does not hold); what runs is the step.
 - **Let it repair itself**, with a chat model: [Part 2](#part-2-let-it-repair-itself).
 
-[Errors](../reference/errors.md#a-control-that-is-not-there) says what the list holds. Set **Report screen** back to
-**Baseline** afterwards.
+[Errors](../reference/errors.md#a-control-that-is-not-there) says what the list holds. The bot you approved now
+expects the renamed labels, so leave **Report screen** on **Renamed labels** while you use it. To try it again, set
+**Report screen** back to **Baseline**: the bot fails the same way, and the message lists the old names to change
+back to.
 
 **A bot that reads rows.** `docs/samples/sandbox-rows.steps.json` signs in and reads the sample site's notices. Import
 it as in step 4, with the name `sandbox-rows`. Run its workflow as in step 5.

@@ -1,6 +1,6 @@
 // Draft mode. Reachable only through adoptDraft: runTask never reads a draft flag, TaskInput has none, and
 // this module is not exported from the package. Nothing a caller passes to runTask can turn it on.
-import { IMPORT_EMPTY, IMPORT_REFUSES_WRITES } from '../messages.js';
+import { IMPORT_EMPTY, IMPORT_REFUSES_WRITES, importStepMessage } from '../messages.js';
 import { noWritePolicy } from '../policy/derive.js';
 import { flattenSteps } from '../policy/validate.js';
 import { parseScript } from '../steps/parse.js';
@@ -22,8 +22,8 @@ export const draftWrites = (steps: Script['steps']) =>
  * then runs as an ordinary task whose trust is a first run's (unsigned, writes allowed: the sign-in is the only one
  * left) under the no-write policy, so every session (script, agent, prove) is no-write and the Site Login rules still
  * decide where the password is typed. A control not found also has the later steps on its page checked, without acting
- * (reportEveryMissing). Rows, files and captures are removed from a success: nothing from an adoption run is delivered.
- * Never throws.
+ * (reportEveryMissing), and its message says to change the step's control name instead of Find by (importStepMessage).
+ * Rows, files and captures are removed from a success: nothing from an adoption run is delivered. Never throws.
  */
 export async function runDraft(input: DraftTaskInput): Promise<TaskResult> {
   const t0 = Date.now();
@@ -53,5 +53,6 @@ export async function runDraft(input: DraftTaskInput): Promise<TaskResult> {
     reportEveryMissing: true,
   };
   const r = await runTask(task);
-  return r.ok ? { ...r, rows: [], files: [], outputs: [] } : r;
+  // A control not found: the advice is for the person on the form (the step's own failure, which self-repair reads, is kept).
+  return r.ok ? { ...r, rows: [], files: [], outputs: [] } : { ...r, message: importStepMessage(r.message) };
 }

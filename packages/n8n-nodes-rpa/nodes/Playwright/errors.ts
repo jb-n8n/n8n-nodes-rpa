@@ -39,6 +39,13 @@ export const LOGIN_PAGE_GUIDANCE =
  */
 export const writeMarkGuidance = (step?: string): string =>
   `The Windows machine protects the button or key that ${step ? `step ${step}` : 'this step'} uses, and the step was not ticked as one that saves or sends when the bot was approved. If it should save or send: open the import form, leave Bot file empty, type the bot's name, choose Sign the approved steps again, unchanged, and tick ${step ? `step ${step}` : 'that step'} under "Which of these steps save, send or submit?". If it should not, change the step.`;
+/**
+ * policy_violation whose message already says what to do, so no guidance follows it (W6-13): a value of the RPA Secret
+ * Variables credential that its May Be Typed Into does not allow here (the engine's secretHostNotListed and
+ * secretAppNotListed), and an app the desktop runner's policy does not allow (runnerAppNotAllowed). The words are the
+ * only signal: the code is shared by every refusal; description.test.ts pins them to those builders.
+ */
+export const SAYS_WHAT_TO_DO = ['May Be Typed Into does not list', 'the desktop runner is not allowed to start '];
 /** site_down because the browser could not reach the site's address: a name not found, a refused connection, a certificate. */
 export const SITE_ADDRESS_GUIDANCE =
   'The browser could not reach the site at its address; the message says what it met. Check the address the steps open (and the start site), and that the site is up, then run again.';
@@ -59,7 +66,8 @@ export function failedOnCode(code: ErrorCode, message: string): boolean {
 
 /**
  * The guidance for a failure: by its code, and where the message names the cause (a one-time code, an unlisted login
- * page, a password changed earlier in the execution), for that cause.
+ * page, a password changed earlier in the execution), for that cause. Empty when the message itself says what to do
+ * (SAYS_WHAT_TO_DO): nothing is appended after it.
  */
 export function guidanceFor(code: ErrorCode, message: string): string {
   if (code === 'auth_blocked' && message.includes('one-time code workflow')) return CODE_WORKFLOW_GUIDANCE;
@@ -67,6 +75,7 @@ export function guidanceFor(code: ErrorCode, message: string): string {
   if (code === 'policy_violation' && message.includes('Pages Where the Password May Be Typed')) return LOGIN_PAGE_GUIDANCE;
   if (code === 'policy_violation' && message.includes(' did not take the value ')) return VALUE_NOT_TAKEN_GUIDANCE;
   if (code === 'policy_violation' && message.includes('needs write: true')) return writeMarkGuidance(/\bStep (\d+)\b/.exec(message)?.[1]);
+  if (code === 'policy_violation' && SAYS_WHAT_TO_DO.some((words) => message.includes(words))) return '';
   if (code === 'site_down' && /net::ERR_(NAME_NOT_RESOLVED|CONNECTION_REFUSED|CERT_|SSL_)/.test(message)) return SITE_ADDRESS_GUIDANCE;
   if (code === 'locked_out' && message.includes('was changed earlier in this execution')) return PASSWORD_CHANGED_GUIDANCE;
   return GUIDANCE[code];
@@ -109,7 +118,8 @@ export interface FailureDetails extends IDataObject {
   /**
    * What a person should do (guidanceFor): the node error's description without its code. On the item too, because a
    * workflow that sends failures to the error output (as the generated ones do) never shows that description. Fixed
-   * text chosen by the code and the masked message: it holds nothing from the run.
+   * text chosen by the code and the masked message: it holds nothing from the run. Empty when the message itself says
+   * what to do.
    */
   guidance: string;
   /** Run Steps with a Site Login: the user name it signs in with (never the password or a code). */
@@ -124,7 +134,7 @@ export interface FailureDetails extends IDataObject {
 /** A failed run as a NodeOperationError: message `<code>: <message>`, its guidance (guidanceFor) as description. */
 export function stepsRunError(node: INode, d: FailureDetails, itemIndex: number): NodeOperationError {
   const message = `${d.code}: ${d.message}`;
-  const error = new NodeOperationError(node, message, { description: `${d.code}: ${d.guidance}`, itemIndex });
+  const error = new NodeOperationError(node, message, { ...(d.guidance ? { description: `${d.code}: ${d.guidance}` } : {}), itemIndex });
   error.message = message;
   Object.assign(error.context, {
     code: d.code, name: d.name, version: d.version, hash: d.hash, lane: d.lane, stepIntent: d.stepIntent, traceRef: d.traceRef, submitted: d.submitted,

@@ -7,7 +7,7 @@ import {
   NodeHelpers, Workflow, type ICredentialDataDecryptedObject, type IDataObject, type INode, type INodeCredentialDescription, type INodeParameters, type INodeTypeDescription, type INodeTypes,
 } from 'n8n-workflow';
 import { CREDENTIALS, HIDDEN_BY_RUNS_ON, type RunsOn } from '../nodes/Playwright/config.js';
-import { RUNS_ON_PROPERTY } from '../nodes/Playwright/description/runSteps.js';
+import { RUNS_ON_PROPERTY, RUNS_ON_PROPERTY_V2 } from '../nodes/Playwright/description/runSteps.js';
 import { buildWorkflow, type WorkflowJson } from '../nodes/Playwright/import/workflow.js';
 import { RPA_NODE_TYPE } from '../nodes/Playwright/node-type.js';
 import { executeQuickOp, type QuickOp } from '../nodes/Playwright/operations/quick.js';
@@ -75,6 +75,9 @@ describe('Runs On: the field', () => {
       hint: 'Choosing A browser or A Windows desktop app removes a credential whose slot it hides',
       displayOptions: { show: { operation: ['runSteps', 'importSteps'], '@version': [1] } },
     });
+    // A new (version 2) node: the hint reads well before anything is chosen (W6-12); version 1 keeps its own.
+    expect(RUNS_ON_PROPERTY_V2.hint).toBe('The node shows only the credentials this choice uses. Changing it later removes a credential from a slot it hides');
+    expect(RUNS_ON_PROPERTY_V2).toMatchObject({ name: 'runsOn', default: 'browser' });
   });
 
   it('shows these slots for each operation and choice', () => {

@@ -218,8 +218,11 @@ example with n8n's encryption key), every signed row stops: Run Steps fails `scr
 same happens when workflows move to another n8n, because the Site Login's credential ID changes.
 
 To sign the step lists again with the new key:
-1. Make a new key: run `npx n8n-nodes-rpa setup --replace-signing-key` at a terminal and type `REPLACE` when it
-   asks. It replaces the key in the **RPA Step Signing** credential and shows the new one once. By hand instead,
+1. Make a new key: run the setup command again with `--replace-signing-key`, the way you ran it first, and type
+   `REPLACE` when it asks. In the compose stack that needs no API key:
+   `docker compose exec n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --replace-signing-key`
+   ([desktop bot guide](../guides/desktop-bot.md#2-set-up-n8n-with-one-command)). With an API key, at a terminal:
+   `npx n8n-nodes-rpa setup --replace-signing-key`. It replaces the key in the **RPA Step Signing** credential and shows the new one once. By hand instead,
    create the credential with a new key of 32 or more random characters, and select it on **Sign steps** in template
    5 (and template 3) and on every **Run steps** node.
 2. For each bot, open the **Import a bot** form, leave **Bot file** empty and type the bot's name. The next page

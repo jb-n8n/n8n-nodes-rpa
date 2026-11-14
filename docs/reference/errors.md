@@ -13,7 +13,8 @@ error output as an item with three fields (n8n sends an item to the error output
 - `details`: everything else: `code`, `message`, `name`, `version`, `lane`, `hash`, `stepIntent`, `durationMs`,
   `llmTokens` (chat model tokens the run used), `submitted` (`true` once a submit was sent), `log` (the steps that
   finished), `traceRef` (the binary field that holds the scrubbed trace) and `guidance`: what to do, the same text as
-  the error's description in n8n, which n8n does not show for an item on the error output. With an RPA Site Login,
+  the error's description in n8n, which n8n does not show for an item on the error output. It is empty when the
+  message itself says what to do (a secret not allowed where it would be typed, an app the runner may not start). With an RPA Site Login,
   Run Steps adds `account`: the user name of that Site Login, also when the run stopped before it signed in, never
   the password or a code
 
@@ -69,8 +70,8 @@ The messages you meet most, word for word:
 | Not http(s) | `policy_violation`: `URL must start with http:// or https:// (got "file:").` |
 | Private address | `policy_violation`: `Blocked: intranet.example resolves to a private network address. Turn on Options → Allow Private Network if this site is on your own network.` |
 | Site that is not allowed | `policy_violation`: `Blocked: the page tried to open cdn.other.com, which is not allowed. This run only visits example.com. Add it under Options → Also Allow These Sites if this is expected.` |
-| A secret on a host not listed | `policy_violation`: `<step>: A value from the RPA Secret Variables credential may not be typed on erp.example.com: the credential's May Be Typed Into does not list it.` |
-| A desktop app not listed for the secrets | `policy_violation`: `The RPA Secret Variables credential's May Be Typed Into does not list ErpDemo.exe, so this run may not start it. Add ErpDemo.exe there, or remove the credential from this node.` |
+| A secret on a host not listed | `policy_violation`: `<step>: A value from the RPA Secret Variables credential may not be typed on erp.example.com: the credential's May Be Typed Into does not list it. List it there only if the value is meant for it.` No guidance follows it. |
+| A desktop app not listed for the secrets | `policy_violation`: `The RPA Secret Variables credential's May Be Typed Into does not list ErpDemo.exe, so this run may not start it. Add ErpDemo.exe there, or remove the credential from this node.` No guidance follows it. |
 | A blocked POST | `policy_violation`: `<step>: a blocked request was attempted during the run: POST <host/path>. If it only reads data, list it in the RPA Site Login under Requests That Only Read ...` |
 | Site not found | `site_down`: `The site sandbox:8080 could not be found: no site answers to that name. Check the address, and that the site is up. (browser: page.goto: net::ERR_NAME_NOT_RESOLVED at http://sandbox:8080/acme/login)`. A refused connection, a time-out and a certificate the browser does not accept are worded the same way, the browser's own text in brackets. The guidance says to check the address and that the site is up. |
 | A value the field does not take | `policy_violation`: `Step 2 (Type into From): the field "From" did not take the value "first of September": it does not fit that field, for example text in a date field (browser: locator.fill: Error: Malformed value)`. The page did not change, so it is not `drift_detected`; the guidance says to correct that value and approve the new version. |
@@ -87,7 +88,7 @@ The messages you meet most, word for word:
 | Runner certificate changed | `The desktop runner at ... presented a certificate with fingerprint ..., which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.` |
 | A protected button or key without its write mark | `policy_violation`: `Step 9 (Click Post): the target is a declared write control and needs write: true`, or `the key Enter could reach a declared write control of this run and needs write: true …`. The runner's policy protects that button (for example after **Allow this app…** in the recorder) and the step was not ticked as one that saves or sends when the bot was approved. The guidance says to sign the bot again on the import form and tick that step under "Which of these steps save, send or submit?", or to change the step. |
 | An empty run variable in a choose step | `Step 6 (Choose {{var.company_code}} in Company code): the run variable "company_code" is empty, so there is no item to choose: give it a value in Options → Variables of the RPA node`. Said before the step waits for the list. |
-| App not allowed | `policy_violation`: `the desktop runner is not allowed to start ErpDemo.exe. On the Windows machine, allow it: in the RPA Recorder choose "Allow this app…" after saving a recording of it, or as an administrator run: ...` |
+| App not allowed | `policy_violation`: `the desktop runner is not allowed to start ErpDemo.exe. On the Windows machine, allow it: in the RPA Recorder choose "Allow this app…" after saving a recording of it, or as an administrator run: ...` No guidance follows it. |
 | App not installed | `runner_unavailable`: `the desktop runner could not start ErpDemo.exe: it is not installed at the path the runner's policy names (allowedApps[].path). ...` |
 | Runner busy | `busy`: `the desktop runner is busy with another run` |
 | Missing variable | `missing input "<name>"`, followed by `(a secret goes in an RPA Secret Variables credential, any other value in Options → Variables)` |
@@ -123,8 +124,8 @@ is checked, because the click may lead to another page or open a menu. For examp
 
 ```
 Choose 1000 in Company: No element found for Form Label "Company" on http://sandbox:8080/sap(…)/bc/gui/sap/its/webgui
-after 30 s. The page shows these fields and lists: "Company Code", "From", "To". Check the spelling or try Find by:
-Role and Name. Steps 6, 7 and 8 were checked on this page too, without acting. Step 6 (Type into Date from) cannot
+after 30 s. The page shows these fields and lists: "Company Code", "From", "To". To go on, change the step's control
+name to one the page shows: with Change the steps as JSON on the import form, or in the file. Steps 6, 7 and 8 were checked on this page too, without acting. Step 6 (Type into Date from) cannot
 find Form Label "Date from" here either. The page shows these fields and lists: "From", "To", "Company Code". Step 8
 (Click Execute) cannot find Role and Name button "Execute" here either. The page shows these links and buttons: "Run",
 "Back". Step 9 was not checked: it comes after a step that can change the page.

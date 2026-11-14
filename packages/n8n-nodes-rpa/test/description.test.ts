@@ -11,7 +11,8 @@ import { INPUTS_EXPRESSION, nodeInputs, nodeOutputs, OUTPUTS_EXPRESSION } from '
 import { OPERATIONS, properties, SUBTITLE, URL_HINT } from '../nodes/Playwright/description/index.js';
 import { ALL_OPERATIONS, ID_PATTERN_OPTION, QUICK_OPERATIONS } from '../nodes/Playwright/description/options.js';
 import { STEPS_PLACEHOLDER, UNSIGNED_NOTICE } from '../nodes/Playwright/description/runSteps.js';
-import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, SAYS_WHAT_TO_DO, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
+import { runnerAppNotAllowed, secretAppNotListed, secretHostNotListed } from '../../engine/src/messages.js';
 import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut } from '../nodes/Playwright/execute.js';
 import { COMPILERS, quickFieldNames, type QuickOp } from '../nodes/Playwright/operations/quick.js';
 import { executeRunSteps, STEPS_EMPTY_NEEDS_REPAIR } from '../nodes/Playwright/operations/runSteps.js';
@@ -421,6 +422,16 @@ describe('wording and guidance', () => {
     expect(writeMarkGuidance('9')).toContain('tick step 9 under "Which of these steps save, send or submit?"');
     expect(guidanceFor('policy_violation', 'the key Enter could reach a declared write control of this run and needs write: true (only Tab, arrows, Home, End, PageUp, PageDown and Escape do not)')).toBe(writeMarkGuidance());
     expect(writeMarkGuidance()).not.toMatch(/[<>]|undefined/);
+    // W6-13: a message that already says what to do gets no guidance after it. Pinned to the engine's builders, the only
+    // place those words are made: each builder's text has one of the words, and the general guidance stays for the rest.
+    for (const said of [secretHostNotListed('sandbox:8080'), secretAppNotListed('ErpDemo.exe'), runnerAppNotAllowed('ErpDemo.exe')]) {
+      expect(SAYS_WHAT_TO_DO.some((w) => said.includes(w)), said).toBe(true);
+      expect(guidanceFor('policy_violation', `Type the PIN: ${said}`)).toBe('');
+    }
+    expect(secretHostNotListed('sandbox:8080')).toContain('List it there only if the value is meant for it.');
+    expect(secretAppNotListed('ErpDemo.exe')).toContain('Add ErpDemo.exe there, or remove the credential from this node.');
+    expect(runnerAppNotAllowed('ErpDemo.exe')).toContain('On the Windows machine, allow it');
+    expect(guidanceFor('login_failed', secretHostNotListed('a'))).toBe(GUIDANCE.login_failed);
     // errors.ts matches the engine's text by its words (the node never loads the engine to read a constant).
     expect(VALUE_NOT_TAKEN).toBe(' did not take the value ');
     expect(guidanceFor('locked_out', siteLoginLockedOut('example.com'))).toBe(GUIDANCE.locked_out);

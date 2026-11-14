@@ -91,6 +91,8 @@ export const RUNS_ON_PROPERTY: INodeProperties = {
 export const RUNS_ON_PROPERTY_V2: INodeProperties = {
   ...RUNS_ON_PROPERTY,
   default: RUNS_ON_DEFAULT_V2,
+  // Read first on a new node, before anything is chosen (W6-12): what the choice does, then what changing it costs.
+  hint: 'The node shows only the credentials this choice uses. Changing it later removes a credential from a slot it hides',
   displayOptions: { show: { operation: [...RUNS_ON_OPERATIONS], ...VERSION_2_ON } },
 };
 

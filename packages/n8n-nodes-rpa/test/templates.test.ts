@@ -1207,7 +1207,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   function reviewFields(scope: Record<string, unknown>) {
     const all = jsonFormFields(String(review.parameters.jsonOutput), scope);
     expect(all[0].fieldType).toBe('html');
-    expect(String(all[0].html)).toMatch(/<p>(Signs for the Site Login named "|Signs for no RPA Site Login|Desktop steps are signed)/);
+    expect(String(all[0].html)).toMatch(/<p>(Signs for the Site Login named "|These steps do not sign in, and are signed for the Site Login named "|Signs for no RPA Site Login|Desktop steps are signed)/);
     return all.slice(1);
   }
   /** The review page's opening lines (its first field). */
@@ -1221,7 +1221,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
         if (!outputs) throw new Error(`${name} has not run`);
         return outputs;
       };
-      return { isExecuted: outputs !== undefined, params: byName(t, name).parameters, first: (branch = 0) => ran_()[branch]?.[0], all: (branch = 0) => ran_()[branch] ?? [] };
+      // An earlier run of the node, as n8n gives it for first(branch, run) and all(branch, run): `<name>#<run>` when
+      // given, else the last run.
+      const of = (run?: number) => (run !== undefined && ran[`${name}#${run}`] ? ran[`${name}#${run}`] : ran_());
+      return { isExecuted: outputs !== undefined, params: byName(t, name).parameters, first: (branch = 0, run?: number) => of(run)[branch]?.[0], all: (branch = 0, run?: number) => of(run)[branch] ?? [] };
     };
   }
   const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
@@ -2599,7 +2602,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(compare(ran, edit((d) => { d.steps[3] = { intent: 'a', goto: '/b', fill: { selector: '#c', value: 'd' } } as typeof d.steps[0]; })))
       .toBe('feed: changed from the approved version 4: step 4: several fields.');
     expect(compare(ran, edit((d) => { for (const i of [2, 4, 6, 8, 10]) d.steps[i].goto = `/n${i}`; })))
-      .toBe('feed: changed from the approved version 4: step 3: address "/p3" → "/n2"; step 5: address "/p5" → "/n4"; step 7: address "/p7" → "/n6"; and more: steps 9, 11.');
+      .toBe('feed: changed from the approved version 4: step 3: address "/p3" → "/n2"; step 5: address "/p5" → "/n4"; step 7: address "/p7" → "/n6"; and more changed: steps 9, 11.');
     // The two lists are lined up first (IW-7): a step taken out or put in moves no later step. Removed steps by their old
     // number and description, added ones by their new number, changed ones old → new, a step moved as such.
     expect(compare(ran, edit((d) => { d.steps.push({ intent: 'Open more', goto: '/more' }); }))).toBe('feed: changed from the approved version 4: added: step 26. 26 steps now, 25 in the approved version.');
@@ -2612,7 +2615,33 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(compare(ran, edit((d) => { d.steps.splice(9, 0, { intent: 'Open more', goto: '/more' }, { intent: 'Open less', goto: '/less' }); })))
       .toBe('feed: changed from the approved version 4: added: steps 10, 11. 27 steps now, 25 in the approved version.');
     expect(compare(ran, edit((d) => { d.steps.splice(7, 0, ...d.steps.splice(2, 1)); })))
-      .toBe('feed: changed from the approved version 4: moved: step 3 is now step 8.');
+      .toBe('feed: changed from the approved version 4: moved: step 3 ("Open page 3") is now step 8.');
+    // B6-3: a step taken out, two swapped and one added. The step lined up as moved keeps its number (5 is now 5), so
+    // that move is not printed: the step it crossed is named instead, by its old number, its words and its new number.
+    expect(compare(ran, edit((d) => { const [to] = d.steps.splice(5, 1); d.steps.splice(3, 1, to); d.steps.splice(5, 0, { intent: 'Wait for the list', goto: '/wait' }); })))
+      .toBe('feed: changed from the approved version 4: removed: step 4 ("Open page 4"); added: step 6; moved: step 6 ("Open page 6") is now step 4.');
+    // W6-6: a step moved forward past others, and the last step replaced: the move is named, not read as a change.
+    expect(compare(ran, edit((d) => { d.steps.splice(10, 0, ...d.steps.splice(14, 1)); d.steps.splice(24, 1, { intent: 'Read the count', goto: '/count' }); })))
+      .toBe('feed: changed from the approved version 4: moved: step 15 ("Open page 15") is now step 11; step 25: description "Open page 25" → "Read the count", address "/p25" → "/count".');
+    // A step that moved and changed is a changed step, named with its new number and its values old → new.
+    expect(compare(ran, edit((d) => { d.steps.splice(10, 0, { ...d.steps.splice(14, 1)[0], goto: '/p15b' }); })))
+      .toBe('feed: changed from the approved version 4: step 15 (now step 11): address "/p15" → "/p15b".');
+    // Five moves, the fourth and fifth also changed: only steps that moved unchanged are in the moved part (the one list
+    // that may end in "and N more"); a changed step is always in the changed part with its values, never in a count.
+    const moving = [1, 3, 5, 7, 9];
+    const fiveMoves = (change: boolean) => edit((d) => {
+      const taken = moving.map((i) => d.steps[i]).map((x, k) => (change && k >= 3 ? { ...x, goto: `/x${moving[k] + 1}` } : x));
+      d.steps = d.steps.filter((_, i) => !moving.includes(i)).concat(taken);
+    });
+    expect(compare(ran, fiveMoves(true)))
+      .toBe('feed: changed from the approved version 4: moved: step 2 ("Open page 2") is now step 21, step 4 ("Open page 4") is now step 22, step 6 ("Open page 6") is now step 23; step 8 (now step 24): address "/p8" → "/x8"; step 10 (now step 25): address "/p10" → "/x10".');
+    expect(compare(ran, fiveMoves(false)))
+      .toBe('feed: changed from the approved version 4: moved: step 2 ("Open page 2") is now step 21, step 4 ("Open page 4") is now step 22, step 6 ("Open page 6") is now step 23, and 2 more.');
+    // A description that repeats never makes a move: the steps read as changed in place and removed.
+    const twice = { ...doc, steps: doc.steps.map((s, i) => (i === 2 || i === 12 ? { ...s, intent: 'Click OK' } : s)) };
+    const twiceRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(twice), status: 'active' }]).ran;
+    expect(compare(twiceRan, JSON.stringify({ ...twice, steps: twice.steps.map((s, i) => (i === 2 ? { ...s, goto: '/ok' } : s)).filter((_, i) => i !== 12) })))
+      .toBe('feed: changed from the approved version 4: removed: step 13 ("Click OK"); step 3: address "/p3" → "/ok". 24 steps now, 25 in the approved version.');
     // Changed and removed together: the changed step keeps its number, and a later one is named by both numbers.
     expect(compare(ran, edit((d) => { d.steps[4].goto = '/x'; d.steps.splice(9, 1); d.steps[14].goto = '/y'; })))
       .toBe('feed: changed from the approved version 4: removed: step 10 ("Open page 10"); step 5: address "/p5" → "/x"; step 16 (now step 15): address "/p16" → "/y". 24 steps now, 25 in the approved version.');
@@ -2631,7 +2660,25 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const big = { ...doc, steps: many('p', 501) };
     const bigRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(big), status: 'active' }]).ran;
     const capped = compare(bigRan, JSON.stringify({ ...big, steps: many('q', 501) }));
-    expect(capped).toMatch(/^feed: changed from the approved version 4: step 1: description "Open p 1" → "Open q 1", address "\/p1" → "\/q1"; step 2: .*; and more: steps 4, 5, .*, 23, …; compared step by step in place, because there are too many steps to line up: after a step added or taken out, every later step reads as changed\.$/);
+    expect(capped).toMatch(/^feed: changed from the approved version 4: step 1: description "Open p 1" → "Open q 1", address "\/p1" → "\/q1"; step 2: .*; and more: steps 4, 5, .*, 500, 501; compared step by step in place, because there are too many steps to line up: after a step added or taken out, every later step reads as changed\.$/);
+    // Every number is listed, never cut to a count or an ellipsis.
+    expect(capped).not.toContain('…');
+    for (let k = 4; k <= 501; k++) expect(capped).toContain(` ${k}${k === 501 ? ';' : ','}`);
+    // Each side is capped on its own too: 2,001 unmatched steps against one are compared in place, not lined up.
+    const lopsided = { ...doc, steps: many('p', 2001) };
+    const lopsidedRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(lopsided), status: 'active' }]).ran;
+    expect(compare(lopsidedRan, JSON.stringify({ ...lopsided, steps: many('q', 1) }))).toContain('; compared step by step in place, because there are too many steps to line up');
+    // Two documents of 5,000 steps each: in place, within 3 seconds.
+    const fiveThousand = { ...doc, steps: many('p', 5000) };
+    const fiveThousandRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(fiveThousand), status: 'active' }]).ran;
+    const bigStarted = Date.now();
+    expect(compare(fiveThousandRan, JSON.stringify({ ...fiveThousand, steps: many('q', 5000) }))).toMatch(/, 5000; compared step by step in place, because there are too many steps to line up: after a step added or taken out, every later step reads as changed\.$/);
+    expect(Date.now() - bigStarted).toBeLessThan(3000);
+    // Forty changed steps: three with their values, then every other number.
+    const sixty = { ...doc, steps: many('p', 60) };
+    const sixtyRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(sixty), status: 'active' }]).ran;
+    const forty = compare(sixtyRan, JSON.stringify({ ...sixty, steps: sixty.steps.map((x, k) => (k < 40 ? { ...x, goto: `/c${k + 1}` } : x)) }));
+    expect(forty).toBe(`feed: changed from the approved version 4: step 1: address "/p1" → "/c1"; step 2: address "/p2" → "/c2"; step 3: address "/p3" → "/c3"; and more changed: steps ${Array.from({ length: 37 }, (_, k) => k + 4).join(', ')}.`);
     // The same long bot with one step taken out: the steps around it are the same, so only the middle is lined up.
     expect(compare(bigRan, JSON.stringify({ ...big, steps: big.steps.filter((_, i) => i !== 250) })))
       .toBe('feed: changed from the approved version 4: removed: step 251 ("Open p 251"). 500 steps now, 501 in the approved version.');
@@ -2639,7 +2686,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const started = Date.now();
     const twoHundred = { ...doc, steps: many('p', 200) };
     const twoRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(twoHundred), status: 'active' }]).ran;
-    expect(compare(twoRan, JSON.stringify({ ...twoHundred, steps: many('q', 200) }))).toMatch(/^feed: changed from the approved version 4: step 1: .*; and more: steps 4, .*, 23, …\.$/);
+    expect(compare(twoRan, JSON.stringify({ ...twoHundred, steps: many('q', 200) }))).toMatch(/^feed: changed from the approved version 4: step 1: .*; and more changed: steps 4, .*, 199, 200\.$/);
     const fiveHundred = { ...doc, steps: many('p', 500) };
     const fiveRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(fiveHundred), status: 'active' }]).ran;
     expect(compare(fiveRan, JSON.stringify({ ...fiveHundred, steps: many('q', 500) }))).not.toContain('in place');
@@ -2800,12 +2847,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const { bot } = changePath('feed', [{ id: 1, name: 'feed', version: 2, steps: JSON.stringify(doc), status: 'active' }]);
     const v = (step: number, at: string, key: string, label: string, value: string, why = '') => ({ step, name: `value_${step}`, at, key, label, value, offered: why === '', why });
     const FIXED = 'not a fixed value: it is filled in when the bot runs';
+    // A run variable says where it IS changed: on the bot's workflow, not on this form (W6-5).
+    const VARIABLE = "a run variable, so it is not changed here: change it on the bot's workflow, in the RPA node's Options → Variables (a secret one in the RPA Secret Variables credential that node uses)";
     const CANNOT = 'a field cannot hold it as it is';
     expect(bot.values).toEqual([
       v(1, 'goto', 'goto', '1. Open: address', `${SITE.url}/list?x=1`),
       v(2, 'fill', 'value', '2. Type into User name: typed value', 'clerk'),
-      v(3, 'fill', 'value', '3. Type into Password: typed value', '{{var.pin}}', FIXED),
-      v(4, 'fill', 'value', '4. Type into the element matching #note ‹b›: typed value', 'Dear {{ var.name }}', FIXED),
+      v(3, 'fill', 'value', '3. Type into Password: typed value', '{{var.pin}}', VARIABLE),
+      v(4, 'fill', 'value', '4. Type into the element matching #note ‹b›: typed value', 'Dear {{ var.name }}', VARIABLE),
       v(5, 'select', 'value', '5. Choose in region: chosen option', 'EMEA'),
       v(6, 'select', 'value', '6. Choose in Tags: chosen option', 'a, b', 'several options'),
       v(7, 'fill', 'value', '7. Type into the textbox: typed value', '<b>bold</b>', CANNOT),
@@ -2857,7 +2906,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { fieldLabel: '3. Type into From: typed value', fieldName: 'value_3', fieldType: 'text', defaultValue: '2026-09-01', requiredField: false },
       { fieldLabel: '4. Type into To: typed value', fieldName: 'value_4', fieldType: 'text', defaultValue: '2026-09-15', requiredField: false },
       { fieldLabel: '5. Choose in Status: chosen option', fieldName: 'value_5', fieldType: 'text', defaultValue: 'Posted', requiredField: false },
-      { fieldType: 'html', html: '<p><em>7. Type into PIN: typed value &quot;{{var.pin}}&quot;: not a fixed value: it is filled in when the bot runs.</em></p>' },
+      { fieldType: 'html', html: '<p><em>7. Type into PIN: typed value &quot;{{var.pin}}&quot;: a run variable, so it is not changed here: change it on the bot&#39;s workflow, in the RPA node&#39;s Options → Variables (a secret one in the RPA Secret Variables credential that node uses).</em></p>' },
       // "$" comes back as written (the page writes it as $, so n8n's String.replace leaves it alone).
       { fieldLabel: '8. Type into Note: typed value', fieldName: 'value_8', fieldType: 'text', defaultValue: 'a $& b $1 & "c"', requiredField: false },
       { fieldType: 'hiddenField', fieldName: 'valuesPage', fieldValue: 'answered' },
@@ -2981,7 +3030,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // The page offers the recording's values; the password is a variable and has no field.
     const fields = valuesFields([row], String(old.name));
     expect(fields.filter((f) => f.fieldType === 'text').map((f) => f.fieldName)).toEqual(values.filter((v) => v.offered).map((v) => v.name));
-    expect(fields.some((f) => f.fieldType === 'html' && /typed value &quot;\{\{var\.password\}\}&quot;: not a fixed value/.test(String(f.html)))).toBe(true);
+    expect(fields.some((f) => f.fieldType === 'html' && /typed value &quot;\{\{var\.password\}\}&quot;: a run variable, so it is not changed here/.test(String(f.html)))).toBe(true);
     // Step 6: 2000 → 3000. The same import, comparison, review page and Sign steps as a pasted change.
     const r = valuesAnswered(ran, { [company.name]: '3000' });
     expect(r.line?.compared).toBe(`${String(old.name)}: changed from the approved version 1: step 6: description "Choose 2000 in Company code" → "Choose 3000 in Company code", chosen option "2000" → "3000".`);
@@ -3290,8 +3339,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
         ? `${name}: these are the steps of the stored version 1, whose signature does not fit this form (the warning says what that can mean).`
         : line.compared.replace('the approved version 1:', 'the stored version 1, whose signature does not fit this form:');
       expect(told).not.toMatch(/approved version|unchanged/);
-      // Desktop steps whose approved version marks writes: the line says that the marks are not compared (IW-8).
-      const marks = ' Which steps are writes is not compared: it is chosen again on this page.';
+      // Desktop steps whose approved version marks writes: the line says that the marks are not compared (IW-8). The
+      // same steps: the marks are what the reviewer ticks below (W6-8).
+      const marks = line.unchanged ? ' Which of them save, send or submit is what you tick below.' : ' Which steps are writes is not compared: it is chosen again on this page.';
       expect(all[0]).toEqual({
         fieldType: 'html',
         html: `<p><b>${escapeHtml(told + marks)}</b></p><p>Desktop steps are signed for the app they start, without a Site Login.</p>`
@@ -3321,7 +3371,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       return { title: render(completion('Imported').completionTitle, { $ }), text: render(completion('Imported').completionMessage, { $ }) };
     };
     // It says what happened to the bot, in those words: never "Imported: 17 steps.", never a report to look for.
-    expect(lastPage(again)).toEqual({ title: 'Change or sign again', text: `Signed again: ${String(old.name)} version 2, unchanged. Signed as writes: step 16 (Click Save).` });
+    // The page is titled by what happened (B6-10). Version 1 does not fit the new key, so its write marks are not read:
+    // the steps are unchanged, and the marks are the ones just ticked (W6-8).
+    expect(lastPage(again)).toEqual({ title: 'Signed again', text: `Signed again: ${String(old.name)} version 2, steps unchanged. Signed as writes: step 16 (Click Save).` });
     // Signed again with unchanged steps: a new approval, so the next version, and the steps as they were apart from it.
     expect(fresh).toMatchObject({ status: 'active', name: old.name, version: 2, approvedBy: APPROVER, writeLine: 'Signed as writes: step 16 (Click Save)' });
     expect({ ...JSON.parse(String(fresh.steps)), version: 1 }).toEqual(JSON.parse(String(old.steps)));
@@ -3413,8 +3465,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const fieldsOf = async (r: IDataObject, key: string, siteLogin?: { id: string; name: string }) => reviewFields({ $: nodesRan(await checked(r, key, siteLogin)) });
     const SHOP = { id: 'site-a', name: 'Shop <login>' };
     const UNCHANGED = '<p><b>feed: unchanged from the approved version 4.</b></p>';
-    // The name in quotes: n8n's default credential name, "RPA Site Login account", does not read doubled.
-    const NAMED = '<p>Signs for the Site Login named "<b>Shop &lt;login&gt;</b>". The workflow that runs the bot must use this Site Login.</p>';
+    // The name in quotes: n8n's default credential name, "RPA Site Login account", does not read doubled. These steps
+    // never sign in, and the signature binds the Site Login all the same (B6-6): the line says both.
+    const NAMED = '<p>These steps do not sign in, and are signed for the Site Login named "<b>Shop &lt;login&gt;</b>" all the same. The workflow that runs the bot must use this Site Login.</p>';
     // Signed with this key for this Site Login: the line names it, and nothing more is said.
     expect(await head(row(KEY, SHOP.id), KEY, SHOP)).toBe(UNCHANGED + NAMED);
     // Signed for another Site Login (the many-accounts one): the warning leads with what the person can check, this
@@ -3466,7 +3519,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const desktop = { ...fresh, 'Import steps': [[{ json: {} }], [next('desktop')]] };
     expect(reviewHead({ $: nodesRan(desktop) })).toBe('<p>Desktop steps are signed for the app they start, without a Site Login.</p>');
     expect(reviewHead({ $: nodesRan({ ...desktop, 'Import steps': [[{ json: {} }], [next(), next('desktop')]] }) }))
-      .toBe('<p>Signs for the Site Login named "<b>Shop &lt;login&gt;</b>". The workflow that runs the bot must use this Site Login. Desktop steps are signed for the app they start, without a Site Login.</p>');
+      .toBe('<p>These steps do not sign in, and are signed for the Site Login named "<b>Shop &lt;login&gt;</b>" all the same. The workflow that runs the bot must use this Site Login. Desktop steps are signed for the app they start, without a Site Login.</p>');
+    // Steps that sign in: the line says that they sign for it.
+    const signing = { json: { ...next().json, steps: { ...doc, version: 5, steps: [{ intent: 'Sign in', signIn: {} }, ...doc.steps] } } };
+    expect(reviewHead({ $: nodesRan({ ...fresh, 'Import steps': [[{ json: {} }], [signing]] }) }))
+      .toBe('<p>Signs for the Site Login named "<b>Shop &lt;login&gt;</b>". The workflow that runs the bot must use this Site Login.</p>');
 
     // The page was not answered: Sign steps' last run is its check, which the last page never counts as signed or rejected.
     const last = render(completion('Imported').completionMessage, { $: nodesRan({ ...fresh, 'Import steps': [[{ json: { drafts: [], report: { steps: 1, items: [] } } }], [next()]], [REVIEW]: [[{ json: {} }]] }) });
@@ -3628,6 +3685,23 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fits.ticks?.defaultValue).toBe('');
     expect(fits.more?.defaultValue).toBe('7');
     expect(fits.note).toMatch(/^<p><em>The ticks start as the approved version had them\. Ticked steps are/);
+    // W6-8: signed again with other ticks. The review page says the steps are unchanged and the marks are what is ticked
+    // below; the last page (Sign steps' first run is the check, its last the signing) names each mark added or removed
+    // against the approved version, by number and words, and never says unchanged then.
+    const head = String(jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan(fits.after) })[0].html);
+    expect(head).toMatch(new RegExp(`^<p><b>${String(old.name)}: the steps are unchanged from the approved version 1\\. Which of them save, send or submit is what you tick below\\.</b></p>`));
+    const signAgain = async (answer: IDataObject) => {
+      const r = await signAfterReview(fits.after, { ...answer, decision_0: 'Approve and sign' }, {}, false, signedIn(APPROVER), undefined, KEY);
+      expect(r.errors).toEqual([]);
+      const $ = nodesRan({ ...fits.after, [REVIEW]: [[{ json: { ...answer, decision_0: 'Approve and sign' } }]], 'Sign steps#0': fits.after['Sign steps'], 'Sign steps': [r.signed.map((json) => ({ json })), []] });
+      return { title: render(completion('Imported').completionTitle, { $ }), text: render(completion('Imported').completionMessage, { $ }) };
+    };
+    const intentOf = (n: number) => String((JSON.parse(String(old.steps)) as { steps: IDataObject[] }).steps[n - 1].intent);
+    expect(await signAgain({ writes_0: [], moreWrites_0: '7' })).toEqual({ title: 'Signed again', text: `Signed again: ${String(old.name)} version 2, unchanged. Signed as writes: step 7 (${intentOf(7)}).` });
+    expect((await signAgain({ writes_0: [RULE], moreWrites_0: '7' })).text)
+      .toBe(`Signed again: ${String(old.name)} version 2, steps unchanged; write marks changed from version 1: added step 16 (Click Save). Signed as writes: step 7 (${intentOf(7)}), step 16 (Click Save).`);
+    expect((await signAgain({ writes_0: [RULE], moreWrites_0: '' })).text)
+      .toBe(`Signed again: ${String(old.name)} version 2, steps unchanged; write marks changed from version 1: added step 16 (Click Save); removed step 7 (${intentOf(7)}). Signed as writes: step 16 (Click Save).`);
     // A step the person changed falls back to the rule (ticked); step 7, unchanged, keeps its mark.
     const doc = JSON.parse(String(old.steps)) as { steps: IDataObject[] };
     doc.steps[15] = { ...doc.steps[15], intent: 'Click Save now' };

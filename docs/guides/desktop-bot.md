@@ -85,7 +85,7 @@ command says so).
 If you made an RPA Desktop Runner credential in n8n already, answer `n` instead: the command picks it when your project
 has only that one, and names it. With several, add `--desktop-runner "<its name>"`. It never reads a credential's
 values. The signing key stays in n8n, which does not show it again. The `Signing key:` line says how to keep a copy:
-you need one only to move signed bots to another n8n, so otherwise skip it. Without a copy, a lost key means approving
+you need one only to move signed bots to another n8n or for a lost n8n, so most people skip it. Without a copy, a lost key means approving
 every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)).
 Run the command again at any time: it reuses only what your own project owns, and asks first about what it finds in
 another project. A form it made that differs from this version's template, for example after an upgrade, is listed by
@@ -189,4 +189,6 @@ scheduled run fails, choose an Error Workflow in the workflow's settings.
   buttons of Windows dialogs (the Save of a Save As dialog, OK, Yes) are not protected. To protect other buttons or keys, an administrator lists them in the
   policy ([Windows guide](../install/windows.md#8-allow-your-own-app)).
 - Change a value per run: map **Options → Variables** from an earlier node, such as a spreadsheet row.
+- Change the company code you ticked: it is a run variable, so set it in the RPA node's **Options → Variables**, not
+  on the import form's values page, which shows it without a field.
 - Who may hold the secret variables, and how approval works: [Security](../reference/security.md).

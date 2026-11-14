@@ -44,7 +44,7 @@ export const UNSIGNED_SECRET_FILL =
 export const UNSIGNED_SECRET_VARIABLE = 'Unsigned steps cannot type a secret variable. Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
 /** A value of the RPA Secret Variables credential would be typed on a host its May Be Typed Into does not list. */
 export const secretHostNotListed = (where: string) =>
-  `A value from the RPA Secret Variables credential may not be typed on ${where}: the credential's May Be Typed Into does not list it.`;
+  `A value from the RPA Secret Variables credential may not be typed on ${where}: the credential's May Be Typed Into does not list it. List it there only if the value is meant for it.`;
 /** A desktop run of an app the RPA Secret Variables credential's May Be Typed Into does not list: refused before the app starts. */
 export const secretAppNotListed = (app: string) =>
   `The RPA Secret Variables credential's May Be Typed Into does not list ${app}, so this run may not start it. Add ${app} there, or remove the credential from this node.`;
@@ -157,6 +157,15 @@ export const SIGNED_CONTROL_GONE =
 /** A step failure of signed steps: the Find-by advice of locatorNotFound replaced by SIGNED_CONTROL_GONE; anything else unchanged. */
 export const signedStepMessage = (message: string): string =>
   message.replace(/Check the spelling or try Find by: (?:Visible Text|Role and Name)\./, SIGNED_CONTROL_GONE);
+/**
+ * For the import form's replay (runDraft), in place of locatorSuggestion: the person on the form changes the step
+ * itself, as JSON or in the file, not a Find by field, using the names the message lists.
+ */
+export const IMPORT_CONTROL_GONE =
+  "To go on, change the step's control name to one the page shows: with Change the steps as JSON on the import form, or in the file.";
+/** A failure of the import's replay: the Find-by advice of locatorNotFound replaced by IMPORT_CONTROL_GONE; anything else unchanged. */
+export const importStepMessage = (message: string): string =>
+  message.replace(/Check the spelling or try Find by: (?:Visible Text|Role and Name)\./, IMPORT_CONTROL_GONE);
 export const locatorNotFound = (desc: string, url: string, seconds: number): string =>
   `No element found for ${desc} on ${url} after ${seconds} s. ${locatorSuggestion(desc)}`;
 /**

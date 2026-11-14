@@ -51,12 +51,17 @@ first, before anything reads or writes them.
   page its first line: unchanged,
   or which steps differ and how. The two step lists are lined up first, so a step taken out or put in moves no later
   step: steps removed by their old number and description (`removed: step 17 ("Click Vendor Row 1")`), steps added
-  by their new number (`added: step 19`), a step moved (`moved: step 3 is now step 8`), and for each changed step,
-  at most three, its number (`step 16 (now step 15)` when it moved up) and its changed values, old → new
-  (`step 6: typed value "2026-09-15" → "2026-09-30"`, in the review page's words: typed value, chosen option, address,
-  description, control name, field label, visible text, selector), each on one line and cut at 60 characters, `several fields` for a
-  step with more than three, then the other steps by number. When the part that differs is too long to line up
-  (more than 250,000 pairs of steps), the steps are compared in place, step n with step n, and the line says so. **Review** sends those steps to **Import steps** as a step document, then to the same review
+  by their new number (`added: step 19`), a step that moved unchanged by its old number, description and new number
+  (`moved: step 3 ("Open the list") is now step 8`; a move that keeps its number is named by the steps it passed; this
+  list alone ends in `and N more` after three), and each changed step, a moved one included, by its number
+  (`step 16 (now step 15)` when it moved) and its changed values, old → new (`step 6: typed value "2026-09-15" →
+  "2026-09-30"`, in the review page's words: typed value, chosen option, address, description, control name, field
+  label, visible text, selector), each on one line and cut at 60 characters, `several fields` for a step with more than
+  three. Three changed steps are shown so; every other one follows by its number (`and more changed: steps 12, 14`).
+  Every removed and added step number is listed. A step taken out in one place and put in another counts as the same
+  step when it is the same, or when its description appears once on each side. When the part that differs is too long
+  to line up (more than 250,000 pairs of steps, or more than 2,000 steps on either side), the steps are compared in
+  place, step n with step n, every differing step is listed by its number, and the line says so. **Review** sends those steps to **Import steps** as a step document, then to the same review
   page and **Sign steps**. Text that is not a step document ends on **Import failed**, which says the old version keeps
   running.
   The steps get the next version: **Import steps → Options → Version** is one more than the highest version any row
@@ -129,9 +134,14 @@ first, before anything reads or writes them.
   6: typed value "2026-09-15" → "2026-09-30".`, or `unchanged`, or that it could not be compared; a new list says nothing; which desktop steps are writes is
   chosen again on the review page, so that mark is not compared, and the line says so), and
   the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
-  `Rejected: <name> version 5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
-  `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
-  version M.`, or `Nothing changed: <name> version M keeps running.` When Sign steps signed a step list, it
+  `Rejected: <name> version 5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it is titled
+  Signed again, Changed or Nothing changed, and says `Signed again: <name> version N, unchanged.`, `Changed: <name>
+  version N is now the version that runs, replacing version M.`, or `Nothing changed: <name> version M keeps
+  running.` Desktop steps signed again with other write ticks say which were added or removed against version M
+  (`steps unchanged; write marks changed from version M: added step 9 (Click Post)`), read only from a version whose
+  signature fits Sign steps (its first run, the check); otherwise `steps unchanged`. Before the ticks are answered,
+  the review page's line says that the steps are unchanged and that the write marks are what is ticked below.
+  Browser steps that never sign in say that they are signed for the Site Login all the same. When Sign steps signed a step list, it
   also downloads the workflow that runs the bot. After an approval (not on the change page), a step list that types a
   secret adds what to copy into an RPA Secret Variables credential: each variable's name as the steps use it, and May
   Be Typed Into (the app's file name for desktop steps, the start site's host for browser steps). The page never asks
