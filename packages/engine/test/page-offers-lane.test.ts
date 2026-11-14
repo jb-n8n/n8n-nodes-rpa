@@ -5,7 +5,7 @@ import { startPortal, SANDBOX } from 'n8n-rpa-sandbox/testing.js';
 import { adoptDraft } from '../src/import/adopt.js';
 import { runScriptLane } from '../src/lane/script-lane.js';
 import { runTask } from '../src/lane/task.js';
-import { SIGNED_CONTROL_GONE } from '../src/messages.js';
+import { IMPORT_CONTROL_GONE, SIGNED_CONTROL_GONE } from '../src/messages.js';
 import type { Script, Step } from '../src/types.js';
 import { done, fakeModel } from './fake-model.js';
 import { LOCAL, SAP_VARS, sapPolicy, SECRETS, SIGN_IN_STEPS, signedLaneInput, webguiScript } from './helpers.js';
@@ -71,7 +71,10 @@ describe('the import\'s replay reports every missing control on the page', () =>
     if (r.ok) throw new Error('expected a drift');
     expect(r.code).toBe('drift_detected');
     expect(r.message).toContain('Choose 1000 in Company: No element found for Form Label "Company" on ');
-    expect(r.message).toContain(' after 1 s. The page shows these fields and lists: "Company Code", "From", "To". Check the spelling');
+    // On the form nobody sets Find by: the replay says to change the step's control name, as JSON or in the file (B6-1).
+    expect(r.message).toContain(` after 1 s. The page shows these fields and lists: "Company Code", "From", "To". ${IMPORT_CONTROL_GONE}`);
+    expect(r.message).not.toContain('Find by');
+    expect(r.failure?.message).toContain('Check the spelling or try Find by');
     expect(r.message).toContain(
       'Steps 6, 7 and 8 were checked on this page too, without acting. '
       + 'Step 6 (Type into Date from) cannot find Form Label "Date from" here either. The page shows these fields and lists: "From", "To", "Company Code". '

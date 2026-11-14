@@ -909,6 +909,13 @@ describe('outputs', () => {
     expect((err as NodeOperationError).description).toBe(
       'site_down: The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
     );
+    // A message that says what to do itself: no description after it, and the item's guidance is empty (W6-13).
+    const own = 'Type the PIN: A value from the RPA Secret Variables credential may not be typed on example.com: the credential\'s May Be Typed Into does not list it. List it there only if the value is meant for it.';
+    const refused = await executeRunSteps(ctx(), fakeEngine(() => taskFail('policy_violation', own))).catch((e: unknown) => e);
+    expect((refused as NodeOperationError).message).toBe(`policy_violation: ${own}`);
+    expect((refused as NodeOperationError).description ?? null).toBeNull();
+    const [items] = await executeRunSteps(ctx({ continueOnFail: true }), fakeEngine(() => taskFail('policy_violation', own)));
+    expect(details(items[0])).toMatchObject({ code: 'policy_violation', guidance: '' });
   });
   it('an auth_blocked failure gets the description of its cause: the code workflow, no TOTP Secret, or neither', async () => {
     // [the engine's message, the message the node shows (without the engine's detected: mark), the description]
