@@ -946,8 +946,8 @@ function edges(connections: any): Set<string> {
   return out;
 }
 
-/** How a form this command made differs from this version's template, by node name. */
-interface Changes { added: string[]; removed: string[]; changed: string[]; connections: boolean }
+/** How a form this command made differs from this version's template, by node name. `older`: at an older node version. */
+interface Changes { added: string[]; removed: string[]; changed: string[]; older: string[]; connections: boolean }
 
 /**
  * The workflow's nodes as this version's template has them, keeping what the person set: the Approver Allowlist, the
@@ -978,6 +978,8 @@ function updatedNodes(workflow: any): Record<string, any>[] {
       else p.options.path = op.options.path;
     }
     if (n.name === NODE.importSteps && op.options?.allowPrivateNetwork !== undefined) p.options = { ...p.options, allowPrivateNetwork: op.options.allowPrivateNetwork };
+    // An RPA Redis picked on Import steps stays in use: from node version 2 its slot shows only with this switch on.
+    if (n.name === NODE.importSteps && n.typeVersion >= 2 && n.credentials?.playwrightRedisApi && (o.typeVersion < 2 || op.shareAcrossWorkers === true)) p.shareAcrossWorkers = true;
     if (n.name === 'Settings' && Array.isArray(op.assignments?.assignments) && Array.isArray(p.assignments?.assignments)) {
       for (const a of p.assignments.assignments) {
         const was = op.assignments.assignments.find((x: any) => x?.name === a.name && x?.type === a.type);
@@ -996,14 +998,19 @@ function templateChanges(workflow: any): Changes | undefined {
   const wantNames = new Set(want.map((n) => n.name));
   const added = want.filter((n) => !have.has(n.name)).map((n) => n.name);
   const removed = [...have.keys()].filter((name) => !wantNames.has(name));
+  // A node of the template's type at an older version is said on a line of its own; any other version difference is a setting.
+  const older = want.filter((n) => {
+    const h = have.get(n.name);
+    return h && h.type === n.type && typeof h.typeVersion === 'number' && h.typeVersion < n.typeVersion;
+  }).map((n) => n.name);
   const changed = want.filter((n) => {
     const h = have.get(n.name);
-    return h && (h.type !== n.type || h.typeVersion !== n.typeVersion || !holds(h.parameters ?? {}, n.parameters ?? {}));
+    return h && (h.type !== n.type || (h.typeVersion !== n.typeVersion && !older.includes(n.name)) || !holds(h.parameters ?? {}, n.parameters ?? {}));
   }).map((n) => n.name);
   const a = edges(workflow?.connections);
   const b = edges(loadTemplate().connections);
   const connections = a.size !== b.size || [...a].some((e) => !b.has(e));
-  return added.length || removed.length || changed.length || connections ? { added, removed, changed, connections } : undefined;
+  return added.length || removed.length || changed.length || older.length || connections ? { added, removed, changed, older, connections } : undefined;
 }
 
 /** Names for one printed line: cleaned, at most eight, then how many more. */
@@ -1019,6 +1026,7 @@ async function askUpdate(workflow: any, changes: Changes): Promise<boolean> {
   if (changes.added.length) say(`  Added in the template:     ${someNames(changes.added)}`);
   if (changes.removed.length) say(`  Not in the template:       ${someNames(changes.removed)}`);
   if (changes.changed.length) say(`  Set differently:           ${someNames(changes.changed)}`);
+  if (changes.older.length) say(`  At an older node version:  ${someNames(changes.older)}`);
   if (changes.connections) say('  Connected differently:     the links between its nodes');
   say("An update gives it this version's nodes and connections. It keeps the Approver Allowlist, the form's sign-in, address and title, the credentials picked on its nodes, Allow Private Network, the Settings node's values, the workflow picked on Approve steps, and the workflow's name and id. Anything else changed by hand in this workflow is lost.");
   if (changes.removed.length) say(`  Lost with it: the node${changes.removed.length > 1 ? 's' : ''} ${someNames(changes.removed)}, which the template does not have.`);

@@ -1564,6 +1564,33 @@ describe('a form this command made, brought up to date (item 2, IB-1)', () => {
     expect(again.out).toMatch(/reused +workflow "RPA: 5 Import a bot" \(id .*\): it matches the template/);
   });
 
+  it('a form made with RPA node version 1: the version is its own line; y gives version 2 nodes with every credential, and RPA Redis stays in use', async () => {
+    const REDIS: Cred = { id: 'c-redis', name: 'RPA Redis account', type: 'playwrightRedisApi', data: { host: 'redis.internal' } };
+    const fake = await n8n({ credentials: [REDIS] });
+    expect((await run(setup(fake.url), ENV)).code).toBe(0);
+    const [wf] = fake.state.workflows;
+    // As an earlier version made it: its RPA nodes at version 1, Import steps without Runs On, RPA Redis picked by hand.
+    for (const node of wf.nodes.filter((x) => x.type === 'n8n-nodes-rpa.playwright')) node.typeVersion = 1;
+    const imp = wf.nodes.find((x) => x.name === 'Import steps');
+    delete imp.parameters.runsOn;
+    imp.credentials = { ...imp.credentials, playwrightRedisApi: { id: REDIS.id, name: REDIS.name } };
+    const credentials = structuredClone(imp.credentials);
+    const QUESTION = /Update this form to this version\? \(y\/N\) /;
+    const no = await run(setup(fake.url), ENV);
+    expect(no.code, no.out).toBe(0);
+    expect(no.out).toContain('  At an older node version:  "Import steps", "Sign steps"');
+    expect(no.out).not.toContain('Set differently');
+    const yes = await runAtTerminal(setup(fake.url), ENV, [[/Connect a Windows machine now/, 'n'], [QUESTION, 'y']]);
+    expect(yes.code, yes.out).toBe(0);
+    const [after] = fake.state.workflows;
+    const n = (name: string) => after.nodes.find((x) => x.name === name);
+    for (const name of ['Import steps', 'Sign steps']) expect(n(name).typeVersion, name).toBe(2);
+    expect(n('Import steps').credentials).toEqual(credentials);
+    expect(n('Import steps').parameters).toMatchObject({ runsOn: 'browserAndDesktop', shareAcrossWorkers: true });
+    const again = await run(setup(fake.url), ENV);
+    expect(again.out).toMatch(/reused +workflow "RPA: 5 Import a bot" \(id .*\): it matches the template/);
+  });
+
   it('a form whose own nodes are gone is not one this command made: it stops, says that form is still published, and how to keep its address', async () => {
     const fake = await n8n();
     expect((await run(setup(fake.url), ENV)).code).toBe(0);
