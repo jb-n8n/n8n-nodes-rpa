@@ -1,5 +1,6 @@
-// Bundles `npx n8n-nodes-rpa setup` (setup/setup.mts, with setup/n8n-api.mjs and the node's Connection Line parser)
-// into one file, dist/setup.mjs: the package's bin. Node built-ins stay imports; nothing else is left outside.
+// Bundles `npx n8n-nodes-rpa setup` (setup/setup.mts, with the setup/*.mts modules it imports, setup/n8n-api.mjs and
+// the node's Connection Line parser) into one file, dist/setup.mjs: the package's bin. Node built-ins stay imports;
+// nothing else is left outside.
 import { chmodSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { dirname, join } from 'node:path';
