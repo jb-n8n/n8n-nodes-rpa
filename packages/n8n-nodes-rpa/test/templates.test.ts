@@ -2612,7 +2612,22 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(compare(ran, edit((d) => { d.steps.splice(9, 0, { intent: 'Open more', goto: '/more' }, { intent: 'Open less', goto: '/less' }); })))
       .toBe('feed: changed from the approved version 4: added: steps 10, 11. 27 steps now, 25 in the approved version.');
     expect(compare(ran, edit((d) => { d.steps.splice(7, 0, ...d.steps.splice(2, 1)); })))
-      .toBe('feed: changed from the approved version 4: moved: step 3 is now step 8.');
+      .toBe('feed: changed from the approved version 4: moved: step 3 ("Open page 3") is now step 8.');
+    // B6-3: a step taken out, two swapped and one added. The step lined up as moved keeps its number (5 is now 5), so
+    // that move is not printed: the step it crossed is named instead, by its old number, its words and its new number.
+    expect(compare(ran, edit((d) => { const [to] = d.steps.splice(5, 1); d.steps.splice(3, 1, to); d.steps.splice(5, 0, { intent: 'Wait for the list', goto: '/wait' }); })))
+      .toBe('feed: changed from the approved version 4: removed: step 4 ("Open page 4"); added: step 6; moved: step 6 ("Open page 6") is now step 4.');
+    // W6-6: a step moved forward past others, and the last step replaced: the move is named, not read as a change.
+    expect(compare(ran, edit((d) => { d.steps.splice(10, 0, ...d.steps.splice(14, 1)); d.steps.splice(24, 1, { intent: 'Read the count', goto: '/count' }); })))
+      .toBe('feed: changed from the approved version 4: moved: step 15 ("Open page 15") is now step 11; step 25: description "Open page 25" → "Read the count", address "/p25" → "/count".');
+    // A step that moved and changed says both.
+    expect(compare(ran, edit((d) => { d.steps.splice(10, 0, { ...d.steps.splice(14, 1)[0], goto: '/p15b' }); })))
+      .toBe('feed: changed from the approved version 4: moved: step 15 ("Open page 15") is now step 11 (changed too: address "/p15" → "/p15b").');
+    // A description that repeats never makes a move: the steps read as changed in place and removed.
+    const twice = { ...doc, steps: doc.steps.map((s, i) => (i === 2 || i === 12 ? { ...s, intent: 'Click OK' } : s)) };
+    const twiceRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(twice), status: 'active' }]).ran;
+    expect(compare(twiceRan, JSON.stringify({ ...twice, steps: twice.steps.map((s, i) => (i === 2 ? { ...s, goto: '/ok' } : s)).filter((_, i) => i !== 12) })))
+      .toBe('feed: changed from the approved version 4: removed: step 13 ("Click OK"); step 3: address "/p3" → "/ok". 24 steps now, 25 in the approved version.');
     // Changed and removed together: the changed step keeps its number, and a later one is named by both numbers.
     expect(compare(ran, edit((d) => { d.steps[4].goto = '/x'; d.steps.splice(9, 1); d.steps[14].goto = '/y'; })))
       .toBe('feed: changed from the approved version 4: removed: step 10 ("Open page 10"); step 5: address "/p5" → "/x"; step 16 (now step 15): address "/p16" → "/y". 24 steps now, 25 in the approved version.');

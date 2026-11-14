@@ -51,7 +51,9 @@ first, before anything reads or writes them.
   page its first line: unchanged,
   or which steps differ and how. The two step lists are lined up first, so a step taken out or put in moves no later
   step: steps removed by their old number and description (`removed: step 17 ("Click Vendor Row 1")`), steps added
-  by their new number (`added: step 19`), a step moved (`moved: step 3 is now step 8`), and for each changed step,
+  by their new number (`added: step 19`), a step moved by its old number, description and new number (`moved: step 3
+  ("Open the list") is now step 8`, with `(changed too: …)` when it also changed; a step whose description appears
+  only once on each side counts as the same step; a move that keeps its number is named by the steps it passed), and for each changed step,
   at most three, its number (`step 16 (now step 15)` when it moved up) and its changed values, old → new
   (`step 6: typed value "2026-09-15" → "2026-09-30"`, in the review page's words: typed value, chosen option, address,
   description, control name, field label, visible text, selector), each on one line and cut at 60 characters, `several fields` for a
