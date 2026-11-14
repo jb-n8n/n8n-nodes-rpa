@@ -10,12 +10,31 @@ export const CREDENTIALS = {
 } as const;
 
 /**
+ * The node's versions. A stored node keeps its version; a new node gets the last. Version 2 shows less: Runs On starts
+ * at A browser, RPA Redis shows only with Share Login Breaker Across Workers on, and Signature and Approved By are on the
+ * node's Settings tab. Every parameter and credential keeps its name.
+ */
+export const NODE_VERSIONS = [1, 2];
+/** The version the import's workflow file and the templates give an RPA node. */
+export const NODE_VERSION = 2;
+
+/**
  * Runs On (Run Steps and Import Steps): which credential slots the node shows. It never decides where steps run: the
- * steps' own surface does. The default shows every slot, so a node saved without it keeps every credential it holds
- * (n8n drops a credential whose slot is hidden).
+ * steps' own surface does. In version 1 the default shows every slot, so a node saved without it keeps every credential
+ * it holds (n8n drops a credential whose slot is hidden). In version 2 the default is A browser.
  */
 export type RunsOn = 'browserAndDesktop' | 'browser' | 'desktop';
+/** Runs On's default in version 1. */
 export const RUNS_ON_DEFAULT: RunsOn = 'browserAndDesktop';
+/** Runs On's default in version 2. */
+export const RUNS_ON_DEFAULT_V2: RunsOn = 'browser';
+/** Runs On's default for a node of this version (a node without a version is version 1). */
+export const runsOnDefault = (typeVersion: number | undefined): RunsOn => ((typeVersion ?? 1) >= 2 ? RUNS_ON_DEFAULT_V2 : RUNS_ON_DEFAULT);
+/**
+ * Version 2's switch for RPA Redis (Run Steps and Import Steps): off, its slot is hidden and the node runs as a version 1
+ * node without the credential. Version 1 has no switch and always shows the slot.
+ */
+export const SHARE_ACROSS_WORKERS = 'shareAcrossWorkers';
 export const RUNS_ON_NAMES: Record<RunsOn, string> = { browserAndDesktop: 'Browser and desktop apps', browser: 'A browser', desktop: 'A Windows desktop app' };
 /** The operations that show Runs On. */
 export const RUNS_ON_OPERATIONS: readonly string[] = ['runSteps', 'importSteps'];

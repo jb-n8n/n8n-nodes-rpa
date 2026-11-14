@@ -303,7 +303,7 @@ describe('2-data-feed.json', () => {
     ]);
   });
   it('Run steps has exactly the intended parameters: signed steps from the active row, Name and Expected Version, AI Repair off while a pending row is unexpired', () => {
-    expect(run).toMatchObject({ type: NODE_TYPE, typeVersion: 1, onError: 'continueErrorOutput' });
+    expect(run).toMatchObject({ type: NODE_TYPE, typeVersion: 2, onError: 'continueErrorOutput' });
     expect(run.parameters).toEqual({
       operation: 'runSteps',
       runsOn: 'browser',
@@ -1103,7 +1103,7 @@ describe('0-connection-check.json (the first-day connection check)', () => {
   it('screenshots the url from Site to check with the quick operation, private networks off, no credential picked', () => {
     const n = byName(t, 'Screenshot the site');
     expect(n.type).toBe(NODE_TYPE);
-    expect(n.typeVersion).toBe(1);
+    expect(n.typeVersion).toBe(2);
     expect(n.parameters).toEqual({ operation: 'screenshot', url: "={{ $('Site to check').item.json.url }}" });
     expect(loadInN8n(n).parameters).toMatchObject({ operation: 'screenshot' });
   });
@@ -1256,7 +1256,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
 
   it('the import template wires the form, Settings, Import steps, the review page and Sign steps; approval by email is a switched-off hand-off', () => {
     expect(form).toMatchObject({ type: 'n8n-nodes-base.formTrigger', typeVersion: 2.6 });
-    expect(imp).toMatchObject({ type: NODE_TYPE, typeVersion: 1, onError: 'continueErrorOutput' });
+    expect(imp).toMatchObject({ type: NODE_TYPE, typeVersion: 2, onError: 'continueErrorOutput' });
     // An address that carries values for the form's fields ends the run before anything is read.
     expect(targets(t, 'Import a bot')).toEqual([['Plain address?']]);
     expect(targets(t, 'Plain address?')).toEqual([['Settings'], ['Address with values']]);

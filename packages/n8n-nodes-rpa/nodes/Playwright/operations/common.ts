@@ -1,6 +1,6 @@
 import { NodeOperationError, type INodeExecutionData } from 'n8n-workflow';
 import type { OutputSpec, SaveTrace } from 'n8n-rpa-engine';
-import { ConfigError, CREDENTIALS, HIDDEN_BY_RUNS_ON, MAX_SECONDS, RUNS_ON_DEFAULT, RUNS_ON_NAMES, RUNS_ON_OPERATIONS, type RunsOn } from '../config.js';
+import { ConfigError, CREDENTIALS, HIDDEN_BY_RUNS_ON, MAX_SECONDS, RUNS_ON_NAMES, RUNS_ON_OPERATIONS, runsOnDefault, type RunsOn } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configErrorItem } from '../output.js';
@@ -32,13 +32,16 @@ export async function browserCredentials(ctx: NodeContext, i: number, missing = 
 }
 
 /**
- * The node's Runs On: the typed choice on Run Steps and Import Steps, else the default (a node saved before the field,
- * an expression, another operation). It only chooses which credential slots the node shows.
+ * The node's Runs On: the typed choice on Run Steps and Import Steps; without one, its version's default (Browser and
+ * desktop apps in version 1, A browser in version 2); any other value (an expression) and any other operation hide
+ * nothing, as in n8n. It only chooses which credential slots the node shows.
  */
 export function runsOn(ctx: NodeContext): RunsOn {
-  if (!RUNS_ON_OPERATIONS.includes(String(rawParameter(ctx, 'operation')))) return RUNS_ON_DEFAULT;
+  if (!RUNS_ON_OPERATIONS.includes(String(rawParameter(ctx, 'operation')))) return 'browserAndDesktop';
   const v = rawParameter(ctx, 'runsOn');
-  return v === 'browser' || v === 'desktop' ? v : RUNS_ON_DEFAULT;
+  if (v === 'browser' || v === 'desktop') return v;
+  // Any other value (an expression) hides no slot in n8n, whatever the version.
+  return v === undefined ? runsOnDefault(ctx.getNode().typeVersion) : 'browserAndDesktop';
 }
 
 /** Whether Runs On hides this credential type's slot. n8n does not hand the node a credential whose slot is hidden. */
@@ -51,7 +54,7 @@ export function hiddenByRunsOn(ctx: NodeContext, type: string): boolean {
 export function slotNote(ctx: NodeContext, type: string): string {
   if (!hiddenByRunsOn(ctx, type)) return '';
   const shownOn = (Object.keys(HIDDEN_BY_RUNS_ON) as (keyof typeof HIDDEN_BY_RUNS_ON)[]).filter((on) => !HIDDEN_BY_RUNS_ON[on].includes(type));
-  return ` Its slot shows when Runs On is ${[...shownOn, RUNS_ON_DEFAULT].map((on) => RUNS_ON_NAMES[on]).join(' or ')}.`;
+  return ` Its slot shows when Runs On is ${[...shownOn, 'browserAndDesktop' as const].map((on) => RUNS_ON_NAMES[on]).join(' or ')}.`;
 }
 
 /**

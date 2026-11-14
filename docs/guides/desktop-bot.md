@@ -165,7 +165,7 @@ you use n8n from, and open the form there. [Record a bot](record-a-bot.md) expla
 2. The RPA node is named after your recording (here **ErpDemo recording**). Its **RPA Desktop Runner** and **RPA Step
    Signing** credentials are already picked: the setup command put them on the import form, and the form passes them
    on. Its **Runs On** is **A Windows desktop app**, so the node shows only the three slots a desktop bot uses, and no
-   **Start URL**.
+   **Start URL**. **Signature** and **Approved By**, which the import sets, are on the node's **Settings** tab.
 3. The third slot is yours: the password. On that node, create an **RPA Secret Variables** credential and copy into it
    the three values the last page and the gold note give: one variable named `password`, with the value `demo1234`,
    and `ErpDemo.exe` in its **May Be Typed Into**, which keeps the password to this app. **Options → Variables** already holds

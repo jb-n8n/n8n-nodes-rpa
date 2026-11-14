@@ -99,6 +99,12 @@ describe('Sign Steps: approve', () => {
     expect(verifyScript(raw, KEY, { approvedBy: APPROVER, siteLoginId: 'site-a', signature: rec.signature as string })).toBe(false);
     expect(only(out).pairedItem).toEqual([{ item: 0 }]);
   });
+  it("the node's version is not signed: a version 2 Sign Steps writes the same record, which verifies the same way", async () => {
+    const v1 = only(await sign(repairedItem(STEPS))).json;
+    const v2 = only(await sign(repairedItem(STEPS), { typeVersion: 2 })).json;
+    expect(v2).toEqual(v1);
+    expect(verifyScript(JSON.parse(v2.steps as string) as unknown, KEY, { approvedBy: APPROVER, signature: v2.signature as string })).toBe(true);
+  });
   it('accepts steps given as JSON text (a value passed through an email or a Data Table)', async () => {
     expect(only(await sign(repairedItem(STEPS, { steps: JSON.stringify(STEPS) }))).json.status).toBe('active');
   });

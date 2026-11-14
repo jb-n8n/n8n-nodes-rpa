@@ -40,8 +40,8 @@ const nodeTypes = (description: INodeTypeDescription): INodeTypes => {
   const type = { description };
   return { getByName: () => type, getByNameAndVersion: () => type, getKnownTypes: () => ({}) } as unknown as INodeTypes;
 };
-const savedNode = (parameters: INodeParameters, types: string[] = []): INode => ({
-  id: 'n1', name: 'RPA', type: RPA_NODE_TYPE, typeVersion: 1, position: [0, 0], parameters,
+const savedNode = (parameters: INodeParameters, types: string[] = [], typeVersion = 1): INode => ({
+  id: 'n1', name: 'RPA', type: RPA_NODE_TYPE, typeVersion, position: [0, 0], parameters,
   credentials: Object.fromEntries(types.map((t) => [t, { id: `id-${t}`, name: t }])),
 });
 /** n8n-workflow's rule: the credential types n8n keeps on this node (the others are dropped on save and skipped by the run's checks). */
@@ -57,8 +57,8 @@ const runParameters = (node: INode, description = d): INodeParameters =>
 const readable = (node: INode, type: string, description = d): boolean =>
   NodeHelpers.displayParameter(runParameters(node, description), description.credentials!.find((c) => c.name === type)!, node, description, runParameters(node, description));
 /** The slots the editor shows, by display name. */
-const slots = (parameters: INodeParameters): string[] => {
-  const node = savedNode(parameters);
+const slots = (parameters: INodeParameters, typeVersion = 1): string[] => {
+  const node = savedNode(parameters, [], typeVersion);
   const p = runParameters(node);
   return (d.credentials ?? []).filter((c) => NodeHelpers.displayParameter(p, c, node, d)).map((c) => String(c.displayName));
 };
@@ -73,7 +73,7 @@ describe('Runs On: the field', () => {
       options: [{ name: 'Browser and desktop apps', value: 'browserAndDesktop' }, { name: 'A browser', value: 'browser' }, { name: 'A Windows desktop app', value: 'desktop' }],
       description: 'This only chooses which credentials and fields the node asks for, and the steps themselves decide where they run',
       hint: 'Choosing A browser or A Windows desktop app removes a credential whose slot it hides',
-      displayOptions: { show: { operation: ['runSteps', 'importSteps'] } },
+      displayOptions: { show: { operation: ['runSteps', 'importSteps'], '@version': [1] } },
     });
   });
 
@@ -229,15 +229,23 @@ describe('the workflows the import generates', () => {
     expect(slots(w.nodes.find((n) => n.name === 'Desk')!.parameters as INodeParameters)).toEqual(['RPA Step Signing', 'RPA Desktop Runner', 'RPA Secret Variables']);
   });
 
-  it('a generated desktop node keeps its three, a generated browser node its five', () => {
+  it('a generated desktop node keeps its three, a generated browser node its four, and RPA Redis with the switch on', () => {
     // As generated, plus the credentials a person adds there (Secret Variables; Redis on a browser node).
+    expect(w.nodes.filter((n) => n.type === RPA_NODE_TYPE).map((n) => n.typeVersion)).toEqual([2, 2]);
     const desk = asNode('Desk', [CREDENTIALS.secretVariables]);
     expect(Object.keys(desk.credentials!).sort()).toEqual([CREDENTIALS.desktopRunner, CREDENTIALS.signing, CREDENTIALS.secretVariables].sort());
     expect(kept(desk).sort()).toEqual(Object.keys(desk.credentials!).sort());
     for (const t of Object.keys(desk.credentials!)) expect(readable(desk, t), t).toBe(true);
-    const web = asNode('Web', [CREDENTIALS.redis, CREDENTIALS.secretVariables]);
-    expect(Object.keys(web.credentials!).sort()).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis, CREDENTIALS.secretVariables].sort());
+    const web = asNode('Web', [CREDENTIALS.secretVariables]);
+    expect(Object.keys(web.credentials!).sort()).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.secretVariables].sort());
     expect(kept(web).sort()).toEqual(Object.keys(web.credentials!).sort());
     for (const t of Object.keys(web.credentials!)) expect(readable(web, t), t).toBe(true);
+    expect(slots(w.nodes.find((n) => n.name === 'Web')!.parameters as INodeParameters, 2)).toEqual(['RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Secret Variables']);
+    // RPA Redis: kept and read only once a person turns on Share Login Breaker Across Workers.
+    const off = asNode('Web', [CREDENTIALS.redis]);
+    expect(kept(off)).not.toContain(CREDENTIALS.redis);
+    const on = { ...off, parameters: { ...off.parameters, shareAcrossWorkers: true } };
+    expect(kept(on)).toContain(CREDENTIALS.redis);
+    expect(readable(on, CREDENTIALS.redis)).toBe(true);
   });
 });

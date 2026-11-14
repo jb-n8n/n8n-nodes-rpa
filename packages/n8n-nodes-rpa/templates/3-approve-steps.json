@@ -324,7 +324,7 @@
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000311",
       "name": "Sign steps",
       "type": "n8n-nodes-rpa.playwright",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [1980, 80],
       "onError": "continueErrorOutput",
       "notes": "Outputs: the active or rejected record (0), error (1)."

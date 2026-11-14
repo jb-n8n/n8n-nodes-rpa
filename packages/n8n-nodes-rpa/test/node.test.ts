@@ -21,8 +21,10 @@ const testContext = {} as ICredentialTestFunctions;
 const exec = (ctx: NodeContext) => node.execute.call(ctx as unknown as IExecuteFunctions);
 
 describe('RPA node', () => {
-  it('is the generic RPA node: version 1, RPA icon, self-hosted only, not an AI tool', () => {
-    expect(d).toMatchObject({ displayName: 'RPA', name: 'playwright', version: 1, icon: { light: 'file:rpa.svg', dark: 'file:rpa.svg' } });
+  it('is the generic RPA node: versions 1 and 2, RPA icon, self-hosted only, not an AI tool', () => {
+    expect(d).toMatchObject({ displayName: 'RPA', name: 'playwright', version: [1, 2], icon: { light: 'file:rpa.svg', dark: 'file:rpa.svg' } });
+    // No defaultVersion: a new node gets the last version.
+    expect(d.defaultVersion).toBeUndefined();
     expect(d.description).toMatch(/Self-hosted only\.$/);
     expect(d.usableAsTool).toBeUndefined();
   });
@@ -49,7 +51,7 @@ describe('RPA node', () => {
     const run = d.properties.filter((p) => p.displayOptions?.show?.operation?.includes('runSteps'));
     expect(run.some((p) => p.name === 'singleProcessNotice')).toBe(false);
     expect(d.credentials?.find((c) => c.name === 'playwrightRedisApi')).toEqual({
-      name: 'playwrightRedisApi', displayName: 'RPA Redis', required: false, testedBy: 'guardRedisTest', displayOptions: { show: { operation: ['runSteps', 'importSteps'] }, hide: { runsOn: ['desktop'] } },
+      name: 'playwrightRedisApi', displayName: 'RPA Redis', required: false, testedBy: 'guardRedisTest', displayOptions: { show: { operation: ['runSteps', 'importSteps'] }, hide: { runsOn: ['desktop'], shareAcrossWorkers: [false] } },
     });
   });
   it('the Redis test reports OK, or an unreachable message without the run wording', async () => {

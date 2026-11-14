@@ -1,7 +1,10 @@
 import type { INodeProperties } from 'n8n-workflow';
-import { RUNS_ON_DEFAULT, RUNS_ON_NAMES, RUNS_ON_OPERATIONS, type RunsOn } from '../config.js';
+import { RUNS_ON_DEFAULT, RUNS_ON_DEFAULT_V2, RUNS_ON_NAMES, RUNS_ON_OPERATIONS, SHARE_ACROSS_WORKERS, type RunsOn } from '../config.js';
 
 const runSteps = { show: { operation: ['runSteps'] } };
+/** displayOptions keys for a field that differs between the node's versions (n8n reads @version from the node's typeVersion). */
+export const VERSION_1 = { '@version': [1] };
+export const VERSION_2_ON = { '@version': [{ _cnd: { gte: 2 } }] };
 
 export const UNSIGNED_NOTICE = 'Unsigned steps run as written. Only turn this off for steps you typed here.';
 export const STEPS_PLACEHOLDER = JSON.stringify(
@@ -81,8 +84,72 @@ export const RUNS_ON_PROPERTY: INodeProperties = {
   options: (['browserAndDesktop', 'browser', 'desktop'] as RunsOn[]).map((value) => ({ name: RUNS_ON_NAMES[value], value })),
   description: 'This only chooses which credentials and fields the node asks for, and the steps themselves decide where they run',
   hint: 'Choosing A browser or A Windows desktop app removes a credential whose slot it hides',
-  displayOptions: { show: { operation: [...RUNS_ON_OPERATIONS] } },
+  displayOptions: { show: { operation: [...RUNS_ON_OPERATIONS], ...VERSION_1 } },
 };
+
+/** Runs On in version 2: the same field, starting at A browser, so a new node shows the browser's slots only. */
+export const RUNS_ON_PROPERTY_V2: INodeProperties = {
+  ...RUNS_ON_PROPERTY,
+  default: RUNS_ON_DEFAULT_V2,
+  displayOptions: { show: { operation: [...RUNS_ON_OPERATIONS], ...VERSION_2_ON } },
+};
+
+/**
+ * Version 2 only (Run Steps and Import Steps): whether the RPA Redis slot shows. Typed, never an expression: n8n reads it
+ * to decide which credentials to keep. Off (the default) the node runs as a version 1 node without RPA Redis
+ * (guard-store.ts redisAttached). A Windows desktop app hides it, as it hides RPA Redis.
+ */
+export const SHARE_ACROSS_WORKERS_PROPERTY: INodeProperties = {
+  displayName: 'Share Login Breaker Across Workers (RPA Redis)',
+  name: SHARE_ACROSS_WORKERS,
+  type: 'boolean',
+  default: false,
+  noDataExpression: true,
+  description:
+    'Whether the login breaker and the run lock are kept in Redis, so that every n8n worker shares them. Turn it on when n8n runs in queue mode and the node has a Site Login, then attach an RPA Redis credential.',
+  displayOptions: { show: { operation: [...RUNS_ON_OPERATIONS], ...VERSION_2_ON }, hide: { runsOn: ['desktop'] } },
+};
+
+/**
+ * The same switch in version 1: never shown, always on, so a version 1 node shows and keeps RPA Redis as it always did.
+ * Without it n8n would read version 2's default (off) when it works out which credentials a version 1 node keeps
+ * (getActiveCredentialTypes fills in the defaults of fields that are not shown, except for a name used twice).
+ */
+export const SHARE_ACROSS_WORKERS_V1_PROPERTY: INodeProperties = {
+  displayName: SHARE_ACROSS_WORKERS_PROPERTY.displayName,
+  name: SHARE_ACROSS_WORKERS,
+  type: 'hidden',
+  default: true,
+  displayOptions: { show: { operation: [...RUNS_ON_OPERATIONS], ...VERSION_1 } },
+};
+
+/**
+ * Signature and Approved By, as each version shows them: on the Parameters tab in version 1, on the node's Settings tab in
+ * version 2 (isNodeSetting). Names and stored values are the same in both: n8n keeps a Settings tab field in the node's
+ * parameters, and the run reads it as before.
+ */
+function signedFields(): INodeProperties[] {
+  const fields: INodeProperties[] = [
+    {
+      displayName: 'Signature',
+      name: 'signature',
+      type: 'string',
+      default: '',
+      description: 'The signature Sign Steps recorded, for example {{ $json.signature }}. A non-empty signature is always checked, even with Require Signed Steps off.',
+    },
+    {
+      displayName: 'Approved By',
+      name: 'approvedBy',
+      type: 'string',
+      default: '',
+      description: 'Who approved the steps, as Sign Steps recorded it, for example {{ $json.approvedBy }}',
+    },
+  ];
+  return [
+    ...fields.map((f) => ({ ...f, displayOptions: { show: { ...runSteps.show, ...VERSION_1 } } })),
+    ...fields.map((f) => ({ ...f, isNodeSetting: true, displayOptions: { show: { ...runSteps.show, ...VERSION_2_ON } } })),
+  ];
+}
 
 export const runStepsProperties: INodeProperties[] = [
   {
@@ -123,22 +190,7 @@ export const runStepsProperties: INodeProperties[] = [
     default: '',
     displayOptions: { show: { operation: ['runSteps'], requireSignedSteps: [false] } },
   },
-  {
-    displayName: 'Signature',
-    name: 'signature',
-    type: 'string',
-    default: '',
-    description: 'The signature Sign Steps recorded, for example {{ $json.signature }}. A non-empty signature is always checked, even with Require Signed Steps off.',
-    displayOptions: runSteps,
-  },
-  {
-    displayName: 'Approved By',
-    name: 'approvedBy',
-    type: 'string',
-    default: '',
-    description: 'Who approved the steps, as Sign Steps recorded it, for example {{ $json.approvedBy }}',
-    displayOptions: runSteps,
-  },
+  ...signedFields(),
   {
     displayName: 'AI Repair',
     name: 'aiRepair',

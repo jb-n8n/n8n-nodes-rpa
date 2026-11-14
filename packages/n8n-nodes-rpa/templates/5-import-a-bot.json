@@ -686,6 +686,7 @@
         "operation": "importSteps",
         "source": "={{ ({ 'Work it out from the file': 'auto', 'Chrome Recorder': 'chrome', 'Playwright code': 'playwright', 'UiPath project': 'uipath', 'Step document': 'steps', 'RPA recording': 'recording' })[$json.source || 'Work it out from the file'] ?? '' }}",
         "inputFrom": "binary",
+        "runsOn": "browserAndDesktop",
         "binaryPropertyName": "bot",
         "stepsName": "={{ $json.name }}",
         "aiRepair": false,
@@ -705,7 +706,7 @@
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000505",
       "name": "Import steps",
       "type": "n8n-nodes-rpa.playwright",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [
         2420,
         0
@@ -1129,7 +1130,7 @@
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000520",
       "name": "Sign steps",
       "type": "n8n-nodes-rpa.playwright",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [
         4400,
         -220

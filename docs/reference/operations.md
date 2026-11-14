@@ -18,6 +18,11 @@ no login. The three advanced ones run, sign and import step lists.
 Each input item is one run in a fresh browser context. Nothing (cookies, storage, the open page) carries over between
 items, nodes or executions. Failures and their codes are in [Errors](errors.md).
 
+The node has two versions. A node you add gets version 2, which shows less: **Runs On** starts at **A browser**, **RPA
+Redis** shows only with **Share Login Breaker Across Workers (RPA Redis)** on, and **Signature** and **Approved By** are
+on the node's **Settings** tab. A workflow saved with version 1 keeps version 1 and shows, keeps and runs what it did.
+The node's version is not part of what is signed. The node's **Settings** tab names its version.
+
 ## What every quick operation has
 
 - **URL** (required): `http` or `https`. Only this site is visited. Add others under **Options → Also Allow These
@@ -104,20 +109,22 @@ Runs a list of browser or desktop steps. [Steps](steps.md) lists every step.
 
 | Field | What it is |
 |---|---|
-| **Runs On** | Which credentials the node asks for: **Browser and desktop apps** (the default, every slot), **A browser** or **A Windows desktop app**. It does not decide where the steps run. The steps do. See [Runs On](#runs-on). |
+| **Runs On** | Which credentials the node asks for: **Browser and desktop apps** (every slot, the default in version 1), **A browser** (the default in version 2) or **A Windows desktop app**. It does not decide where the steps run. The steps do. See [Runs On](#runs-on). |
 | **Steps (JSON)** | A step document or a bare array of steps. Usually mapped from a Data Table row: `{{ $json.steps }}`. Empty means a first run, which needs AI Repair. |
 | **Start URL** | Browser steps only. Required without a Site Login, and it sets the allowed site. With a Site Login it must be on the credential's sites. Hidden when Runs On is **A Windows desktop app**. |
 | **Require Signed Steps** | On by default. **Signature** and **Approved By** must be present and verify, or the run fails `script_untrusted` before anything opens. Turn it off only for steps you typed here. |
-| **Signature**, **Approved By** | From the signed row, mapped from the same item as the steps. |
+| **Signature**, **Approved By** | From the signed row, mapped from the same item as the steps. In version 2 they are on the node's **Settings** tab, as the import sets them. |
 | **AI Repair** | Off by default. On adds **Goal**, a **Model** input and a second output, **Repaired Steps** ([AI Repair](steps.md#ai-repair)). |
 | **Expected File (First Version)** | With AI Repair: the checks for a download that AI builds for the first time. |
+| **Share Login Breaker Across Workers (RPA Redis)** | Version 2, off by default. On shows the **RPA Redis** slot: the login breaker and the run lock are kept in Redis, so every n8n worker shares them. Turn it on in queue mode with a Site Login ([Operator guide](operator.md#queue-mode)). Off, the node runs as without RPA Redis. Hidden with **A Windows desktop app**. |
 | **Options** | **Name**, **Expected Version**, **Variables**, **ID Pattern (Regex)**, **Stated Total Pattern (Regex)**, **Required Fields**, **Text That Means No Results (Regex)**, **Allow Unsigned Writes**, **Deliver Unconfirmed Rows**, **Max Agent Actions** (40), **Max LLM Tokens** (200,000), **One-Time Code Workflow**, **Code Timeout (Seconds)** (120), **Login Breaker Reset Key**, and the quick operations' Timeout, Max Seconds, Viewport, Also Allow These Sites, Allow Private Network, Debug Trace and Max Items. |
 
 Credentials: **RPA Browser** for browser steps, **RPA Desktop Runner** for desktop steps, **RPA Site Login** (optional,
 with it every allowed site comes from the credential), **RPA Step Signing** (when Require Signed Steps is on or a
 Signature is set), **RPA Secret Variables** (optional: its Variables, and May Be Typed Into to limit the apps and
 sites its values go to, see [Security](security.md#secret-variables)), and
-**RPA Redis** (optional, needed in queue mode with a Site Login).
+**RPA Redis** (optional, needed in queue mode with a Site Login). In version 2 its slot shows once **Share Login
+Breaker Across Workers (RPA Redis)** is on.
 
 The error output is output 1, or output 2 when AI Repair is on.
 
@@ -135,16 +142,19 @@ says. Type it. An expression shows every slot.
 
 | Runs On | Run Steps shows | Import Steps shows |
 |---|---|---|
-| **Browser and desktop apps** (default) | RPA Browser, RPA Site Login, RPA Step Signing, RPA Redis, RPA Desktop Runner, RPA Secret Variables | RPA Browser, RPA Site Login, RPA Redis, and the two slots only passed on: RPA Step Signing, RPA Desktop Runner |
-| **A browser** | RPA Browser, RPA Site Login, RPA Step Signing, RPA Redis, RPA Secret Variables | RPA Browser, RPA Site Login, RPA Redis, RPA Step Signing (only passed on) |
+| **Browser and desktop apps** (default in version 1) | RPA Browser, RPA Site Login, RPA Step Signing, RPA Redis, RPA Desktop Runner, RPA Secret Variables | RPA Browser, RPA Site Login, RPA Redis, and the two slots only passed on: RPA Step Signing, RPA Desktop Runner |
+| **A browser** (default in version 2) | RPA Browser, RPA Site Login, RPA Step Signing, RPA Redis, RPA Secret Variables | RPA Browser, RPA Site Login, RPA Redis, RPA Step Signing (only passed on) |
 | **A Windows desktop app** | RPA Step Signing, RPA Desktop Runner, RPA Secret Variables | RPA Step Signing and RPA Desktop Runner (only passed on) |
 
-A node saved before Runs On existed has the default and keeps every credential it has. n8n removes a credential whose
+In version 2, RPA Redis shows only with **Share Login Breaker Across Workers (RPA Redis)** on, so a new Run Steps
+node shows four slots: RPA Browser, RPA Site Login, RPA Step Signing and RPA Secret Variables.
+
+A version 1 node saved before Runs On existed has its default and keeps every credential it has. n8n removes a credential whose
 slot is hidden, so choosing **A browser** or **A Windows desktop app** removes the other kind's credentials from the
 node. When steps need a credential whose slot Runs On hides, the run fails with the usual message and one more
 sentence, for example `Its slot shows when Runs On is A Windows desktop app or Browser and desktop apps.` The workflow
 an import makes sets Runs On on each **Run steps**: **A browser** for browser steps, **A Windows desktop app** for
-desktop steps. Sign Steps and the quick operations have no Runs On.
+desktop steps. Its RPA nodes are version 2. Sign Steps and the quick operations have no Runs On.
 
 ## Sign Steps
 
@@ -179,7 +189,9 @@ schedule until a person approves it. Template **RPA: 5 Import a bot** puts a for
 
 **Fields**
 - **Runs On**: as in Run Steps ([Runs On](#runs-on)). **A Windows desktop app** hides RPA Browser, RPA Site Login and
-  RPA Redis, **A browser** hides RPA Desktop Runner. A hidden slot is not passed on to the workflow file.
+  RPA Redis, **A browser** hides RPA Desktop Runner. A hidden slot is not passed on to the workflow file. The import
+  form's **Import steps** has **Browser and desktop apps**, so that it passes on both kinds.
+- **Share Login Breaker Across Workers (RPA Redis)**: as in Run Steps, version 2 only.
 - **Source**: **Work It Out From the File** (by the file name: `.rpa-recording.json`, `.zip` or `.xaml`, `.js` or
   `.ts`, else by the JSON's shape), **Chrome Recorder (JSON)**, **Playwright Code (JavaScript or TypeScript)**,
   **UiPath Project (ZIP or XAML)**, **Step Document (JSON)** or **RPA Recording**.

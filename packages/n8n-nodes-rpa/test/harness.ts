@@ -33,6 +33,8 @@ export interface HarnessOptions {
   signal?: AbortSignal;
   continueOnFail?: boolean;
   nodeName?: string;
+  /** The node's version (getNode().typeVersion). Default 1. */
+  typeVersion?: number;
   /** What getBinaryMetadata returns as fileSize, by binary data id (filesystem-stored binaries carry an id, not the bytes). */
   binaryFileSizes?: Record<string, number>;
   /** Stands in for n8n's executeWorkflow (a sub-workflow run). Absent: calling it throws. */
@@ -87,7 +89,7 @@ export function harness(o: HarnessOptions): Harness {
   for (const type of Object.keys(o.credentials ?? {})) credentials[type] = { id: o.credentialIds?.[type] ?? fallbackId, name: o.credentialNames?.[type] ?? `${type} credential` };
   const raw = o.rawParameters ?? defaultRaw(o.params, Math.max(1, o.items?.length ?? 1));
   const node: INode = {
-    id: 'node-1', name: o.nodeName ?? 'RPA', type: 'n8n-nodes-rpa.playwright', typeVersion: 1, position: [0, 0],
+    id: 'node-1', name: o.nodeName ?? 'RPA', type: 'n8n-nodes-rpa.playwright', typeVersion: o.typeVersion ?? 1, position: [0, 0],
     parameters: raw as INodeParameters, credentials,
   };
   const staticData = o.staticData ?? {};

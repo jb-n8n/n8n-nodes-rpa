@@ -10,7 +10,7 @@
 // notes and stickies as text. The RPA credentials the import was given are attached by id and name (opts.credentials),
 // so the file needs nothing picked; without them the desktop runner is named by name only. No secret is ever written.
 import type { DesktopDraft, Draft, FlowNode, UiPathFlow } from 'n8n-rpa-engine';
-import { CREDENTIALS, normalizeHost } from '../config.js';
+import { CREDENTIALS, NODE_VERSION, normalizeHost } from '../config.js';
 import { RPA_NODE_TYPE } from '../node-type.js';
 import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../rows.js';
 
@@ -135,7 +135,8 @@ const T = {
   scheduleTrigger: ['n8n-nodes-base.scheduleTrigger', 1.2],
   sticky: ['n8n-nodes-base.stickyNote', 1],
   dataTable: ['n8n-nodes-base.dataTable', 1.1],
-  rpa: [RPA_NODE_TYPE, 1],
+  // Version 2: Signature and Approved By (mapped from the row) on the node's Settings tab, RPA Redis behind a switch.
+  rpa: [RPA_NODE_TYPE, NODE_VERSION],
   awsS3: ['n8n-nodes-base.awsS3', 2],
   extractFromFile: ['n8n-nodes-base.extractFromFile', 1.1],
   convertToFile: ['n8n-nodes-base.convertToFile', 1.1],

@@ -10,7 +10,7 @@ import { isBreakerCode, noteRepairRan, repairAlreadyRan, runGuarded, siteLoginGu
 import {
   DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, reviewSteps, reviewWrites,
 } from '../format.js';
-import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
+import { isQueueMode, openGuardStore, queueNeedsRedis, redisAttached, type GuardStoreDeps } from '../guard-store.js';
 import { nonSecretStart, secretTypedInto, stepVariables, workflowFile, type CredentialRef, type PassedOn } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, desktopRepairedStepsJson, plain, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
@@ -241,7 +241,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       refuseCdpDownload(engine, endpoint, !NO_EXPECTED_FILE.includes(source) && expectedDownload(engine, p.expectedFile) !== undefined);
     }
     if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));
-    if (siteLogin && !node.credentials?.[CREDENTIALS.redis] && isQueueMode(deps)) throw new ConfigError(QUEUE_NEEDS_REDIS);
+    if (siteLogin && !redisAttached(node) && isQueueMode(deps)) throw new ConfigError(queueNeedsRedis(node));
     // With a Site Login or a Start URL the policy is known now; otherwise each draft's first page decides it.
     if (siteLogin || p.startUrl) fixedPolicy = policyOf(p, siteLogin, p.startUrl);
   } catch (error) {

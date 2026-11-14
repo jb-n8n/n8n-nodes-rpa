@@ -187,7 +187,7 @@
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000210",
       "name": "Run steps",
       "type": "n8n-nodes-rpa.playwright",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [900, 0],
       "onError": "continueErrorOutput",
       "notes": "Outputs: Data (0), Repaired Steps (1), error (2)."

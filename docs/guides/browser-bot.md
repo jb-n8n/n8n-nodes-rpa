@@ -126,8 +126,9 @@ If the last page says `Nothing to approve`, it names the problem:
 1. In n8n, create a workflow, choose **⋯ → Import → From File**, and pick the downloaded
    `sandbox-line-items.workflow.json`.
 2. The RPA node is named **sandbox-line-items**. Its **RPA Browser**, **RPA Site Login** and **RPA Step Signing** are
-   already picked: the import form passes on the ones it used. Check them. **Options → Allow Private Network** is on,
-   because the import had it on.
+   already picked: the import form passes on the ones it used. Check them. The fourth slot, **RPA Secret Variables**,
+   stays empty for this bot. **Signature** and **Approved By**, which the import sets, are on the node's **Settings**
+   tab. **Options → Allow Private Network** is on, because the import had it on.
 3. Click **Execute workflow**. The run signs in, runs the report and exports it in a few seconds. Open the RPA node:
    its output holds `LINEITEMS_1000_2026-09-01_2026-09-30.csv`, with a **View** and a **Download** button.
 
