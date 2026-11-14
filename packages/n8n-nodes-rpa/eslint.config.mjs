@@ -13,7 +13,7 @@ const rules = {
 };
 
 export default [
-  { ignores: ['dist/**', 'node_modules/**', 'test/**', 'scripts/**', 'templates/**', 'vitest.config.mts', 'eslint.config.mjs'] },
+  { ignores: ['dist/**', 'node_modules/**', 'test/**', 'scripts/**', 'templates/**', 'template-src/**', 'vitest.config.mts', 'eslint.config.mjs'] },
   { files: ['**/*.ts'], plugins: base.plugins, languageOptions: { parser: tseslint.parser }, rules },
   {
     files: ['package.json'],
