@@ -359,8 +359,12 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
   }
 
   let line = (env.RPA_CONNECTION_LINE ?? '').trim() || undefined;
-  // --desktop-runner picks one that exists: nothing to connect, unless RPA_CONNECTION_LINE gives it a new line.
-  if (!line && options.desktopRunner === undefined && interactive() && /^y(es)?$/i.test(await ask('Connect a Windows machine now? (y/N) '))) {
+  // --desktop-runner picks one that exists: nothing to connect, unless RPA_CONNECTION_LINE gives it a new line. A Site
+  // Login's own form (--new-workflow --site-login) is not asked: the first form's answer stands (B6-4).
+  const siteForm = options.newWorkflow && options.siteLogin !== undefined;
+  if (!line && options.desktopRunner === undefined && interactive() && siteForm) {
+    say("  Windows machine: not asked for a Site Login's own form. It uses your project's RPA Desktop Runner when the project has exactly one (--desktop-runner names another).");
+  } else if (!line && options.desktopRunner === undefined && interactive() && /^y(es)?$/i.test(await ask('Connect a Windows machine now? (y/N) '))) {
     say('On that machine, in an administrator PowerShell: & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens');
     line = (await askHidden('Paste the line that starts with rpa-runner:// (not shown): ')) || undefined;
     redactor.add(line);
@@ -660,12 +664,14 @@ interface RunnerTest { result: 'connected' | 'failed' | 'untested'; message: str
  * connected. A failed test's message is split into its reason (the first sentence) and what to do (the rest), when the
  * rest says what to do; else what to do is to correct the line and run this again.
  */
-function closingRunner(test: RunnerTest, ref: Ref, formSays = 'The import form is ready'): string[] {
+function closingRunner(test: RunnerTest, ref: Ref, formSays = 'The import form is ready', named = false): string[] {
   const name = `"${clean(ref.name, ref.id)}"`;
-  if (test.result === 'connected') return [`${formSays}, and the Windows machine is connected. n8n's test said: ${test.message}${/[.!?]$/.test(test.message) ? '' : '.'}`];
+  // Named when the workflow the form hands over uses another RPA Desktop Runner than the one tested (W6-2).
+  const machine = named ? `the Windows machine of ${name} (id ${clean(ref.id)})` : 'the Windows machine';
+  if (test.result === 'connected') return [`${formSays}, and ${machine} is connected. n8n's test said: ${test.message}${/[.!?]$/.test(test.message) ? '' : '.'}`];
   if (test.result === 'untested') {
     return [
-      `${formSays}. Whether the Windows machine is connected is not known: n8n did not test it.`,
+      `${formSays}. Whether ${machine} is connected is not known: n8n did not test it.`,
       `  Reason:     ${test.message}`,
       `  What to do: open the credential ${name} in n8n, which tests it as it opens.`,
     ];
@@ -675,7 +681,7 @@ function closingRunner(test: RunnerTest, ref: Ref, formSays = 'The import form i
   const reason = cut ? cut[1] : test.message;
   const rest = cut ? cut[2].replace(/^Nothing was sent\.\s*/, '').trim() : '';
   return [
-    `${formSays}, but the Windows machine is not connected yet.`,
+    `${formSays}, but ${machine} is not connected yet.`,
     `  Reason:     ${reason}`,
     `  What to do: ${rest || `Correct the Connection Line of ${name}.`}`,
     '              Then run this command again, with the new line if you printed one.',
@@ -1523,7 +1529,7 @@ async function run(inputs: Inputs): Promise<number> {
   // Made earlier: bots may be approved with it by now, so a new key is no way to keep a copy.
   else if (signingKey === undefined) say('  Signing key: made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.');
   // Made now and not shown: a new key now costs nothing, as no bot is signed with this one yet.
-  else say('  Signing key: made by this run and kept in n8n, which does not show it again. To have a copy, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
+  else say('  Signing key: made by this run and kept in n8n, which does not show it again. Most people need no copy: it is for moving signed bots to another n8n, or for a lost n8n. To have one, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
   say();
   say('Next:');
   say('  1. Record a bot, or pick a bot file you have: an RPA recording, a UiPath project, a Chrome Recorder export, Playwright code or a step document.');
@@ -1533,7 +1539,10 @@ async function run(inputs: Inputs): Promise<number> {
   if (!basic) say(`  Only the n8n users on "${NODE.signSteps}" → Approver Allowlist may approve: add others there in n8n.`);
   // What the workflow the form hands over carries for a desktop bot: the runner on Import steps, by id and name.
   const handed = workflow.nodes?.find((n: any) => n.name === NODE.importSteps)?.credentials?.[RUNNER.type];
-  if (handed?.id !== undefined && handed?.id !== null) {
+  const handsOther = handed?.id !== undefined && handed?.id !== null && runnerRef !== undefined && String(handed.id) !== runnerRef.id;
+  if (handsOther && runnerRef) {
+    say(`The workflow the form gives you uses the RPA Desktop Runner "${clean(handed.name, handed.id)}" (id ${clean(handed.id)}), not "${clean(runnerRef.name, runnerRef.id)}" (id ${clean(runnerRef.id)}), which this run ${runnerTest ? 'tested' : 'picked'}: to hand that one over, pick it on "${NODE.importSteps}" in n8n.`);
+  } else if (handed?.id !== undefined && handed?.id !== null) {
     say(`The workflow the form gives you already uses the RPA Desktop Runner "${clean(handed.name, handed.id)}" (id ${clean(handed.id)}).`);
   } else if (runnerRef) {
     say(`The workflow the form gives you does not use "${clean(runnerRef.name, runnerRef.id)}" yet: pick it on "${NODE.importSteps}" in n8n (see above).`);
@@ -1549,7 +1558,7 @@ async function run(inputs: Inputs): Promise<number> {
   // the form is set up either way.
   if (runnerTest && runnerRef) {
     say();
-    for (const line of closingRunner(runnerTest, runnerRef, formSays)) say(line);
+    for (const line of closingRunner(runnerTest, runnerRef, formSays, handsOther)) say(line);
   }
   return 0;
 }

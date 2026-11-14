@@ -46,7 +46,8 @@ docker compose exec n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --new
 ```
 
 It makes and publishes **RPA: 5 Import a bot (Sample accounts)**, with this Site Login on **Import steps** and **Sign
-steps**, and prints its address: `/form/rpa-import-sample-accounts`. Run again, also after the Site Login was renamed,
+steps**, and prints its address: `/form/rpa-import-sample-accounts`. It does not ask about a Windows machine: a Site
+Login's own form uses your project's RPA Desktop Runner when the project has exactly one, and says so in one line. Run again, also after the Site Login was renamed,
 it finds that form by the Site Login it holds and makes no second one. It signs with the same **RPA Step Signing** key
 and leaves your first form as it is. Leave out `--allow-private-network` for a site on the internet. Use this form for
 the bots of this Site Login: the workflow it hands over has the Site Login on its RPA node, and its note names this form

@@ -370,7 +370,8 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(count(out, form.data.password)).toBe(1);
     expect(stdout).toMatch(new RegExp(`Password: +${form.data.password} +\\(shown once: keep it in your password manager\\)`));
     expect(out).not.toContain(signing.data.secretKey);
-    expect(stdout).toContain('  Signing key: made by this run and kept in n8n, which does not show it again. To have a copy, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
+    // W6-3: what a copy is for, and that most people need none, before how to have one.
+    expect(stdout).toContain('  Signing key: made by this run and kept in n8n, which does not show it again. Most people need no copy: it is for moving signed bots to another n8n, or for a lost n8n. To have one, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
     expect(stdout).toMatch(/1\. Record a bot.*\n.*2\. Open the form.*\n.*3\. Upload the file/);
     for (const name of ['RPA import form', 'RPA Step Signing', 'RPA: 5 Import a bot']) expect(stdout).toMatch(new RegExp(`created .*${name}`));
     expect(out).not.toMatch(/Note:|WARNING/);
@@ -731,8 +732,18 @@ describe('npx n8n-nodes-rpa setup', () => {
       const named = await run(setup(fake.url, '--desktop-runner', 'RPA Desktop Runner account'), ENV);
       expect(named.out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand): ${RUNNER_CONNECTED}`);
       expect(named.stdout.trimEnd().split('\n').at(-1)).toBe(`The import form is ready, and the Windows machine is connected. n8n's test said: ${RUNNER_CONNECTED}.`);
+      // W6-2: the form hands over another runner than the one tested: both are named, and the closing line names the
+      // one tested, not the one the workflow uses.
+      const hand = fake.state.credentials.find((c) => c.id === 'c-hand')!;
+      fake.state.credentials.push({ ...hand, id: 'c-night', name: 'Night shift' });
+      const other = await run(setup(fake.url, '--desktop-runner', 'Night shift'), ENV);
+      expect(other.code, other.out).toBe(0);
+      expect(onImport(fake).rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
+      expect(other.out).toContain('The workflow the form gives you uses the RPA Desktop Runner "RPA Desktop Runner account" (id c-hand), not "Night shift" (id c-night), which this run tested: to hand that one over, pick it on "Import steps" in n8n.');
+      expect(other.out).not.toContain('already uses');
+      expect(other.stdout.trimEnd().split('\n').at(-1)).toBe(`The import form is ready, and the Windows machine of "Night shift" (id c-night) is connected. n8n's test said: ${RUNNER_CONNECTED}.`);
       expect(out).not.toContain('c-else');
-      expect(fake.state.credentials.filter((c) => c.type === 'rpaDesktopRunnerApi')).toHaveLength(2);
+      expect(fake.state.credentials.filter((c) => c.type === 'rpaDesktopRunnerApi')).toHaveLength(3);
       neverRead(fake);
       expectNoSecrets(out);
     });
@@ -1615,6 +1626,19 @@ describe("a Site Login's own form is found by the Site Login's id (IB-11)", () =
     expect(r.out).toMatch(/reused +workflow "RPA: 5 Import a bot \(Sample accounts\)"/);
     expect(r.out).toContain(`  Address:    ${fake.url}/form/rpa-import-sample-accounts`);
   });
+
+  it('at a terminal, it does not ask about a Windows machine: one line says what the new form uses (B6-4)', async () => {
+    const SITE: Cred = { id: 'c-acme', name: 'Sample accounts', type: 'playwrightSiteLoginApi', data: { username: 'u', password: 'p-made-up' } };
+    const fake = await n8n({ credentials: [SITE] });
+    const t = await runAtTerminal(setup(fake.url, '--new-workflow', '--site-login', 'Sample accounts'), ENV, []);
+    expect(t.code, t.out).toBe(0);
+    expect(t.out).not.toMatch(/Connect a Windows machine now/);
+    expect(t.out).toContain("  Windows machine: not asked for a Site Login's own form. It uses your project's RPA Desktop Runner when the project has exactly one (--desktop-runner names another).");
+    // The first form still asks.
+    const first = await runAtTerminal(setup(fake.url), ENV, [[/Connect a Windows machine now/, 'n']]);
+    expect(first.code, first.out).toBe(0);
+    expect(first.out).not.toMatch(/Windows machine: not asked/);
+  });
 });
 
 // ---- The way through n8n's own command line (no API key): a fake n8n command, a made-up /proc and a fake running n8n.
@@ -1722,6 +1746,8 @@ describe("setup through n8n's own command line, with no API key", () => {
     expect(r.out).toContain('answered the form, after');
     expect(r.stdout).toContain(`The import form is ready.\n  Address:    ${f.url}/form/rpa-import\n`);
     expect(r.out).not.toMatch(/API key you gave|Revoke/);
+    // W6-3: the same signing key line as the API key way.
+    expect(r.stdout).toContain('  Signing key: made by this run and kept in n8n, which does not show it again. Most people need no copy: it is for moving signed bots to another n8n, or for a lost n8n. To have one, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
     // Secrets: in no argument, not in the children's environment, files 0600 in 0700 and removed.
     for (const c of s.calls) {
       expect(c.secretsInEnv, c.command).toEqual([]);
