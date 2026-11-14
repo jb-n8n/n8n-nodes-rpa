@@ -53,8 +53,8 @@ export function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 export type SameN8n =
-  | { ok: true; pid: number; database: string; postgres: boolean }
-  | { ok: false; why: string; notBuilt?: boolean };
+  | { ok: true; database: string }
+  | { ok: false; why: string };
 
 /** n8n's folder as n8n computes it (@n8n/config getN8nFolder): N8N_USER_FOLDER, else HOME, else the working directory, then .n8n. */
 export const n8nFolderOf = (env: Record<string, string | undefined>, cwd: string) => join(env.N8N_USER_FOLDER ?? env.HOME ?? cwd, '.n8n');
@@ -129,13 +129,13 @@ export function checkSameN8n(env: NodeJS.ProcessEnv, cwd: string, procRoot = '/p
   if (differ.length) return { ok: false, why: `the running n8n and n8n's command line here would differ in ${differ.join(', ')}` };
   if (resolve(n8nFolderOf(theirs, theirCwd)) !== resolve(n8nFolderOf(mine, cwd))) return { ok: false, why: "the running n8n and n8n's command line here would use different n8n folders" };
   if (/^queue$/i.test(theirs.EXECUTIONS_MODE ?? '') || /^true$/i.test(theirs.N8N_MULTI_MAIN_SETUP_ENABLED ?? '')) {
-    return { ok: false, notBuilt: true, why: 'n8n runs in queue mode, and the way through n8n\'s command line is not built for queue mode' };
+    return { ok: false, why: 'n8n runs in queue mode, and the way through n8n\'s command line is not built for queue mode' };
   }
   const type = (theirs.DB_TYPE ?? 'sqlite').toLowerCase();
   if (type === 'postgresdb') {
-    return { ok: true, pid, postgres: true, database: `Postgres database ${theirs.DB_POSTGRESDB_DATABASE ?? 'n8n'} on ${theirs.DB_POSTGRESDB_HOST ?? 'localhost'}` };
+    return { ok: true, database: `Postgres database ${theirs.DB_POSTGRESDB_DATABASE ?? 'n8n'} on ${theirs.DB_POSTGRESDB_HOST ?? 'localhost'}` };
   }
-  if (type !== 'sqlite') return { ok: false, notBuilt: true, why: `n8n uses the database type ${type.replace(/[^\w-]/g, '').slice(0, 20)}, and the way through n8n's command line is built for SQLite and Postgres only` };
+  if (type !== 'sqlite') return { ok: false, why: `n8n uses the database type ${type.replace(/[^\w-]/g, '').slice(0, 20)}, and the way through n8n's command line is built for SQLite and Postgres only` };
   const file = resolve(n8nFolderOf(mine, cwd), mine.DB_SQLITE_DATABASE ?? 'database.sqlite');
   let want;
   try {
@@ -152,7 +152,7 @@ export function checkSameN8n(env: NodeJS.ProcessEnv, cwd: string, procRoot = '/p
   for (const fd of fds) {
     try {
       const s = statSync(join(dir, 'fd', fd));
-      if (s.dev === want.dev && s.ino === want.ino) return { ok: true, pid, postgres: false, database: file };
+      if (s.dev === want.dev && s.ino === want.ino) return { ok: true, database: file };
     } catch {
       // closed meanwhile, or not a file
     }

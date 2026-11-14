@@ -277,7 +277,7 @@ interface Inputs {
   /** n8n's own address for its forms, when n8n's environment gives it here (formBase); undefined otherwise. */
   formBase?: string;
   /** The way through n8n's command line: set when this run takes it. */
-  cli?: { ownership: Ownership; folder: string; postgres: boolean };
+  cli?: { ownership: Ownership; folder: string };
 }
 
 /** How to reach the way without an API key, said when it is not possible. */
@@ -287,7 +287,7 @@ const CLI_HOW = "Run this as n8n's user where n8n runs, with n8n's settings (in 
  * Which way this run takes: n8n's own command line when no API key was given or asked for, the n8n command is here, and
  * it provably works on the database of the n8n that runs here (checkSameN8n); else the API key way, with the reason.
  */
-function chooseWay(options: Options, env: NodeJS.ProcessEnv): { command: string; database: string; postgres: boolean } | { why: string; chosen: boolean } {
+function chooseWay(options: Options, env: NodeJS.ProcessEnv): { command: string; database: string } | { why: string; chosen: boolean } {
   if (options.apiKey) return { why: '--api-key was given', chosen: true };
   if ((env.N8N_API_KEY ?? '').trim()) return { why: 'N8N_API_KEY is set', chosen: true };
   const command = findN8n(env);
@@ -295,7 +295,7 @@ function chooseWay(options: Options, env: NodeJS.ProcessEnv): { command: string;
   // Tests give a made-up /proc: one cannot be made on another system. Whoever sets it can only fool their own run.
   const same = checkSameN8n(env, process.cwd(), env.N8N_RPA_SETUP_TEST_PROC || '/proc');
   if (!same.ok) return { why: same.why, chosen: false };
-  return { command, database: same.database, postgres: same.postgres };
+  return { command, database: same.database };
 }
 
 /** Everything typed or set before anything is sent: the address, the API key, the Connection Line, the browser. */
@@ -382,7 +382,7 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
     return {
       options, origin: n8n.origin, plaintext: false, client: cli.client, line, browser, userId: cli.ownership.owner.id,
       formBase: formBase(env, new URL(n8n.origin).hostname),
-      cli: { ownership: cli.ownership, folder: n8nFolderOf(env, process.cwd()), postgres: cliWay.postgres },
+      cli: { ownership: cli.ownership, folder: n8nFolderOf(env, process.cwd()) },
     };
   }
   const claims = keyClaims(apiKey);
