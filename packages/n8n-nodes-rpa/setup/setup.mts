@@ -1541,7 +1541,7 @@ async function run(inputs: Inputs): Promise<number> {
   const handed = workflow.nodes?.find((n: any) => n.name === NODE.importSteps)?.credentials?.[RUNNER.type];
   const handsOther = handed?.id !== undefined && handed?.id !== null && runnerRef !== undefined && String(handed.id) !== runnerRef.id;
   if (handsOther && runnerRef) {
-    say(`The workflow the form gives you uses the RPA Desktop Runner "${clean(handed.name, handed.id)}" (id ${clean(handed.id)}), not "${clean(runnerRef.name, runnerRef.id)}" (id ${clean(runnerRef.id)}), which this run ${runnerTest ? 'tested' : 'picked'}: to hand that one over, pick it on "${NODE.importSteps}" in n8n.`);
+    say(`The workflow the form gives you uses the RPA Desktop Runner "${clean(handed.name, handed.id)}" (id ${clean(handed.id)}), not "${clean(runnerRef.name, runnerRef.id)}" (id ${clean(runnerRef.id)}), which this run ${runnerTest && runnerTest.result !== 'untested' ? 'tested' : 'picked'}: to hand that one over, pick it on "${NODE.importSteps}" in n8n.`);
   } else if (handed?.id !== undefined && handed?.id !== null) {
     say(`The workflow the form gives you already uses the RPA Desktop Runner "${clean(handed.name, handed.id)}" (id ${clean(handed.id)}).`);
   } else if (runnerRef) {

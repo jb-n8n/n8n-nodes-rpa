@@ -836,6 +836,13 @@ describe('npx n8n-nodes-rpa setup', () => {
         '  What to do: open the credential "RPA Desktop Runner account" in n8n, which tests it as it opens.',
       ]);
       expect(onImport(forbidden).rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
+      // W6-2, not tested: the form hands over another runner; the line says this run picked (not tested) the named one,
+      // and the closing lines name it.
+      forbidden.state.credentials.push({ ...forbidden.state.credentials.find((c) => c.id === 'c-hand')!, id: 'c-night', name: 'Night shift' });
+      const other = await run(setup(forbidden.url, '--desktop-runner', 'Night shift'), ENV);
+      expect(other.code, other.out).toBe(0);
+      expect(other.out).toContain('The workflow the form gives you uses the RPA Desktop Runner "RPA Desktop Runner account" (id c-hand), not "Night shift" (id c-night), which this run picked: to hand that one over, pick it on "Import steps" in n8n.');
+      expect(other.stdout).toContain('The import form is ready. Whether the Windows machine of "Night shift" (id c-night) is connected is not known: n8n did not test it.');
     });
 
     it('no answer, at a terminal: it offers once to paste a corrected line, replaces it, says only its address and port, and n8n tests it again', async () => {
