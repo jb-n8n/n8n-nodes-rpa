@@ -136,12 +136,19 @@ a file only its user can read, which is removed right after, never in a command'
   double quotes, an ISO date, or a number of three or more digits (for example `"2026-09-30"` on a step that types
   2026-09-15, as after a value was changed and the description was not). A description that states no such value is
   judged by the action and the site alone. The red mark catches a description that names another action, site or
-  value. It does not judge the rest of the words: the sentence built from the step is what will run, whatever the description says. The
+  value. It does not judge the rest of the words: the sentence built from the step is what will run, whatever the description says.
+  A step that finds its control by its place, not by what it is, is marked in grey: by its row (a desktop name such
+  as `Vendor Row 1` with no id, as the recorder's bar marks it) or by its position (a desktop condition's `index`, a
+  browser selector such as `tr:nth-child(1)`). At each run it acts on whatever is in that place then, so a later step
+  that saves or posts acts on that too. The
   approval emails show the same sentences and the same marks. Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.
 - **Desktop writes.** The review page asks "Which of these steps save, send or submit?". The ticked steps are signed as
   writes. A write mark only matters where the runner's policy lists the control or key (see [Desktop runs](#desktop-runs)).
 - **Changing or signing again on the form.** With **Bot file** left empty, the form's next page shows the steps of the
   `active` row of the name typed, and a name it does not find ends on a page that lists every approved bot's name.
+  When that row's signature does not fit the form, the person first says why, on a page that shows no step: a bot
+  approved on another import form ends there, and only "I changed the signing key or the row was changed" shows the
+  steps.
   With its box left empty, the steps signed again are the row's own, read in n8n: they do not pass through the browser.
   **Change values** sends only the values back, from a page of fields: n8n puts each one into the row's steps, as
   text, in place of the old value at the place it was read from, and into the step's own description where that
@@ -157,7 +164,9 @@ a file only its user can read, which is removed right after, never in a command'
   Sign Steps refuses steps that hold a Site Login secret, and a secret variable appears in steps only by its name.
   Steps still show the sites, apps and fields they use and the other values they type. The page says who can open it.
   The review page's first line, worked out in n8n from the row it read, says whether, where and how the steps submitted
-  differ from the approved version, so a slip in the box shows before anyone approves. It compares with the row as
+  differ from the approved version, so a slip in the box shows before anyone approves: the two step lists are lined
+  up first, so it names the steps removed, added and changed (a very long list is compared step by step and says
+  so). It compares with the row as
   stored: when that row's signature does not fit the form, the line speaks of the stored version, never of the
   approved one, and never says unchanged.
 - **An old key or an edit.** A row signed with an older key and a row changed in the Data Table after it was approved

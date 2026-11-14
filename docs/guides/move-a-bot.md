@@ -130,7 +130,9 @@ form asks for nothing more. Without one, the last page says:
 
 ## Change an approved bot, or sign it again
 
-1. Open the **Import a bot** form. Leave **Bot file** empty and type the bot's name in **Name for the steps**.
+1. Open the **Import a bot** form. Leave **Bot file** empty and type the bot's name in **Name for the steps**. If its
+   approved version does not fit this form, a page asks first whether it was approved on another import form; change
+   it there (its workflow's note names that form), or answer that the signing key or the row changed to go on.
 2. The next page shows the steps that run now under that name, to read or copy. Under **What to do**, choose
    **Change values** and click **Review**.
 3. The values page has one field for each value the steps type, choose or open, in step order, with the approved
@@ -157,7 +159,7 @@ not pass through your browser, also when you pasted them back unchanged under si
 box (sign again or change values with other steps in the box, or change as JSON with an empty box) brings the page
 back with what to correct at its top, your choice and the pasted steps kept; nothing is imported or signed until it
 fits. Pasted text is taken as you typed it. A line near the top of the review page, in bold, says
-whether the steps differ from the approved version, and which steps or settings do, with each changed value as old →
+whether the steps differ from the approved version, and which steps were removed, added or moved and which steps or settings changed, with each changed value as old →
 new (`step 4: description "Type into To: "2026-09-15"" → "Type into To: "2026-09-30"", typed value "2026-09-15" →
 "2026-09-30"`). Text that is not a step document ends on a page that says so, and nothing changes. On desktop steps,
 a step that changed starts its write tick from the rule, and the review page says so when that differs from its

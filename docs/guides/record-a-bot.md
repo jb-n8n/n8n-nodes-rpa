@@ -106,7 +106,8 @@ A small mark after a step says it needs a look. Its tooltip says why.
 - **Variable**: on each run this value comes from a variable, which n8n supplies.
 - **Secret**: the typed value is not in the recording. On each run a secret variable supplies it.
 - **Check**: the app answered late, so the step was recorded as it was then. Or the step finds its element by a row
-  position (`Vendor Row 1`), so a later run acts on whatever is in that row. Or it finds its element by the text it
+  position (`Vendor Row 1`), so a later run acts on whatever is in that row; the review page on the import form marks
+  that step too. Or it finds its element by the text it
   shows now, or it is a click on a label. Check it, and delete it if it is wrong.
 
 ## Passwords and secrets
