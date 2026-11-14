@@ -1221,7 +1221,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
         if (!outputs) throw new Error(`${name} has not run`);
         return outputs;
       };
-      return { isExecuted: outputs !== undefined, params: byName(t, name).parameters, first: (branch = 0) => ran_()[branch]?.[0], all: (branch = 0) => ran_()[branch] ?? [] };
+      // An earlier run of the node, as n8n gives it for first(branch, run) and all(branch, run): `<name>#<run>` when
+      // given, else the last run.
+      const of = (run?: number) => (run !== undefined && ran[`${name}#${run}`] ? ran[`${name}#${run}`] : ran_());
+      return { isExecuted: outputs !== undefined, params: byName(t, name).parameters, first: (branch = 0, run?: number) => of(run)[branch]?.[0], all: (branch = 0, run?: number) => of(run)[branch] ?? [] };
     };
   }
   const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
@@ -3682,6 +3685,23 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fits.ticks?.defaultValue).toBe('');
     expect(fits.more?.defaultValue).toBe('7');
     expect(fits.note).toMatch(/^<p><em>The ticks start as the approved version had them\. Ticked steps are/);
+    // W6-8: signed again with other ticks. The review page says the steps are unchanged and the marks are what is ticked
+    // below; the last page (Sign steps' first run is the check, its last the signing) names each mark added or removed
+    // against the approved version, by number and words, and never says unchanged then.
+    const head = String(jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan(fits.after) })[0].html);
+    expect(head).toMatch(new RegExp(`^<p><b>${String(old.name)}: the steps are unchanged from the approved version 1\\. Which of them save, send or submit is what you tick below\\.</b></p>`));
+    const signAgain = async (answer: IDataObject) => {
+      const r = await signAfterReview(fits.after, { ...answer, decision_0: 'Approve and sign' }, {}, false, signedIn(APPROVER), undefined, KEY);
+      expect(r.errors).toEqual([]);
+      const $ = nodesRan({ ...fits.after, [REVIEW]: [[{ json: { ...answer, decision_0: 'Approve and sign' } }]], 'Sign steps#0': fits.after['Sign steps'], 'Sign steps': [r.signed.map((json) => ({ json })), []] });
+      return { title: render(completion('Imported').completionTitle, { $ }), text: render(completion('Imported').completionMessage, { $ }) };
+    };
+    const intentOf = (n: number) => String((JSON.parse(String(old.steps)) as { steps: IDataObject[] }).steps[n - 1].intent);
+    expect(await signAgain({ writes_0: [], moreWrites_0: '7' })).toEqual({ title: 'Signed again', text: `Signed again: ${String(old.name)} version 2, unchanged. Signed as writes: step 7 (${intentOf(7)}).` });
+    expect((await signAgain({ writes_0: [RULE], moreWrites_0: '7' })).text)
+      .toBe(`Signed again: ${String(old.name)} version 2, steps unchanged; write marks changed from version 1: added step 16 (Click Save). Signed as writes: step 7 (${intentOf(7)}), step 16 (Click Save).`);
+    expect((await signAgain({ writes_0: [RULE], moreWrites_0: '' })).text)
+      .toBe(`Signed again: ${String(old.name)} version 2, steps unchanged; write marks changed from version 1: added step 16 (Click Save); removed step 7 (${intentOf(7)}). Signed as writes: step 16 (Click Save).`);
     // A step the person changed falls back to the rule (ticked); step 7, unchanged, keeps its mark.
     const doc = JSON.parse(String(old.steps)) as { steps: IDataObject[] };
     doc.steps[15] = { ...doc.steps[15], intent: 'Click Save now' };
