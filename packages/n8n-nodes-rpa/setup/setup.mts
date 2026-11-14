@@ -49,7 +49,7 @@ import {
   byNameAndId, credential, keyAdvice, keyClaims, keyOwnerEmail, leftAlone, noDesktopRunner, noSiteLogin, ownerEntryProject, ownerProject,
   personalProject, projectCredentials, projectOf, type Ref, replaceData, sameName, setProject, shared, useFound,
 } from './ownership.mjs';
-import { closingRunner, correctLine, NO_ANSWER, offerLine, removeTrial, testRunner } from './runner.mjs';
+import { closingRunner, correctLine, NO_ANSWER, offerLine, removeTrial, type RunnerTest, testRunner } from './runner.mjs';
 import {
   type Changes, credentialProblem, FORM_AUTH, FORM_PATH, formAuthentication, formPathOf, formPathTaken, isOwnForm, loadTemplate, namesFor, NODE,
   siteFormName, siteFormTitle, siteSlug, structuralDifference, templateChanges, templateNodes, updatedNodes, wire, WORKFLOW_NAMES,
@@ -400,6 +400,86 @@ async function chooseWorkflow(inputs: Inputs, ours: any[], credentials: any[], h
   return { workflow, updating, differs };
 }
 
+/** What the closing lines read: what the run made, picked and tested, and the form's address. */
+interface Closing {
+  workflow: Record<string, any>;
+  formUrl?: string;
+  shownUrl?: string;
+  shownName: string;
+  formSays: string;
+  siteForm: boolean;
+  siteRef?: Ref;
+  /** The form's password when this run set it (shown once), else undefined. */
+  formPassword?: string;
+  /** The signing key when this run made it, else undefined; shown only with showKey. */
+  signingKey?: string;
+  showKey: boolean;
+  runnerRef?: Ref;
+  runnerTest?: RunnerTest;
+  runners: any[];
+  browserRef?: Ref;
+}
+
+/**
+ * The closing lines of a run that set the form up (exit 0): its address and sign-in, the signing key, what to do next,
+ * the RPA Desktop Runner the form hands over, the API key, and last whether the Windows machine is connected. They only
+ * read what the run did, and print.
+ */
+function closingLines(inputs: Inputs, closing: Closing) {
+  const { options } = inputs;
+  const basic = options.formLogin === 'basic';
+  const { workflow, formUrl, shownUrl, shownName, formSays, siteForm, siteRef, formPassword, signingKey, showKey, runnerRef, runnerTest, runners, browserRef } = closing;
+  say();
+  say(`${formSays}.`);
+  say(`  Address:    ${shownUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
+  if (formUrl && !inputs.formBase) say('              Replace the host and port with the ones you open n8n with, if they differ.');
+  if (siteForm && siteRef) say(`  Site Login: "${clean(siteRef.name)}". Use this form for the bots that sign in with it. Your other import form is not changed.`);
+  if (basic) {
+    say(`  User name:  ${FORM.user}`);
+    if (formPassword) reveal('  Password:   ', formPassword, '   (shown once: keep it in your password manager)');
+    else say('  Password:   made earlier, n8n does not show it again. To set a new one, run this again with --new-form-password.');
+  } else {
+    say('  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.');
+  }
+  const privateOn = nodeOf(workflow, NODE.importSteps)?.parameters?.options?.allowPrivateNetwork === true;
+  if (options.allowPrivateNetwork && privateOn) say('  Private network: on. Imports may open sites on this computer or your own network, and the workflow the form hands over has it on too.');
+  if (showKey && signingKey) reveal(`  Signing key: `, signingKey, '   (shown once: keep a copy where you keep recovery secrets)');
+  // Made earlier: bots may be approved with it by now, so a new key is no way to keep a copy.
+  else if (signingKey === undefined) say('  Signing key: made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.');
+  // Made now and not shown: a new key now costs nothing, as no bot is signed with this one yet.
+  else say('  Signing key: made by this run and kept in n8n, which does not show it again. Most people need no copy: it is for moving signed bots to another n8n, or for a lost n8n. To have one, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
+  say();
+  say('Next:');
+  say('  1. Record a bot, or pick a bot file you have: an RPA recording, a UiPath project, a Chrome Recorder export, Playwright code or a step document.');
+  if (basic) say('  2. Open the form address in your browser and sign in with the user name and password above.');
+  else say('  2. Open the form address in your browser and sign in to n8n. The first time, n8n asks whether the form may use your n8n login: choose Allow access.');
+  say('  3. Upload the file, give the steps a name, and submit. On the next page, review the steps and approve them.');
+  if (!basic) say(`  Only the n8n users on "${NODE.signSteps}" → Approver Allowlist may approve: add others there in n8n.`);
+  // What the workflow the form hands over carries for a desktop bot: the runner on Import steps, by id and name.
+  const handed = workflow.nodes?.find((n: any) => n.name === NODE.importSteps)?.credentials?.[RUNNER.type];
+  const handsOther = handed?.id !== undefined && handed?.id !== null && runnerRef !== undefined && String(handed.id) !== runnerRef.id;
+  if (handsOther && runnerRef) {
+    say(`The workflow the form gives you uses the RPA Desktop Runner ${nameAndId(handed)}, not ${nameAndId(runnerRef)}, which this run ${runnerTest && runnerTest.result !== 'untested' ? 'tested' : 'picked'}: to hand that one over, pick it on "${NODE.importSteps}" in n8n.`);
+  } else if (handed?.id !== undefined && handed?.id !== null) {
+    say(`The workflow the form gives you already uses the RPA Desktop Runner ${nameAndId(handed)}.`);
+  } else if (runnerRef) {
+    say(`The workflow the form gives you does not use "${clean(runnerRef.name, runnerRef.id)}" yet: pick it on "${NODE.importSteps}" in n8n (see above).`);
+  } else if (!runners.length && !browserRef) {
+    // Not said to a browser user: a browser bot's workflow has no runner slot.
+    say('No RPA Desktop Runner is set, so a desktop bot\'s workflow asks for one. To connect a Windows machine, run this again and paste its Connection Line when it asks.');
+  }
+  if (!inputs.cli) {
+    say();
+    say(keyAdvice(inputs.keyExpires));
+  }
+  // Last, where a reader looks: the form is ready, and whether the Windows machine is connected. The exit code stays 0:
+  // the form is set up either way.
+  if (runnerTest && runnerRef) {
+    say();
+    for (const line of closingRunner(runnerTest, runnerRef, formSays, handsOther)) say(line);
+  }
+}
+
 async function run(inputs: Inputs): Promise<number> {
   const { client, options, origin } = inputs;
   const basic = options.formLogin === 'basic';
@@ -739,55 +819,7 @@ async function run(inputs: Inputs): Promise<number> {
     runnerTest = await testRunner(inputs, runnerRef);
   }
 
-  say();
-  say(`${formSays}.`);
-  say(`  Address:    ${shownUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
-  if (formUrl && !inputs.formBase) say('              Replace the host and port with the ones you open n8n with, if they differ.');
-  if (siteForm && siteRef) say(`  Site Login: "${clean(siteRef.name)}". Use this form for the bots that sign in with it. Your other import form is not changed.`);
-  if (basic) {
-    say(`  User name:  ${FORM.user}`);
-    if (formPassword) reveal('  Password:   ', formPassword, '   (shown once: keep it in your password manager)');
-    else say('  Password:   made earlier, n8n does not show it again. To set a new one, run this again with --new-form-password.');
-  } else {
-    say('  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.');
-  }
-  const privateOn = nodeOf(workflow, NODE.importSteps)?.parameters?.options?.allowPrivateNetwork === true;
-  if (options.allowPrivateNetwork && privateOn) say('  Private network: on. Imports may open sites on this computer or your own network, and the workflow the form hands over has it on too.');
-  if (showKey && signingKey) reveal(`  Signing key: `, signingKey, '   (shown once: keep a copy where you keep recovery secrets)');
-  // Made earlier: bots may be approved with it by now, so a new key is no way to keep a copy.
-  else if (signingKey === undefined) say('  Signing key: made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.');
-  // Made now and not shown: a new key now costs nothing, as no bot is signed with this one yet.
-  else say('  Signing key: made by this run and kept in n8n, which does not show it again. Most people need no copy: it is for moving signed bots to another n8n, or for a lost n8n. To have one, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
-  say();
-  say('Next:');
-  say('  1. Record a bot, or pick a bot file you have: an RPA recording, a UiPath project, a Chrome Recorder export, Playwright code or a step document.');
-  if (basic) say('  2. Open the form address in your browser and sign in with the user name and password above.');
-  else say('  2. Open the form address in your browser and sign in to n8n. The first time, n8n asks whether the form may use your n8n login: choose Allow access.');
-  say('  3. Upload the file, give the steps a name, and submit. On the next page, review the steps and approve them.');
-  if (!basic) say(`  Only the n8n users on "${NODE.signSteps}" → Approver Allowlist may approve: add others there in n8n.`);
-  // What the workflow the form hands over carries for a desktop bot: the runner on Import steps, by id and name.
-  const handed = workflow.nodes?.find((n: any) => n.name === NODE.importSteps)?.credentials?.[RUNNER.type];
-  const handsOther = handed?.id !== undefined && handed?.id !== null && runnerRef !== undefined && String(handed.id) !== runnerRef.id;
-  if (handsOther && runnerRef) {
-    say(`The workflow the form gives you uses the RPA Desktop Runner ${nameAndId(handed)}, not ${nameAndId(runnerRef)}, which this run ${runnerTest && runnerTest.result !== 'untested' ? 'tested' : 'picked'}: to hand that one over, pick it on "${NODE.importSteps}" in n8n.`);
-  } else if (handed?.id !== undefined && handed?.id !== null) {
-    say(`The workflow the form gives you already uses the RPA Desktop Runner ${nameAndId(handed)}.`);
-  } else if (runnerRef) {
-    say(`The workflow the form gives you does not use "${clean(runnerRef.name, runnerRef.id)}" yet: pick it on "${NODE.importSteps}" in n8n (see above).`);
-  } else if (!runners.length && !browserRef) {
-    // Not said to a browser user: a browser bot's workflow has no runner slot.
-    say('No RPA Desktop Runner is set, so a desktop bot\'s workflow asks for one. To connect a Windows machine, run this again and paste its Connection Line when it asks.');
-  }
-  if (!inputs.cli) {
-    say();
-    say(keyAdvice(inputs.keyExpires));
-  }
-  // Last, where a reader looks: the form is ready, and whether the Windows machine is connected. The exit code stays 0:
-  // the form is set up either way.
-  if (runnerTest && runnerRef) {
-    say();
-    for (const line of closingRunner(runnerTest, runnerRef, formSays, handsOther)) say(line);
-  }
+  closingLines(inputs, { workflow, formUrl, shownUrl, shownName, formSays, siteForm, siteRef, formPassword, signingKey, showKey, runnerRef, runnerTest, runners, browserRef });
   return 0;
 }
 

@@ -79,7 +79,7 @@ export async function correctLine(client: Client, ref: Ref): Promise<boolean> {
 }
 
 /** What n8n's test of the RPA Desktop Runner gave, for the closing lines. */
-interface RunnerTest { result: 'connected' | 'failed' | 'untested'; message: string }
+export interface RunnerTest { result: 'connected' | 'failed' | 'untested'; message: string }
 
 /**
  * The closing lines about the Windows machine: the form is ready either way (exit 0), and whether the machine is
