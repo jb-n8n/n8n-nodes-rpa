@@ -218,6 +218,22 @@ const newSigningKey = () => randomBytes(32).toString('hex'); // 64 hex character
 
 /** A project, credential or workflow as a printed line names it: its name (cleaned) in quotes, then its id. */
 const nameAndId = (x: any) => `"${clean(x.name, x.id)}" (id ${clean(x.id)})`;
+/** A workflow's node by name (a workflow n8n gave back with its nodes). */
+const nodeOf = (workflow: Record<string, any>, name: string) => workflow.nodes.find((n: any) => n.name === name);
+/** Writes a workflow back (PUT /workflows/{id}) with this name, nodes and connections, and its settings or n8n's default. */
+const putWorkflow = (client: Client, w: Record<string, any>, name: unknown, nodes: unknown, connections: unknown) => client.api('PUT', `/workflows/${encodeURIComponent(String(w.id))}`, { name, nodes, connections, settings: w.settings ?? { executionOrder: 'v1' } });
+
+/**
+ * The address of a workflow's form node: its Form Path (rpa-import, set here) or its webhook id, which comes from n8n,
+ * at the address this command reaches n8n at (formUrl), and the address to open (shownUrl): n8n's own when its
+ * environment gives it here, else formUrl. Used only when it is a plain id, never printed otherwise.
+ */
+function formAddress(formNode: any, inputs: Inputs) {
+  const webhookId = formPathOf(formNode) || formNode?.webhookId;
+  const formUrl = typeof webhookId === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(webhookId) ? `${inputs.origin}/form/${webhookId}` : undefined;
+  const shownUrl = formUrl && inputs.formBase ? new URL(`form/${webhookId}`, inputs.formBase).href : formUrl;
+  return { formUrl, shownUrl };
+}
 
 /** Names for one printed line: cleaned, at most eight, then how many more. */
 const someNames = (names: string[]) => `${names.slice(0, 8).map((n) => `"${clean(n)}"`).join(', ')}${names.length > 8 ? ` and ${names.length - 8} more` : ''}`;
@@ -246,10 +262,7 @@ async function askUpdate(workflow: any, changes: Changes): Promise<boolean> {
 /** The closing lines when a form is left as it is: whether it answers at its address, and that nothing was changed. */
 async function closeUnchanged(workflow: any, inputs: Inputs) {
   const basic = formAuthentication(workflow) === FORM_AUTH.basic;
-  const formNode = workflow.nodes.find((n: any) => n?.name === NODE.form);
-  const webhookId = formPathOf(formNode) || formNode?.webhookId;
-  const formUrl = typeof webhookId === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(webhookId) ? `${inputs.origin}/form/${webhookId}` : undefined;
-  const shownUrl = formUrl && inputs.formBase ? new URL(`form/${webhookId}`, inputs.formBase).href : formUrl;
+  const { formUrl, shownUrl } = formAddress(workflow.nodes.find((n: any) => n?.name === NODE.form), inputs);
   const answered = formUrl && workflow.active ? await waitForForm(formUrl, basic, 3) : undefined;
   say();
   say(`The form "${clean(workflow.name, workflow.id)}" was not changed, and nothing else was made or changed.`);
@@ -622,7 +635,7 @@ async function run(inputs: Inputs): Promise<number> {
     // public API keeps the published version live until the new one is published; n8n's command line unpublishes it
     // on import, so the publish follows at once.
     const old = workflow;
-    const r = await client.api('PUT', `/workflows/${encodeURIComponent(String(old.id))}`, { name: old.name, nodes: updatedNodes(old), connections: loadTemplate().connections, settings: old.settings ?? { executionOrder: 'v1' } });
+    const r = await putWorkflow(client, old, old.name, updatedNodes(old), loadTemplate().connections);
     if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not update the workflow "${clean(old.name, old.id)}" (id ${clean(old.id)}) (${client.reason(r)}). ${old.active ? 'n8n keeps its published version until another is published.' : ''}`.trim());
     workflow = { ...r.json, active: inputs.cli ? false : r.json.active };
     updated = true;
@@ -632,24 +645,24 @@ async function run(inputs: Inputs): Promise<number> {
   }
   if (workflow) {
     if (options.approver !== undefined) say(`         its Approver Allowlist was left as it is: change it on "${NODE.signSteps}" in n8n.`);
-    const onImport = workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.credentials ?? {};
+    const onImport = nodeOf(workflow, NODE.importSteps)?.credentials ?? {};
     // The runner by name and id: the one picked may have any name, and Import steps may hold another one.
     const toPick = [inputs.browser && !onImport[BROWSER.type] ? `"${BROWSER.name}"` : '', !onImport[SIGNING.type] ? `"${SIGNING.name}"` : '',
       runnerRef && String(onImport[RUNNER.type]?.id) !== runnerRef.id ? nameAndId(runnerRef) : ''].filter(Boolean);
     if (toPick.length) say(`         its credentials were left as they are: pick ${toPick.join(', ')} on "${NODE.importSteps}" in n8n, so the workflow file the form hands over carries them.`);
     // --site-login and --allow-private-network change a workflow only when this run makes it: one it reuses is left as it is.
-    const onSign = workflow.nodes.find((n: any) => n.name === NODE.signSteps)?.credentials ?? {};
+    const onSign = nodeOf(workflow, NODE.signSteps)?.credentials ?? {};
     const siteOn = (creds: any) => siteRef !== undefined && String(creds?.[CREDENTIALS.siteLogin]?.id) === siteRef.id;
     const wouldSet = [
       siteRef && !(siteOn(onImport) && siteOn(onSign)) ? `pick "${clean(siteRef.name)}" (id ${clean(siteRef.id)}) on "${NODE.importSteps}" and "${NODE.signSteps}"` : '',
-      options.allowPrivateNetwork && workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.parameters?.options?.allowPrivateNetwork !== true
+      options.allowPrivateNetwork && nodeOf(workflow, NODE.importSteps)?.parameters?.options?.allowPrivateNetwork !== true
         ? `turn on Options → Allow Private Network on "${NODE.importSteps}"` : '',
     ].filter(Boolean);
     if (wouldSet.length) say(`         ${updated ? 'what it had was kept' : 'it was left as it is'}, without what you asked for: in n8n, ${wouldSet.join(', and ')}, then publish it again.`);
   } else {
     const wired = wire(nodes as Record<string, any>[], { form: formRef, signing: signing.ref, browser: browserRef, runner: runnerRef, siteLogin: siteRef });
     if (made) {
-      const r = await client.api('PUT', `/workflows/${encodeURIComponent(String(made.id))}`, { name: workflowName, nodes: wired, connections: made.connections, settings: made.settings ?? { executionOrder: 'v1' } });
+      const r = await putWorkflow(client, made, workflowName, wired, made.connections);
       if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not set the credentials on the workflow "${workflowName}" (id ${clean(made.id)}) (${client.reason(r)}). It is not published.`);
       workflow = r.json;
       halfMade = undefined;
@@ -671,11 +684,11 @@ async function run(inputs: Inputs): Promise<number> {
     const made = workflow;
     // A form path held by a workflow this API key cannot see: n8n refuses to publish. The form then keeps the address
     // with its webhook id, and the run says why.
-    const dropPath = !reused && wantPath !== undefined && formPathOf(made.nodes.find((n: any) => n.name === NODE.form)) === wantPath
+    const dropPath = !reused && wantPath !== undefined && formPathOf(nodeOf(made, NODE.form)) === wantPath
       ? async (r: Awaited<ReturnType<Client['api']>>) => {
         if (!/already taken|conflict with one of the webhooks/i.test(client.reason(r))) return undefined;
         const without = made.nodes.map((n: any) => (n.name === NODE.form ? { ...n, parameters: { ...n.parameters, options: Object.fromEntries(Object.entries(n.parameters?.options ?? {}).filter(([k]) => k !== 'path')) } } : n));
-        const put = await client.api('PUT', `/workflows/${encodeURIComponent(String(made.id))}`, { name: made.name, nodes: without, connections: made.connections, settings: made.settings ?? { executionOrder: 'v1' } });
+        const put = await putWorkflow(client, made, made.name, without, made.connections);
         if (put.status !== 200 || !put.json?.id) return undefined;
         workflow = put.json;
         say(`         its form keeps an address with an id, not /form/${wantPath}: n8n says that address is taken (${client.reason(r)}).`);
@@ -688,11 +701,8 @@ async function run(inputs: Inputs): Promise<number> {
     publishedNow = true;
   }
 
-  // The form's address: its Form Path (rpa-import, set here) or its webhook id, which comes from n8n. Used only when it is
-  // a plain id, never printed otherwise.
-  const formNode = workflow.nodes.find((n: { name: string }) => n.name === NODE.form);
-  const webhookId = formPathOf(formNode) || formNode?.webhookId;
-  const formUrl = typeof webhookId === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(webhookId) ? `${origin}/form/${webhookId}` : undefined;
+  // The form's address, and the address to open (formAddress).
+  const { formUrl, shownUrl } = formAddress(nodeOf(workflow, NODE.form), inputs);
   const shownName = clean(workflow.name, workflow.id);
   // n8n registers the form a moment after it publishes the workflow; through n8n's command line, the running n8n
   // notices the publish by itself, within about 5 to 20 seconds.
@@ -709,8 +719,6 @@ async function run(inputs: Inputs): Promise<number> {
     runnerTest = await testRunner(inputs, runnerRef);
   }
 
-  // The address to open: n8n's own when its environment gives it here, else the one this command reached n8n at.
-  const shownUrl = formUrl && inputs.formBase ? new URL(`form/${webhookId}`, inputs.formBase).href : formUrl;
   say();
   say(`${formSays}.`);
   say(`  Address:    ${shownUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
@@ -723,7 +731,7 @@ async function run(inputs: Inputs): Promise<number> {
   } else {
     say('  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.');
   }
-  const privateOn = workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.parameters?.options?.allowPrivateNetwork === true;
+  const privateOn = nodeOf(workflow, NODE.importSteps)?.parameters?.options?.allowPrivateNetwork === true;
   if (options.allowPrivateNetwork && privateOn) say('  Private network: on. Imports may open sites on this computer or your own network, and the workflow the form hands over has it on too.');
   if (showKey && signingKey) reveal(`  Signing key: `, signingKey, '   (shown once: keep a copy where you keep recovery secrets)');
   // Made earlier: bots may be approved with it by now, so a new key is no way to keep a copy.
