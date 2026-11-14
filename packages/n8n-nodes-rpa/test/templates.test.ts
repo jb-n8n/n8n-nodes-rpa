@@ -2599,7 +2599,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(compare(ran, edit((d) => { d.steps[3] = { intent: 'a', goto: '/b', fill: { selector: '#c', value: 'd' } } as typeof d.steps[0]; })))
       .toBe('feed: changed from the approved version 4: step 4: several fields.');
     expect(compare(ran, edit((d) => { for (const i of [2, 4, 6, 8, 10]) d.steps[i].goto = `/n${i}`; })))
-      .toBe('feed: changed from the approved version 4: step 3: address "/p3" → "/n2"; step 5: address "/p5" → "/n4"; step 7: address "/p7" → "/n6"; and more: steps 9, 11.');
+      .toBe('feed: changed from the approved version 4: step 3: address "/p3" → "/n2"; step 5: address "/p5" → "/n4"; step 7: address "/p7" → "/n6"; and more changed: steps 9, 11.');
     // The two lists are lined up first (IW-7): a step taken out or put in moves no later step. Removed steps by their old
     // number and description, added ones by their new number, changed ones old → new, a step moved as such.
     expect(compare(ran, edit((d) => { d.steps.push({ intent: 'Open more', goto: '/more' }); }))).toBe('feed: changed from the approved version 4: added: step 26. 26 steps now, 25 in the approved version.');
@@ -2620,9 +2620,20 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // W6-6: a step moved forward past others, and the last step replaced: the move is named, not read as a change.
     expect(compare(ran, edit((d) => { d.steps.splice(10, 0, ...d.steps.splice(14, 1)); d.steps.splice(24, 1, { intent: 'Read the count', goto: '/count' }); })))
       .toBe('feed: changed from the approved version 4: moved: step 15 ("Open page 15") is now step 11; step 25: description "Open page 25" → "Read the count", address "/p25" → "/count".');
-    // A step that moved and changed says both.
+    // A step that moved and changed is a changed step, named with its new number and its values old → new.
     expect(compare(ran, edit((d) => { d.steps.splice(10, 0, { ...d.steps.splice(14, 1)[0], goto: '/p15b' }); })))
-      .toBe('feed: changed from the approved version 4: moved: step 15 ("Open page 15") is now step 11 (changed too: address "/p15" → "/p15b").');
+      .toBe('feed: changed from the approved version 4: step 15 (now step 11): address "/p15" → "/p15b".');
+    // Five moves, the fourth and fifth also changed: only steps that moved unchanged are in the moved part (the one list
+    // that may end in "and N more"); a changed step is always in the changed part with its values, never in a count.
+    const moving = [1, 3, 5, 7, 9];
+    const fiveMoves = (change: boolean) => edit((d) => {
+      const taken = moving.map((i) => d.steps[i]).map((x, k) => (change && k >= 3 ? { ...x, goto: `/x${moving[k] + 1}` } : x));
+      d.steps = d.steps.filter((_, i) => !moving.includes(i)).concat(taken);
+    });
+    expect(compare(ran, fiveMoves(true)))
+      .toBe('feed: changed from the approved version 4: moved: step 2 ("Open page 2") is now step 21, step 4 ("Open page 4") is now step 22, step 6 ("Open page 6") is now step 23; step 8 (now step 24): address "/p8" → "/x8"; step 10 (now step 25): address "/p10" → "/x10".');
+    expect(compare(ran, fiveMoves(false)))
+      .toBe('feed: changed from the approved version 4: moved: step 2 ("Open page 2") is now step 21, step 4 ("Open page 4") is now step 22, step 6 ("Open page 6") is now step 23, and 2 more.');
     // A description that repeats never makes a move: the steps read as changed in place and removed.
     const twice = { ...doc, steps: doc.steps.map((s, i) => (i === 2 || i === 12 ? { ...s, intent: 'Click OK' } : s)) };
     const twiceRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(twice), status: 'active' }]).ran;
@@ -2646,7 +2657,25 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const big = { ...doc, steps: many('p', 501) };
     const bigRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(big), status: 'active' }]).ran;
     const capped = compare(bigRan, JSON.stringify({ ...big, steps: many('q', 501) }));
-    expect(capped).toMatch(/^feed: changed from the approved version 4: step 1: description "Open p 1" → "Open q 1", address "\/p1" → "\/q1"; step 2: .*; and more: steps 4, 5, .*, 23, …; compared step by step in place, because there are too many steps to line up: after a step added or taken out, every later step reads as changed\.$/);
+    expect(capped).toMatch(/^feed: changed from the approved version 4: step 1: description "Open p 1" → "Open q 1", address "\/p1" → "\/q1"; step 2: .*; and more: steps 4, 5, .*, 500, 501; compared step by step in place, because there are too many steps to line up: after a step added or taken out, every later step reads as changed\.$/);
+    // Every number is listed, never cut to a count or an ellipsis.
+    expect(capped).not.toContain('…');
+    for (let k = 4; k <= 501; k++) expect(capped).toContain(` ${k}${k === 501 ? ';' : ','}`);
+    // Each side is capped on its own too: 2,001 unmatched steps against one are compared in place, not lined up.
+    const lopsided = { ...doc, steps: many('p', 2001) };
+    const lopsidedRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(lopsided), status: 'active' }]).ran;
+    expect(compare(lopsidedRan, JSON.stringify({ ...lopsided, steps: many('q', 1) }))).toContain('; compared step by step in place, because there are too many steps to line up');
+    // Two documents of 5,000 steps each: in place, within 3 seconds.
+    const fiveThousand = { ...doc, steps: many('p', 5000) };
+    const fiveThousandRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(fiveThousand), status: 'active' }]).ran;
+    const bigStarted = Date.now();
+    expect(compare(fiveThousandRan, JSON.stringify({ ...fiveThousand, steps: many('q', 5000) }))).toMatch(/, 5000; compared step by step in place, because there are too many steps to line up: after a step added or taken out, every later step reads as changed\.$/);
+    expect(Date.now() - bigStarted).toBeLessThan(3000);
+    // Forty changed steps: three with their values, then every other number.
+    const sixty = { ...doc, steps: many('p', 60) };
+    const sixtyRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(sixty), status: 'active' }]).ran;
+    const forty = compare(sixtyRan, JSON.stringify({ ...sixty, steps: sixty.steps.map((x, k) => (k < 40 ? { ...x, goto: `/c${k + 1}` } : x)) }));
+    expect(forty).toBe(`feed: changed from the approved version 4: step 1: address "/p1" → "/c1"; step 2: address "/p2" → "/c2"; step 3: address "/p3" → "/c3"; and more changed: steps ${Array.from({ length: 37 }, (_, k) => k + 4).join(', ')}.`);
     // The same long bot with one step taken out: the steps around it are the same, so only the middle is lined up.
     expect(compare(bigRan, JSON.stringify({ ...big, steps: big.steps.filter((_, i) => i !== 250) })))
       .toBe('feed: changed from the approved version 4: removed: step 251 ("Open p 251"). 500 steps now, 501 in the approved version.');
@@ -2654,7 +2683,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const started = Date.now();
     const twoHundred = { ...doc, steps: many('p', 200) };
     const twoRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(twoHundred), status: 'active' }]).ran;
-    expect(compare(twoRan, JSON.stringify({ ...twoHundred, steps: many('q', 200) }))).toMatch(/^feed: changed from the approved version 4: step 1: .*; and more: steps 4, .*, 23, …\.$/);
+    expect(compare(twoRan, JSON.stringify({ ...twoHundred, steps: many('q', 200) }))).toMatch(/^feed: changed from the approved version 4: step 1: .*; and more changed: steps 4, .*, 199, 200\.$/);
     const fiveHundred = { ...doc, steps: many('p', 500) };
     const fiveRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(fiveHundred), status: 'active' }]).ran;
     expect(compare(fiveRan, JSON.stringify({ ...fiveHundred, steps: many('q', 500) }))).not.toContain('in place');

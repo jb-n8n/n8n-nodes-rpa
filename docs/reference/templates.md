@@ -51,14 +51,17 @@ first, before anything reads or writes them.
   page its first line: unchanged,
   or which steps differ and how. The two step lists are lined up first, so a step taken out or put in moves no later
   step: steps removed by their old number and description (`removed: step 17 ("Click Vendor Row 1")`), steps added
-  by their new number (`added: step 19`), a step moved by its old number, description and new number (`moved: step 3
-  ("Open the list") is now step 8`, with `(changed too: …)` when it also changed; a step whose description appears
-  only once on each side counts as the same step; a move that keeps its number is named by the steps it passed), and for each changed step,
-  at most three, its number (`step 16 (now step 15)` when it moved up) and its changed values, old → new
-  (`step 6: typed value "2026-09-15" → "2026-09-30"`, in the review page's words: typed value, chosen option, address,
-  description, control name, field label, visible text, selector), each on one line and cut at 60 characters, `several fields` for a
-  step with more than three, then the other steps by number. When the part that differs is too long to line up
-  (more than 250,000 pairs of steps), the steps are compared in place, step n with step n, and the line says so. **Review** sends those steps to **Import steps** as a step document, then to the same review
+  by their new number (`added: step 19`), a step that moved unchanged by its old number, description and new number
+  (`moved: step 3 ("Open the list") is now step 8`; a move that keeps its number is named by the steps it passed; this
+  list alone ends in `and N more` after three), and each changed step, a moved one included, by its number
+  (`step 16 (now step 15)` when it moved) and its changed values, old → new (`step 6: typed value "2026-09-15" →
+  "2026-09-30"`, in the review page's words: typed value, chosen option, address, description, control name, field
+  label, visible text, selector), each on one line and cut at 60 characters, `several fields` for a step with more than
+  three. Three changed steps are shown so; every other one follows by its number (`and more changed: steps 12, 14`).
+  Every removed and added step number is listed. A step taken out in one place and put in another counts as the same
+  step when it is the same, or when its description appears once on each side. When the part that differs is too long
+  to line up (more than 250,000 pairs of steps, or more than 2,000 steps on either side), the steps are compared in
+  place, step n with step n, every differing step is listed by its number, and the line says so. **Review** sends those steps to **Import steps** as a step document, then to the same review
   page and **Sign steps**. Text that is not a step document ends on **Import failed**, which says the old version keeps
   running.
   The steps get the next version: **Import steps → Options → Version** is one more than the highest version any row
