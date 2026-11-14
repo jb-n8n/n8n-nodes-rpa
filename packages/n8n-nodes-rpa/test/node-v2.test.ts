@@ -5,7 +5,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  NodeHelpers, Workflow, type IDataObject, type INode, type INodeParameters, type INodeProperties, type INodeTypeDescription, type INodeTypes,
+  NodeHelpers, type IDataObject, type INode, type INodeParameters, type INodeProperties, type INodeTypeDescription,
 } from 'n8n-workflow';
 import { CREDENTIALS, NODE_VERSION, NODE_VERSIONS, runsOnDefault, SHARE_ACROSS_WORKERS } from '../nodes/Playwright/config.js';
 import { SHARE_ACROSS_WORKERS_PROPERTY } from '../nodes/Playwright/description/runSteps.js';
@@ -17,6 +17,7 @@ import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { fakeEngine } from './fake-engine.js';
 import { nodeContext, siteLoginData } from './feed-fixtures.js';
 import { harness } from './harness.js';
+import { runParameters } from './n8n-harness.js';
 
 const d = new Playwright().description;
 const base = JSON.parse(readFileSync(new URL('fixtures/node-v1-description.json', import.meta.url), 'utf8')) as Pick<INodeTypeDescription, 'version' | 'credentials' | 'properties'>;
@@ -30,17 +31,10 @@ const RUNS_ON_VALUES: (string | undefined)[] = [undefined, 'browserAndDesktop', 
 /** Values of other fields that show or hide something. */
 const EXTRAS: INodeParameters[] = [{}, { aiRepair: true }, { aiRepair: false }, { requireSignedSteps: false }, { source: 'uipath' }, { source: 'recording' }, { inputFrom: 'text' }];
 
-const nodeTypes = (description: INodeTypeDescription): INodeTypes => {
-  const type = { description };
-  return { getByName: () => type, getByNameAndVersion: () => type, getKnownTypes: () => ({}) } as unknown as INodeTypes;
-};
 const stored = (parameters: INodeParameters, typeVersion: number, types: string[] = []): INode => ({
   id: 'n1', name: 'RPA', type: RPA_NODE_TYPE, typeVersion, position: [0, 0], parameters,
   credentials: Object.fromEntries(types.map((t) => [t, { id: `id-${t}`, name: t }])),
 });
-/** The node's parameters as a run sees them: n8n's Workflow constructor fills the defaults and strips what is not shown. */
-const runParameters = (node: INode, description = d): INodeParameters =>
-  new Workflow({ nodes: [structuredClone(node)], connections: {}, nodeTypes: nodeTypes(description), active: false }).getNode(node.name)!.parameters;
 /** The credential types n8n keeps on the node when it is saved (getActiveCredentialTypes). */
 const kept = (node: INode, description = d): string[] => {
   const active = NodeHelpers.getActiveCredentialTypes(node, description);
