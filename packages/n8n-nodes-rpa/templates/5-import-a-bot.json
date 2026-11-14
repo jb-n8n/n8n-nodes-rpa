@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "### Import a bot (grey: leave as is)\nTurns a bot you already have into signed steps. Open the form (**Execute workflow**, or the production URL once published) and upload one of:\n- a **Chrome Recorder** export: Chrome DevTools → Recorder → Export → JSON\n- **Playwright code** from `npx playwright codegen` (JavaScript or TypeScript)\n- a **UiPath** project as a .zip, or one .xaml workflow\n- a **step document** you wrote, as Run Steps takes it (JSON): this is how hand-written steps get approved and signed\n- an **RPA recording** saved by the RPA recorder on the Windows machine (.rpa-recording.json)\n\n**Import steps** builds a draft, runs it once and replays it in a fresh browser. Desktop steps (a UiPath project, a step document or an RPA recording) are not replayed, and neither are browser steps from a step document that submit a form, download through a form, type a secret or change a password. The next page of the form shows every step list with its safety flags, evidence and numbered steps, and each step list gets its own approval there: Approve or Reject. **Sign steps** signs what was approved, and the last page says what was signed; every import also downloads an n8n workflow that runs the steps (for a UiPath project, the rest of the bot). Run the steps with Run Steps as **RPA: 2 Data feed** does, with `name` in **Settings** set to the name the last page shows.\n\n**Change or sign again.** Leave Bot file empty and type the name of an approved bot. The next page shows the steps that run now under that name (its active row in `playwright_steps`), to read and copy. Choose **Sign the approved steps again, unchanged** (after the signing key changed), **Change values** to change a date, a typed text, a chosen option or an address on a page of fields, or **Change the steps as JSON** and paste the changed steps. They go to **Import steps** as a step document and to the same review page. Before the review page, **Sign steps** checks the version that runs now with its own signing key and Site Login, and the page warns when it does not fit (expected after a new key; otherwise the bot's workflow uses another Site Login). Approved, they supersede the version that runs now. Rejected, the version that runs now keeps running.",
+        "content": "### Import a bot (grey: leave as is)\nTurns a bot you already have into signed steps. Open the form (**Execute workflow**, or the production URL once published) and upload one of:\n- a **Chrome Recorder** export: Chrome DevTools → Recorder → Export → JSON\n- **Playwright code** from `npx playwright codegen` (JavaScript or TypeScript)\n- a **UiPath** project as a .zip, or one .xaml workflow\n- a **step document** you wrote, as Run Steps takes it (JSON): this is how hand-written steps get approved and signed\n- an **RPA recording** saved by the RPA recorder on the Windows machine (.rpa-recording.json)\n\n**Import steps** builds a draft, runs it once and replays it in a fresh browser. Desktop steps (a UiPath project, a step document or an RPA recording) are not replayed, and neither are browser steps from a step document that submit a form, download through a form, type a secret or change a password. The next page of the form shows every step list with its safety flags, evidence and numbered steps, and each step list gets its own approval there: Approve or Reject. **Sign steps** signs what was approved, and the last page says what was signed; every import also downloads an n8n workflow that runs the steps (for a UiPath project, the rest of the bot). Run the steps with Run Steps as **RPA: 2 Data feed** does, with `name` in **Settings** set to the name the last page shows.\n\n**Change or sign again.** Leave Bot file empty and type the name of an approved bot. The next page shows the steps that run now under that name (its active row in `playwright_steps`), to read and copy. Choose **Sign the approved steps again, unchanged** (after the signing key changed), **Change values** to change a date, a typed text, a chosen option or an address on a page of fields, or **Change the steps as JSON** and paste the changed steps. They go to **Import steps** as a step document and to the same review page. Before the change page, **Sign steps** checks the version that runs now with its own signing key and Site Login. When it does not fit, the form first asks why, without showing a step: approved on another import form (it ends there) or a new signing key or a changed row (the steps follow, and the review page warns). An approval marks every older active row of the name superseded. Approved, they supersede the version that runs now. Rejected, the version that runs now keeps running.",
         "height": 520,
         "width": 520,
         "color": 7
@@ -457,7 +457,7 @@
     {
       "parameters": {
         "mode": "raw",
-        "jsonOutput": "={{ ((name, all, offer) => ((rows) => ((mine) => ({ name, found: mine.length > 0, version: mine.length ? mine[0].version : null, steps: mine.length ? mine[0].steps : '', signature: mine.length ? String(mine[0].signature ?? '') : '', approvedBy: mine.length ? String(mine[0].approvedBy ?? '') : '', names: [...new Set(rows.map((r) => r.name))].sort(), next: Math.max(0, ...all.filter((r) => r.name === name).map((r) => Number(r.version)).filter((v) => Number.isInteger(v))) + 1, values: mine.length ? offer(mine[0].steps) : [] }))(rows.filter((r) => r.name === name).sort((a, b) => Number(b.version) - Number(a.version))))(all.filter((r) => r.status === 'active' && typeof r.steps === 'string' && r.steps !== '')))(String($('Settings').first().json.name ?? '').trim(), $('Approved bots').all().map((i) => i.json).filter((r) => typeof r.name === 'string'), (steps) => { const doc = ((s) => { try { return JSON.parse(String(s)); } catch (x) { return null; } })(steps); if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || !Array.isArray(doc.steps)) return []; const desktop = doc.surface === 'desktop'; const obj = (v) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? v : { }); const short = (v) => ((a) => (a.length > 80 ? a.slice(0, 79).join('') + '…' : a.join('')))(Array.from(String(v).replace(/[\\s\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+/g, ' ').trim().split('<').join('‹').split('>').join('›'))); const own = (p) => ((c) => String(c.name ?? c.automationId ?? '').trim())(obj(p[p.length - 1])); const target = (l) => ((o) => (desktop ? ((p) => (p.length && own(p) ? own(p) : 'a field without a name'))(Array.isArray(obj(o.uia).path) ? obj(o.uia).path : []) : typeof o.role === 'string' ? (typeof o.name === 'string' && o.name.trim() ? o.name : 'the ' + o.role) : typeof o.label === 'string' ? o.label : typeof o.text === 'string' ? o.text : typeof o.testId === 'string' ? o.testId : typeof o.css === 'string' ? 'the element matching ' + o.css : 'an element'))(obj(l)); return doc.steps.flatMap((raw, i) => { const s = obj(raw); const n = i + 1; const at = !desktop && typeof s.goto === 'string' ? ['goto', 'goto', 'Open', 'address'] : s.fill !== undefined ? ['fill', 'value', 'Type into ' + short(target(obj(s.fill).field)), 'typed value'] : s.select !== undefined ? ['select', desktop ? 'option' : 'value', 'Choose in ' + short(target(obj(s.select).field)), 'chosen option'] : null; if (at === null) return []; const v = at[0] === 'goto' ? s.goto : obj(s[at[0]])[at[1]]; const several = Array.isArray(v); if (!several && typeof v !== 'string') return []; const value = several ? v.map(String).join(', ') : v; const why = several ? 'several options' : value.includes('{' + '{') ? 'not a fixed value: it is filled in when the bot runs' : /[<>\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]|^\\s|\\s$/.test(value) ? 'a field cannot hold it as it is' : ''; return [{ step: n, name: 'value_' + n, at: at[0], key: at[1], label: n + '. ' + at[2] + (at[2].endsWith(':') ? ' ' : ': ') + at[3], value, offered: why === '', why }]; }); }) }}",
+        "jsonOutput": "={{ ((name, all, offer) => ((rows) => ((mine) => ({ name, found: mine.length > 0, active: mine.length, version: mine.length ? mine[0].version : null, steps: mine.length ? mine[0].steps : '', signature: mine.length ? String(mine[0].signature ?? '') : '', approvedBy: mine.length ? String(mine[0].approvedBy ?? '') : '', names: [...new Set(rows.map((r) => r.name))].sort(), next: Math.max(0, ...all.filter((r) => r.name === name).map((r) => Number(r.version)).filter((v) => Number.isInteger(v))) + 1, values: mine.length ? offer(mine[0].steps) : [] }))(rows.filter((r) => r.name === name).sort((a, b) => Number(b.version) - Number(a.version))))(all.filter((r) => r.status === 'active' && typeof r.steps === 'string' && r.steps !== '')))(String($('Settings').first().json.name ?? '').trim(), $('Approved bots').all().map((i) => i.json).filter((r) => typeof r.name === 'string'), (steps) => { const doc = ((s) => { try { return JSON.parse(String(s)); } catch (x) { return null; } })(steps); if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || !Array.isArray(doc.steps)) return []; const desktop = doc.surface === 'desktop'; const obj = (v) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? v : { }); const short = (v) => ((a) => (a.length > 80 ? a.slice(0, 79).join('') + '…' : a.join('')))(Array.from(String(v).replace(/[\\s\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+/g, ' ').trim().split('<').join('‹').split('>').join('›'))); const own = (p) => ((c) => String(c.name ?? c.automationId ?? '').trim())(obj(p[p.length - 1])); const target = (l) => ((o) => (desktop ? ((p) => (p.length && own(p) ? own(p) : 'a field without a name'))(Array.isArray(obj(o.uia).path) ? obj(o.uia).path : []) : typeof o.role === 'string' ? (typeof o.name === 'string' && o.name.trim() ? o.name : 'the ' + o.role) : typeof o.label === 'string' ? o.label : typeof o.text === 'string' ? o.text : typeof o.testId === 'string' ? o.testId : typeof o.css === 'string' ? 'the element matching ' + o.css : 'an element'))(obj(l)); return doc.steps.flatMap((raw, i) => { const s = obj(raw); const n = i + 1; const at = !desktop && typeof s.goto === 'string' ? ['goto', 'goto', 'Open', 'address'] : s.fill !== undefined ? ['fill', 'value', 'Type into ' + short(target(obj(s.fill).field)), 'typed value'] : s.select !== undefined ? ['select', desktop ? 'option' : 'value', 'Choose in ' + short(target(obj(s.select).field)), 'chosen option'] : null; if (at === null) return []; const v = at[0] === 'goto' ? s.goto : obj(s[at[0]])[at[1]]; const several = Array.isArray(v); if (!several && typeof v !== 'string') return []; const value = several ? v.map(String).join(', ') : v; const why = several ? 'several options' : value.includes('{' + '{') ? 'not a fixed value: it is filled in when the bot runs' : /[<>\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]|^\\s|\\s$/.test(value) ? 'a field cannot hold it as it is' : ''; return [{ step: n, name: 'value_' + n, at: at[0], key: at[1], label: n + '. ' + at[2] + (at[2].endsWith(':') ? ' ' : ': ') + at[3], value, offered: why === '', why }]; }); }) }}",
         "options": {}
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000533",
@@ -469,7 +469,7 @@
         240
       ],
       "executeOnce": true,
-      "notes": "One item: the newest active row whose name is exactly the name typed (trimmed), its steps as the table holds them (and its signature and approver, which only Sign steps reads, to check them), the next version number (one more than the highest any row of that name has, active, rejected or superseded), and the names of every approved bot for the page that says none was found."
+      "notes": "One item: the newest active row whose name is exactly the name typed (trimmed) (of two of one version, the first saved, as Get active steps reads it), how many active rows of that name there are (the change page says so when more than one), its steps as the table holds them (and its signature and approver, which only Sign steps reads, to check them), the next version number (one more than the highest any row of that name has, active, rejected or superseded), and the names of every approved bot for the page that says none was found."
     },
     {
       "parameters": {
@@ -509,7 +509,7 @@
       "parameters": {
         "operation": "page",
         "defineForm": "json",
-        "jsonOutput": "={{ JSON.stringify(((b, e, signedIn, prev, count) => [{ fieldType: 'html', html: (prev ? '<p><strong>' + (prev.choice === 'Sign the approved steps again, unchanged' ? 'You chose to sign the approved steps again, unchanged, and pasted steps that differ from them. To use the pasted steps, choose Change the steps as JSON. To sign them again unchanged, empty the box. Your choice and the pasted steps are kept below.' : prev.choice === 'Change values' ? (String(prev.changedSteps ?? '').trim() !== '' ? 'You chose to change values, and pasted steps that differ from the approved ones. To use the pasted steps, choose Change the steps as JSON. To change values, empty the box. Your choice and the pasted steps are kept below.' : 'Change values is not offered for this bot (the page says why): choose one of the other two.') : 'You chose to change the steps as JSON, but the box was empty. Paste the changed steps in the box, or choose one of the other two.') + '</strong></p>' : '') + '<p>These are the steps that run now as <b>' + e(b.name) + '</b> (version ' + e(b.version) + ').</p><pre>' + e(((s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (x) { return s; } })(String(b.steps ?? ''))) + '</pre><p>' + (count > 0 && count <= 40 ? 'Choose what to do below. To change a date, a text the bot types, an option it chooses or an address it opens, choose Change values: the next page offers each value as a field. To add or remove steps, choose Change the steps as JSON and paste the changed steps in the box.' : 'Choose what to do below. To change the steps, choose Change the steps as JSON and paste the changed steps in the box. ' + (count === 0 ? 'This bot has no value that a page of fields can offer, so Change values is not offered.' : 'This bot has ' + count + ' values, more than one page of fields shows well, so Change values is not offered.')) + '</p><p><em>This form cannot tell steps signed with an older key from steps changed in the table, so read every step on the next page.</em></p><p><em>' + (signedIn ? 'Any signed-in n8n user who has the address of this page can read these steps, so do not share it.' : 'Anyone who has the address of this page can read these steps, so do not share it.') + '</em></p>' }, Object.assign({ fieldLabel: 'What to do', fieldName: 'choice', fieldType: 'radio', fieldOptions: { values: [{ option: 'Sign the approved steps again, unchanged' }].concat(count > 0 && count <= 40 ? [{ option: 'Change values' }] : [], [{ option: 'Change the steps as JSON' }]) }, requiredField: true }, prev ? { defaultValue: String(prev.choice ?? '') } : {}), Object.assign({ fieldLabel: 'Changed steps (JSON). Only when you change the steps as JSON.', fieldName: 'changedSteps', fieldType: 'textarea', requiredField: false }, prev ? { defaultValue: String(prev.changedSteps ?? '') } : {})])($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), $('Import a bot').params.authentication === 'n8nUserAuth', $('Page answered?').isExecuted ? $('Page answered?').first().json : null, (Array.isArray($('The bot to change').first().json.values) ? $('The bot to change').first().json.values : []).filter((v) => v.offered === true).length)).split('$').join('\\\\u0024') }}",
+        "jsonOutput": "={{ JSON.stringify(((b, e, signedIn, prev, count) => [{ fieldType: 'html', html: (prev ? '<p><strong>' + (prev.choice === 'Sign the approved steps again, unchanged' ? 'You chose to sign the approved steps again, unchanged, and pasted steps that differ from them. To use the pasted steps, choose Change the steps as JSON. To sign them again unchanged, empty the box. Your choice and the pasted steps are kept below.' : prev.choice === 'Change values' ? (String(prev.changedSteps ?? '').trim() !== '' ? 'You chose to change values, and pasted steps that differ from the approved ones. To use the pasted steps, choose Change the steps as JSON. To change values, empty the box. Your choice and the pasted steps are kept below.' : 'Change values is not offered for this bot (the page says why): choose one of the other two.') : 'You chose to change the steps as JSON, but the box was empty. Paste the changed steps in the box, or choose one of the other two.') + '</strong></p>' : '') + '<p>These are the steps that run now as <b>' + e(b.name) + '</b> (version ' + e(b.version) + ').</p><pre>' + e(((s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (x) { return s; } })(String(b.steps ?? ''))) + '</pre>' + (Number(b.active) > 1 ? '<p><em>The steps table holds ' + e(b.active) + ' active rows of this name, as when two approvals are saved at the same moment. Runs use version ' + e(b.version) + ', shown here. An approval on this form marks the other' + (Number(b.active) > 2 ? 's' : '') + ' superseded.</em></p>' : '') + '<p>' + (count > 0 && count <= 40 ? 'Choose what to do below. To change a date, a text the bot types, an option it chooses or an address it opens, choose Change values: the next page offers each value as a field. To add or remove steps, choose Change the steps as JSON and paste the changed steps in the box.' : 'Choose what to do below. To change the steps, choose Change the steps as JSON and paste the changed steps in the box. ' + (count === 0 ? 'This bot has no value that a page of fields can offer, so Change values is not offered.' : 'This bot has ' + count + ' values, more than one page of fields shows well, so Change values is not offered.')) + '</p><p><em>This form cannot tell steps signed with an older key from steps changed in the table, so read every step on the next page.</em></p><p><em>' + (signedIn ? 'Any signed-in n8n user who has the address of this page can read these steps, so do not share it.' : 'Anyone who has the address of this page can read these steps, so do not share it.') + '</em></p>' }, Object.assign({ fieldLabel: 'What to do', fieldName: 'choice', fieldType: 'radio', fieldOptions: { values: [{ option: 'Sign the approved steps again, unchanged' }].concat(count > 0 && count <= 40 ? [{ option: 'Change values' }] : [], [{ option: 'Change the steps as JSON' }]) }, requiredField: true }, prev ? { defaultValue: String(prev.choice ?? '') } : {}), Object.assign({ fieldLabel: 'Changed steps (JSON). Only when you change the steps as JSON.', fieldName: 'changedSteps', fieldType: 'textarea', requiredField: false }, prev ? { defaultValue: String(prev.changedSteps ?? '') } : {})])($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), $('Import a bot').params.authentication === 'n8nUserAuth', $('Page answered?').isExecuted ? $('Page answered?').first().json : null, (Array.isArray($('The bot to change').first().json.values) ? $('The bot to change').first().json.values : []).filter((v) => v.offered === true).length)).split('$').join('\\\\u0024') }}",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
         "resumeAmount": 1,
@@ -645,7 +645,7 @@
     {
       "parameters": {
         "mode": "raw",
-        "jsonOutput": "={{ ((r, values) => (values && r.changed === false ? Object.assign(r, { compared: r.compared + ' No value was changed on the values page: approving signs these steps again as they are.' }) : r))(((bot, typed) => { const n = String(bot.version); const who = String(bot.name ?? '') + ': '; if (typed.trim() === '') return { steps: String(bot.steps ?? ''), changed: false, unchanged: true, compared: who + 'unchanged from the approved version ' + n + '.' }; const parse = (s) => { try { return JSON.parse(String(s)); } catch (e) { return undefined; } }; const asDoc = (v) => (Array.isArray(v) ? { steps: v } : v); const canon = (v) => (Array.isArray(v) ? '[' + v.map(canon).join(',') + ']' : v !== null && typeof v === 'object' ? '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}' : JSON.stringify(v === undefined ? null : v)); const was = asDoc(parse(bot.steps)); const now = asDoc(parse(typed)); const out = (compared, unchanged) => ({ steps: typed, changed: true, unchanged, compared }); const usable = (d) => d !== null && typeof d === 'object' && Array.isArray(d.steps); if (bot.found !== true || !usable(was) || !usable(now)) return out(who + 'could not be compared with the approved version' + (bot.found === true ? ' ' + n : '') + ': read every step.', false); const steps = []; for (let i = 0; i < Math.max(was.steps.length, now.steps.length); i++) if (i >= was.steps.length || i >= now.steps.length || canon(was.steps[i]) !== canon(now.steps[i])) steps.push(i + 1); const labels = [['startUrl', 'the start site'], ['app', 'the app'], ['interrupts', 'the pop-up handlers'], ['surface', 'browser or desktop']]; const others = [...new Set(Object.keys(was).concat(Object.keys(now)))].filter((k) => !['name', 'version', 'steps', 'signature', 'approvedBy'].includes(k) && canon(was[k]) !== canon(now[k])).sort().map((k) => (labels.find((p) => p[0] === k) || [k, 'the field ' + k])[1]); if (steps.length === 0 && others.length === 0) return out(who + 'unchanged from the approved version ' + n + '.', true); const leaves = (v, path, acc) => { if (Array.isArray(v) && v.length) v.forEach((x, i) => leaves(x, path.concat([i]), acc)); else if (v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length) Object.keys(v).forEach((k) => leaves(v[k], path.concat([k]), acc)); else acc[JSON.stringify(path)] = v; return acc; }; const cut = (s) => ((a) => (a.length > 60 ? a.slice(0, 59).join('') + '…' : s))(Array.from(s)); const show = (v) => (v === undefined ? '(none)' : typeof v === 'string' ? '\"' + cut(v.replace(/[\\s\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+/g, ' ')) + '\"' : cut(JSON.stringify(v))); const word = (path) => ((keys) => ((k, p) => (k === 'intent' ? 'description' : k === 'goto' ? 'address' : k === 'value' && p === 'fill' ? 'typed value' : (k === 'value' || k === 'option') && p === 'select' ? 'chosen option' : k === 'name' ? 'control name' : k === 'label' ? 'field label' : k === 'text' ? 'visible text' : k === 'css' ? 'selector' : k ?? 'value'))(keys[keys.length - 1], keys[keys.length - 2]))(path.filter((x) => typeof x === 'string')); const change = (i) => { if (i >= was.steps.length) return 'step ' + (i + 1) + ': added'; if (i >= now.steps.length) return 'step ' + (i + 1) + ': removed'; const a = leaves(was.steps[i], [], { }); const b = leaves(now.steps[i], [], { }); const keys = [...new Set(Object.keys(a).concat(Object.keys(b)))].filter((k) => !(k in a) || !(k in b) || canon(a[k]) !== canon(b[k])); return 'step ' + (i + 1) + ': ' + (keys.length > 3 ? 'several fields' : keys.length === 0 ? 'changed' : keys.map((k) => word(JSON.parse(k)) + ' ' + show(a[k]) + ' → ' + show(b[k])).join(', ')); }; const listed = steps.slice(0, 3).map((s) => change(s - 1)).join('; ') + (steps.length > 3 ? '; and more: steps ' + steps.slice(3, 23).join(', ') + (steps.length > 23 ? ', …' : '') : ''); const counts = now.steps.length === was.steps.length ? '' : ' ' + now.steps.length + ' steps now, ' + was.steps.length + ' in the approved version.'; return out(who + 'changed from the approved version ' + n + ': ' + (steps.length ? [listed] : []).concat(others.length ? [others.join(', ')] : []).join('; ') + '.' + counts, false); })($('The bot to change').first().json, $('Change or sign again').first().json.choice === 'Sign the approved steps again, unchanged' ? '' : $('Change or sign again').first().json.choice === 'Change values' ? String($('Values to steps').first().json.steps ?? '') : String($('Change or sign again').first().json.changedSteps ?? '')), $('Change or sign again').first().json.choice === 'Change values') }}",
+        "jsonOutput": "={{ ((r, values) => (values && r.changed === false ? Object.assign(r, { compared: r.compared + ' No value was changed on the values page: approving signs these steps again as they are.' }) : r))(((bot, typed) => { const n = String(bot.version); const who = String(bot.name ?? '') + ': '; if (typed.trim() === '') return { steps: String(bot.steps ?? ''), changed: false, unchanged: true, compared: who + 'unchanged from the approved version ' + n + '.' }; const parse = (s) => { try { return JSON.parse(String(s)); } catch (e) { return undefined; } }; const asDoc = (v) => (Array.isArray(v) ? { steps: v } : v); const canon = (v) => (Array.isArray(v) ? '[' + v.map(canon).join(',') + ']' : v !== null && typeof v === 'object' ? '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}' : JSON.stringify(v === undefined ? null : v)); const was = asDoc(parse(bot.steps)); const now = asDoc(parse(typed)); const out = (compared, unchanged) => ({ steps: typed, changed: true, unchanged, compared }); const usable = (d) => d !== null && typeof d === 'object' && Array.isArray(d.steps); if (bot.found !== true || !usable(was) || !usable(now)) return out(who + 'could not be compared with the approved version' + (bot.found === true ? ' ' + n : '') + ': read every step.', false); const a = was.steps.map(canon); const b = now.steps.map(canon); const steps = []; for (let i = 0; i < Math.max(a.length, b.length); i++) if (i >= a.length || i >= b.length || a[i] !== b[i]) steps.push(i + 1); const labels = [['startUrl', 'the start site'], ['app', 'the app'], ['interrupts', 'the pop-up handlers'], ['surface', 'browser or desktop']]; const others = [...new Set(Object.keys(was).concat(Object.keys(now)))].filter((k) => !['name', 'version', 'steps', 'signature', 'approvedBy'].includes(k) && canon(was[k]) !== canon(now[k])).sort().map((k) => (labels.find((p) => p[0] === k) || [k, 'the field ' + k])[1]); if (steps.length === 0 && others.length === 0) return out(who + 'unchanged from the approved version ' + n + '.', true); const leaves = (v, path, acc) => { if (Array.isArray(v) && v.length) v.forEach((x, i) => leaves(x, path.concat([i]), acc)); else if (v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length) Object.keys(v).forEach((k) => leaves(v[k], path.concat([k]), acc)); else acc[JSON.stringify(path)] = v; return acc; }; const cut = (s) => ((c) => (c.length > 60 ? c.slice(0, 59).join('') + '…' : s))(Array.from(s)); const show = (v) => (v === undefined ? '(none)' : typeof v === 'string' ? '\"' + cut(v.replace(/[\\s\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+/g, ' ')) + '\"' : cut(JSON.stringify(v))); const word = (path) => ((keys) => ((k, p) => (k === 'intent' ? 'description' : k === 'goto' ? 'address' : k === 'value' && p === 'fill' ? 'typed value' : (k === 'value' || k === 'option') && p === 'select' ? 'chosen option' : k === 'name' ? 'control name' : k === 'label' ? 'field label' : k === 'text' ? 'visible text' : k === 'css' ? 'selector' : k ?? 'value'))(keys[keys.length - 1], keys[keys.length - 2]))(path.filter((x) => typeof x === 'string')); const fields = (x, y) => ((p, q) => ((keys) => (keys.length > 3 ? 'several fields' : keys.length === 0 ? 'changed' : keys.map((k) => word(JSON.parse(k)) + ' ' + show(p[k]) + ' → ' + show(q[k])).join(', ')))([...new Set(Object.keys(p).concat(Object.keys(q)))].filter((k) => !(k in p) || !(k in q) || canon(p[k]) !== canon(q[k]))))(leaves(x, [], { }), leaves(y, [], { })); const numbers = (list) => (list.length === 1 ? 'step ' : 'steps ') + list.slice(0, 20).join(', ') + (list.length > 20 ? ', …' : ''); const counts = b.length === a.length ? '' : ' ' + b.length + ' steps now, ' + a.length + ' in the approved version.'; const tail = (parts) => out(who + 'changed from the approved version ' + n + ': ' + parts.concat(others.length ? [others.join(', ')] : []).join('; ') + '.' + counts, false); let head = 0; while (head < a.length && head < b.length && a[head] === b[head]) head++; let end = 0; while (end < a.length - head && end < b.length - head && a[a.length - 1 - end] === b[b.length - 1 - end]) end++; const ra = a.length - head - end; const rb = b.length - head - end; if (ra * rb > 250000) return tail((steps.length ? [steps.slice(0, 3).map((s) => 'step ' + s + ': ' + (s > a.length ? 'added' : s > b.length ? 'removed' : fields(was.steps[s - 1], now.steps[s - 1]))).join('; ') + (steps.length > 3 ? '; and more: ' + numbers(steps.slice(3)) : '')] : []).concat(['compared step by step in place, because there are too many steps to line up: after a step added or taken out, every later step reads as changed'])); const L = []; for (let i = ra; i >= 0; i--) { L[i] = []; for (let j = rb; j >= 0; j--) L[i][j] = i === ra || j === rb ? 0 : a[head + i] === b[head + j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]); } const changed = []; const removed = []; const added = []; const gapWas = []; const gapNow = []; const flush = () => { const k = Math.min(gapWas.length, gapNow.length); for (let x = 0; x < k; x++) changed.push([gapWas[x], gapNow[x]]); gapWas.slice(k).forEach((r) => removed.push(r)); gapNow.slice(k).forEach((s) => added.push(s)); gapWas.length = 0; gapNow.length = 0; }; let i = 0; let j = 0; while (i < ra || j < rb) { if (i < ra && j < rb && a[head + i] === b[head + j]) { flush(); i++; j++; } else if (j >= rb || (i < ra && L[i + 1][j] >= L[i][j + 1])) { gapWas.push(head + i); i++; } else { gapNow.push(head + j); j++; } } flush(); const moved = []; const gone = removed.filter((r) => ((k) => (k < 0 ? true : (moved.push([r, added[k]]), added.splice(k, 1), false)))(added.findIndex((s) => b[s] === a[r]))); const words = (s) => (s !== null && typeof s === 'object' && typeof s.intent === 'string' && s.intent.trim() !== '' ? ' (' + show(s.intent) + ')' : ''); return tail([].concat(gone.length ? ['removed: ' + gone.slice(0, 3).map((r) => 'step ' + (r + 1) + words(was.steps[r])).join(', ') + (gone.length > 3 ? ', and ' + numbers(gone.slice(3).map((r) => r + 1)) : '')] : [], added.length ? ['added: ' + numbers(added.map((s) => s + 1))] : [], moved.length ? ['moved: ' + moved.slice(0, 3).map((m) => 'step ' + (m[0] + 1) + ' is now step ' + (m[1] + 1)).join(', ') + (moved.length > 3 ? ', and ' + (moved.length - 3) + ' more' : '')] : [], changed.length ? [changed.slice(0, 3).map((p) => 'step ' + (p[0] + 1) + (p[0] === p[1] ? '' : ' (now step ' + (p[1] + 1) + ')') + ': ' + fields(was.steps[p[0]], now.steps[p[1]])).join('; ') + (changed.length > 3 ? '; and more: ' + numbers(changed.slice(3).map((p) => p[0] + 1)) : '')] : [])); })($('The bot to change').first().json, $('Change or sign again').first().json.choice === 'Sign the approved steps again, unchanged' ? '' : $('Change or sign again').first().json.choice === 'Change values' ? String($('Values to steps').first().json.steps ?? '') : String($('Change or sign again').first().json.changedSteps ?? '')), $('Change or sign again').first().json.choice === 'Change values') }}",
         "options": {}
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000538",
@@ -950,7 +950,7 @@
     {
       "parameters": {
         "mode": "raw",
-        "jsonOutput": "={{ ((bare, compare, running, lists) => ({ lists: lists.flatMap((l) => ((r) => (r ? [lists.filter((x) => x.name === l.name).length === 1 ? ((c) => ({ name: l.name, unchanged: c.unchanged === true, compared: c.compared + (/\"write\"\\s*:\\s*true/.test(String(r.steps ?? '') + JSON.stringify(l.steps ?? null)) ? ' Which steps are writes is not compared: it is chosen again on this page.' : '') }))(compare({ found: true, name: l.name, version: r.version, steps: bare(r.steps) }, bare(l.steps ?? null))) : { name: l.name, unchanged: false, compared: l.name + ': could not be compared with the approved version ' + r.version + ': two step lists have this name. Read every step.' }] : []))(running.find((r) => r.name === l.name))) }))((v) => { let d = v; if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { return v; } } const strip = (x) => (x !== null && typeof x === 'object' && !Array.isArray(x) ? Object.keys(x).filter((k) => k !== 'write').reduce((o, k) => { o[k] = x[k]; return o; }, { }) : x); if (Array.isArray(d)) return JSON.stringify(d.map(strip)); if (d !== null && typeof d === 'object' && Array.isArray(d.steps)) return JSON.stringify(Object.assign({ }, d, { steps: d.steps.map(strip) })); return typeof v === 'string' ? v : JSON.stringify(v === undefined ? null : v); }, (bot, typed) => { const n = String(bot.version); const who = String(bot.name ?? '') + ': '; if (typed.trim() === '') return { steps: String(bot.steps ?? ''), changed: false, unchanged: true, compared: who + 'unchanged from the approved version ' + n + '.' }; const parse = (s) => { try { return JSON.parse(String(s)); } catch (e) { return undefined; } }; const asDoc = (v) => (Array.isArray(v) ? { steps: v } : v); const canon = (v) => (Array.isArray(v) ? '[' + v.map(canon).join(',') + ']' : v !== null && typeof v === 'object' ? '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}' : JSON.stringify(v === undefined ? null : v)); const was = asDoc(parse(bot.steps)); const now = asDoc(parse(typed)); const out = (compared, unchanged) => ({ steps: typed, changed: true, unchanged, compared }); const usable = (d) => d !== null && typeof d === 'object' && Array.isArray(d.steps); if (bot.found !== true || !usable(was) || !usable(now)) return out(who + 'could not be compared with the approved version' + (bot.found === true ? ' ' + n : '') + ': read every step.', false); const steps = []; for (let i = 0; i < Math.max(was.steps.length, now.steps.length); i++) if (i >= was.steps.length || i >= now.steps.length || canon(was.steps[i]) !== canon(now.steps[i])) steps.push(i + 1); const labels = [['startUrl', 'the start site'], ['app', 'the app'], ['interrupts', 'the pop-up handlers'], ['surface', 'browser or desktop']]; const others = [...new Set(Object.keys(was).concat(Object.keys(now)))].filter((k) => !['name', 'version', 'steps', 'signature', 'approvedBy'].includes(k) && canon(was[k]) !== canon(now[k])).sort().map((k) => (labels.find((p) => p[0] === k) || [k, 'the field ' + k])[1]); if (steps.length === 0 && others.length === 0) return out(who + 'unchanged from the approved version ' + n + '.', true); const leaves = (v, path, acc) => { if (Array.isArray(v) && v.length) v.forEach((x, i) => leaves(x, path.concat([i]), acc)); else if (v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length) Object.keys(v).forEach((k) => leaves(v[k], path.concat([k]), acc)); else acc[JSON.stringify(path)] = v; return acc; }; const cut = (s) => ((a) => (a.length > 60 ? a.slice(0, 59).join('') + '…' : s))(Array.from(s)); const show = (v) => (v === undefined ? '(none)' : typeof v === 'string' ? '\"' + cut(v.replace(/[\\s\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+/g, ' ')) + '\"' : cut(JSON.stringify(v))); const word = (path) => ((keys) => ((k, p) => (k === 'intent' ? 'description' : k === 'goto' ? 'address' : k === 'value' && p === 'fill' ? 'typed value' : (k === 'value' || k === 'option') && p === 'select' ? 'chosen option' : k === 'name' ? 'control name' : k === 'label' ? 'field label' : k === 'text' ? 'visible text' : k === 'css' ? 'selector' : k ?? 'value'))(keys[keys.length - 1], keys[keys.length - 2]))(path.filter((x) => typeof x === 'string')); const change = (i) => { if (i >= was.steps.length) return 'step ' + (i + 1) + ': added'; if (i >= now.steps.length) return 'step ' + (i + 1) + ': removed'; const a = leaves(was.steps[i], [], { }); const b = leaves(now.steps[i], [], { }); const keys = [...new Set(Object.keys(a).concat(Object.keys(b)))].filter((k) => !(k in a) || !(k in b) || canon(a[k]) !== canon(b[k])); return 'step ' + (i + 1) + ': ' + (keys.length > 3 ? 'several fields' : keys.length === 0 ? 'changed' : keys.map((k) => word(JSON.parse(k)) + ' ' + show(a[k]) + ' → ' + show(b[k])).join(', ')); }; const listed = steps.slice(0, 3).map((s) => change(s - 1)).join('; ') + (steps.length > 3 ? '; and more: steps ' + steps.slice(3, 23).join(', ') + (steps.length > 23 ? ', …' : '') : ''); const counts = now.steps.length === was.steps.length ? '' : ' ' + now.steps.length + ' steps now, ' + was.steps.length + ' in the approved version.'; return out(who + 'changed from the approved version ' + n + ': ' + (steps.length ? [listed] : []).concat(others.length ? [others.join(', ')] : []).join('; ') + '.' + counts, false); }, $('What it replaces').isExecuted ? $('What it replaces').first().json.running : [], $('Import steps').all(1).map((i) => i.json)) }}",
+        "jsonOutput": "={{ ((bare, compare, running, lists) => ({ lists: lists.flatMap((l) => ((r) => (r ? [lists.filter((x) => x.name === l.name).length === 1 ? ((c) => ({ name: l.name, unchanged: c.unchanged === true, compared: c.compared + (/\"write\"\\s*:\\s*true/.test(String(r.steps ?? '') + JSON.stringify(l.steps ?? null)) ? ' Which steps are writes is not compared: it is chosen again on this page.' : '') }))(compare({ found: true, name: l.name, version: r.version, steps: bare(r.steps) }, bare(l.steps ?? null))) : { name: l.name, unchanged: false, compared: l.name + ': could not be compared with the approved version ' + r.version + ': two step lists have this name. Read every step.' }] : []))(running.find((r) => r.name === l.name))) }))((v) => { let d = v; if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { return v; } } const strip = (x) => (x !== null && typeof x === 'object' && !Array.isArray(x) ? Object.keys(x).filter((k) => k !== 'write').reduce((o, k) => { o[k] = x[k]; return o; }, { }) : x); if (Array.isArray(d)) return JSON.stringify(d.map(strip)); if (d !== null && typeof d === 'object' && Array.isArray(d.steps)) return JSON.stringify(Object.assign({ }, d, { steps: d.steps.map(strip) })); return typeof v === 'string' ? v : JSON.stringify(v === undefined ? null : v); }, (bot, typed) => { const n = String(bot.version); const who = String(bot.name ?? '') + ': '; if (typed.trim() === '') return { steps: String(bot.steps ?? ''), changed: false, unchanged: true, compared: who + 'unchanged from the approved version ' + n + '.' }; const parse = (s) => { try { return JSON.parse(String(s)); } catch (e) { return undefined; } }; const asDoc = (v) => (Array.isArray(v) ? { steps: v } : v); const canon = (v) => (Array.isArray(v) ? '[' + v.map(canon).join(',') + ']' : v !== null && typeof v === 'object' ? '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}' : JSON.stringify(v === undefined ? null : v)); const was = asDoc(parse(bot.steps)); const now = asDoc(parse(typed)); const out = (compared, unchanged) => ({ steps: typed, changed: true, unchanged, compared }); const usable = (d) => d !== null && typeof d === 'object' && Array.isArray(d.steps); if (bot.found !== true || !usable(was) || !usable(now)) return out(who + 'could not be compared with the approved version' + (bot.found === true ? ' ' + n : '') + ': read every step.', false); const a = was.steps.map(canon); const b = now.steps.map(canon); const steps = []; for (let i = 0; i < Math.max(a.length, b.length); i++) if (i >= a.length || i >= b.length || a[i] !== b[i]) steps.push(i + 1); const labels = [['startUrl', 'the start site'], ['app', 'the app'], ['interrupts', 'the pop-up handlers'], ['surface', 'browser or desktop']]; const others = [...new Set(Object.keys(was).concat(Object.keys(now)))].filter((k) => !['name', 'version', 'steps', 'signature', 'approvedBy'].includes(k) && canon(was[k]) !== canon(now[k])).sort().map((k) => (labels.find((p) => p[0] === k) || [k, 'the field ' + k])[1]); if (steps.length === 0 && others.length === 0) return out(who + 'unchanged from the approved version ' + n + '.', true); const leaves = (v, path, acc) => { if (Array.isArray(v) && v.length) v.forEach((x, i) => leaves(x, path.concat([i]), acc)); else if (v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length) Object.keys(v).forEach((k) => leaves(v[k], path.concat([k]), acc)); else acc[JSON.stringify(path)] = v; return acc; }; const cut = (s) => ((c) => (c.length > 60 ? c.slice(0, 59).join('') + '…' : s))(Array.from(s)); const show = (v) => (v === undefined ? '(none)' : typeof v === 'string' ? '\"' + cut(v.replace(/[\\s\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+/g, ' ')) + '\"' : cut(JSON.stringify(v))); const word = (path) => ((keys) => ((k, p) => (k === 'intent' ? 'description' : k === 'goto' ? 'address' : k === 'value' && p === 'fill' ? 'typed value' : (k === 'value' || k === 'option') && p === 'select' ? 'chosen option' : k === 'name' ? 'control name' : k === 'label' ? 'field label' : k === 'text' ? 'visible text' : k === 'css' ? 'selector' : k ?? 'value'))(keys[keys.length - 1], keys[keys.length - 2]))(path.filter((x) => typeof x === 'string')); const fields = (x, y) => ((p, q) => ((keys) => (keys.length > 3 ? 'several fields' : keys.length === 0 ? 'changed' : keys.map((k) => word(JSON.parse(k)) + ' ' + show(p[k]) + ' → ' + show(q[k])).join(', ')))([...new Set(Object.keys(p).concat(Object.keys(q)))].filter((k) => !(k in p) || !(k in q) || canon(p[k]) !== canon(q[k]))))(leaves(x, [], { }), leaves(y, [], { })); const numbers = (list) => (list.length === 1 ? 'step ' : 'steps ') + list.slice(0, 20).join(', ') + (list.length > 20 ? ', …' : ''); const counts = b.length === a.length ? '' : ' ' + b.length + ' steps now, ' + a.length + ' in the approved version.'; const tail = (parts) => out(who + 'changed from the approved version ' + n + ': ' + parts.concat(others.length ? [others.join(', ')] : []).join('; ') + '.' + counts, false); let head = 0; while (head < a.length && head < b.length && a[head] === b[head]) head++; let end = 0; while (end < a.length - head && end < b.length - head && a[a.length - 1 - end] === b[b.length - 1 - end]) end++; const ra = a.length - head - end; const rb = b.length - head - end; if (ra * rb > 250000) return tail((steps.length ? [steps.slice(0, 3).map((s) => 'step ' + s + ': ' + (s > a.length ? 'added' : s > b.length ? 'removed' : fields(was.steps[s - 1], now.steps[s - 1]))).join('; ') + (steps.length > 3 ? '; and more: ' + numbers(steps.slice(3)) : '')] : []).concat(['compared step by step in place, because there are too many steps to line up: after a step added or taken out, every later step reads as changed'])); const L = []; for (let i = ra; i >= 0; i--) { L[i] = []; for (let j = rb; j >= 0; j--) L[i][j] = i === ra || j === rb ? 0 : a[head + i] === b[head + j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]); } const changed = []; const removed = []; const added = []; const gapWas = []; const gapNow = []; const flush = () => { const k = Math.min(gapWas.length, gapNow.length); for (let x = 0; x < k; x++) changed.push([gapWas[x], gapNow[x]]); gapWas.slice(k).forEach((r) => removed.push(r)); gapNow.slice(k).forEach((s) => added.push(s)); gapWas.length = 0; gapNow.length = 0; }; let i = 0; let j = 0; while (i < ra || j < rb) { if (i < ra && j < rb && a[head + i] === b[head + j]) { flush(); i++; j++; } else if (j >= rb || (i < ra && L[i + 1][j] >= L[i][j + 1])) { gapWas.push(head + i); i++; } else { gapNow.push(head + j); j++; } } flush(); const moved = []; const gone = removed.filter((r) => ((k) => (k < 0 ? true : (moved.push([r, added[k]]), added.splice(k, 1), false)))(added.findIndex((s) => b[s] === a[r]))); const words = (s) => (s !== null && typeof s === 'object' && typeof s.intent === 'string' && s.intent.trim() !== '' ? ' (' + show(s.intent) + ')' : ''); return tail([].concat(gone.length ? ['removed: ' + gone.slice(0, 3).map((r) => 'step ' + (r + 1) + words(was.steps[r])).join(', ') + (gone.length > 3 ? ', and ' + numbers(gone.slice(3).map((r) => r + 1)) : '')] : [], added.length ? ['added: ' + numbers(added.map((s) => s + 1))] : [], moved.length ? ['moved: ' + moved.slice(0, 3).map((m) => 'step ' + (m[0] + 1) + ' is now step ' + (m[1] + 1)).join(', ') + (moved.length > 3 ? ', and ' + (moved.length - 3) + ' more' : '')] : [], changed.length ? [changed.slice(0, 3).map((p) => 'step ' + (p[0] + 1) + (p[0] === p[1] ? '' : ' (now step ' + (p[1] + 1) + ')') + ': ' + fields(was.steps[p[0]], now.steps[p[1]])).join('; ') + (changed.length > 3 ? '; and more: ' + numbers(changed.slice(3).map((p) => p[0] + 1)) : '')] : [])); }, $('What it replaces').isExecuted ? $('What it replaces').first().json.running : [], $('Import steps').all(1).map((i) => i.json)) }}",
         "options": {}
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000547",
@@ -979,7 +979,7 @@
         -120
       ],
       "executeOnce": true,
-      "notes": "The version that runs now: after Change or sign again, the active row as The bot to change read it; for an upload under the name of an approved bot, its active row (What it replaces). Sign steps checks it before the review page. For a new bot: an empty item, and Sign steps only names its Site Login."
+      "notes": "The version that runs now: after Change or sign again, the active row as The bot to change read it; for an upload under the name of an approved bot, its active row (What it replaces). Sign steps checks it before the change page and again before the review page. For a new bot: an empty item, and Sign steps only names its Site Login."
     },
     {
       "parameters": {
@@ -1136,7 +1136,7 @@
         -220
       ],
       "onError": "continueErrorOutput",
-      "notes": "Runs twice. First, before the review page, with Check Only on (Review and approve has not run): it signs nothing, names the RPA Site Login it signs for, and checks the approved version's signature with its key and Site Login. Then item n is step list n of the review page: its Decision, and for desktop steps the ticked steps and the numbers typed under them. Approver: the n8n user who submitted Review and approve (with Basic Auth on Import a bot, Approved By). Approver Allowlist: the n8n address of each person who may approve, typed here (it cannot be an expression). With Basic Auth and one address there, Approved By can stay empty and that address is recorded. Outputs: the active or rejected record (0), error (1)."
+      "notes": "Checks first, with Check Only on (Review and approve has not run): before the change page on a change, and before the review page. A check signs nothing, names the RPA Site Login it signs for, and checks the approved version's signature with its key and Site Login. Then item n is step list n of the review page: its Decision, and for desktop steps the ticked steps and the numbers typed under them. Approver: the n8n user who submitted Review and approve (with Basic Auth on Import a bot, Approved By). Approver Allowlist: the n8n address of each person who may approve, typed here (it cannot be an expression). With Basic Auth and one address there, Approved By can stay empty and that address is recorded. Outputs: the active or rejected record (0), error (1)."
     },
     {
       "parameters": {
@@ -1171,7 +1171,7 @@
         4620,
         -220
       ],
-      "notes": "Sign steps runs twice. Before the review page it only checks (Check Only): that item goes to Review and approve. After it, it signs: the records go on to Signed?."
+      "notes": "Before the change page and before the review page, Sign steps only checks (Check Only): that item goes to Change page next?. After it, it signs: the records go on to Signed?."
     },
     {
       "parameters": {
@@ -1344,7 +1344,7 @@
             },
             {
               "keyName": "id",
-              "condition": "neq",
+              "condition": "lt",
               "keyValue": "={{ $json.id }}"
             }
           ]
@@ -1377,7 +1377,7 @@
         5280,
         -340
       ],
-      "notes": "Every other active row of the same name becomes superseded (an import is a first version, so whatever its version), so the steps just approved are what runs under that name."
+      "notes": "Every active row of the same name saved before this one becomes superseded, whatever its version (an import is a first version), so the steps just approved are what runs under that name, and two active rows of one name become one. Only here, after an approver signed: nothing on the form writes to the table before that. A row saved after this one (another approval at the same moment) is left: its own supersede marks this one, so the one saved last stays active."
     },
     {
       "parameters": {
@@ -1768,6 +1768,159 @@
         640
       ],
       "notes": "A value that was refused, or the values page not answered in time: nothing is imported or signed. The run pauses here until the browser shows this page, at most 1 hour."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005f3",
+              "leftValue": "={{ !$('Import steps').isExecuted }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005f2",
+      "name": "Change page next?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4840,
+        -60
+      ],
+      "notes": "Sign steps checks the version that runs now twice on a change: before the change page (Import steps has not run: on to Fits this form?) and before the review page (on to Review and approve)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005f5",
+              "leftValue": "={{ $json.approvedVersion?.signatureFits !== false }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005f4",
+      "name": "Fits this form?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        880
+      ],
+      "notes": "The version that runs now fits this form (or has no signature, or could not be checked): on to the change page. It does not fit: the person says why first."
+    },
+    {
+      "parameters": {
+        "operation": "page",
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.stringify(((b, k, e) => [{ fieldType: 'html', html: '<p><strong>⚠ ' + e(b.name) + ' version ' + e(b.version) + ' does not fit this form: it was signed ' + (k.approvedVersion && k.approvedVersion.desktop ? '' : (k.siteLogin ? 'for another Site Login than \"' + e(k.siteLogin) + '\"' : 'for a Site Login, which this form does not have') + ', or ') + 'with another signing key, or its row was changed after it was approved. This form cannot tell which.</strong></p><p>A bot is changed and signed again on the import form that approved it. ' + (k.approvedVersion && k.approvedVersion.desktop ? '' : 'Signed here, a bot of another Site Login runs only ' + (k.siteLogin ? 'with the Site Login \"' + e(k.siteLogin) + '\"' : 'without a Site Login') + ', and its workflow stops working. ') + 'Its steps are shown only after you answer.</p>' }, { fieldLabel: 'Which is it?', fieldName: 'answer', fieldType: 'radio', fieldOptions: { values: [{ option: 'This bot was approved on another import form: take me back' }, { option: 'I changed the signing key or the row was changed: show me the steps to read and sign again' }] }, requiredField: true }])($('The bot to change').first().json, $('Sign steps').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]))).split('$').join('\\\\u0024') }}",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {
+          "formTitle": "={{ 'Before you change ' + $('The bot to change').first().json.name }}",
+          "formDescription": "Nothing is shown, imported or signed until you answer.",
+          "buttonLabel": "Next",
+          "customCss": "div.html strong { color: #b00020; font-weight: 600; }"
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005f6",
+      "name": "Approved on another form?",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1540,
+        880
+      ],
+      "notes": "The version that runs now does not fit this form: another Site Login, another signing key, or a row changed in the table. The person says which before any step is shown; nothing is chosen for them. The run pauses here until the person submits, at most 1 hour."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005f8",
+              "leftValue": "={{ $json.answer === 'I changed the signing key or the row was changed: show me the steps to read and sign again' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005f7",
+      "name": "Sign it again here?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        880
+      ],
+      "notes": "Only the answer that the signing key or the row changed goes on to the change page. The other answer, or none in time, ends without showing the steps."
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "Change it on its own form",
+        "completionMessage": "={{ ((b, e, answered) => (answered ? '' : 'This page was not answered in time.\\n') + 'Nothing was shown, imported or signed: ' + e(b.name) + ' version ' + e(b.version) + ' keeps running.' + (answered ? '\\nChange it on the import form that approved it: the About note of the bot\\'s workflow in n8n names that form, in the line To change the steps or sign them again. This form cannot list the other import forms.' : ' Open the form again, leave Bot file empty and type the bot\\'s name.'))($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), String($('Approved on another form?').first().json.answer ?? '') !== '') }}",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005f9",
+      "name": "Change it on its own form",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1980,
+        880
+      ],
+      "notes": "The bot was approved on another import form, or the question was not answered in time: nothing is shown, imported or signed. The run pauses here until the browser shows this page, at most 1 hour."
     }
   ],
   "connections": {
@@ -2069,7 +2222,7 @@
       "main": [
         [
           {
-            "node": "Change or sign again",
+            "node": "The approved version",
             "type": "main",
             "index": 0
           }
@@ -2160,7 +2313,7 @@
       "main": [
         [
           {
-            "node": "Review and approve",
+            "node": "Change page next?",
             "type": "main",
             "index": 0
           }
@@ -2329,6 +2482,71 @@
         [
           {
             "node": "Value not taken",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Change page next?": {
+      "main": [
+        [
+          {
+            "node": "Fits this form?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Review and approve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fits this form?": {
+      "main": [
+        [
+          {
+            "node": "Change or sign again",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Approved on another form?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved on another form?": {
+      "main": [
+        [
+          {
+            "node": "Sign it again here?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign it again here?": {
+      "main": [
+        [
+          {
+            "node": "Change or sign again",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Change it on its own form",
             "type": "main",
             "index": 0
           }

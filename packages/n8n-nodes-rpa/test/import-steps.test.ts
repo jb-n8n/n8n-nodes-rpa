@@ -20,7 +20,7 @@ import {
   executeImportSteps, IMPORT_NEEDS_START, MAX_IMPORT_BYTES, NOT_TRIED_CANCELLED, SOURCE_UNKNOWN, STEPS_WITHHELD,
 } from '../nodes/Playwright/operations/importSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
-import { fullSafetyFlags, reviewSteps } from '../nodes/Playwright/format.js';
+import { BY_POSITION, BY_ROW, fullSafetyFlags, reviewSteps } from '../nodes/Playwright/format.js';
 import { repairedStepsJson } from '../nodes/Playwright/output.js';
 import type { WorkflowJson } from '../nodes/Playwright/import/workflow.js';
 import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
@@ -1154,6 +1154,45 @@ describe('Import Steps: a step document', () => {
     for (const key of ['steps', 'hash', 'signature', 'writeSteps']) expect(withShown[key], key).toEqual(without[key]);
   });
 
+  it('a desktop step that finds its control by its row or its place says so on the review page (IW-6); Sign Steps checks the mark, and an item made before it existed still signs', async () => {
+    const doc = {
+      surface: 'desktop', app: { exe: 'ErpDemo.exe' },
+      steps: [
+        { intent: 'Click Vendor Row 1', click: { uia: { path: [{ controlType: 'DataItem', name: 'Vendor Row 1' }] } } },
+        { intent: 'Click the second tab', click: { uia: { path: [{ controlType: 'Tab', automationId: 'tabs' }, { controlType: 'TabItem', index: 1 }] } } },
+        // Found by what the row holds, or by an id: not by position, as the recorder judges it.
+        { intent: 'Click Acme Paper Co', click: { uia: { path: [{ controlType: 'DataItem', name: 'Acme Paper Co' }] } } },
+        { intent: 'Click Row 1', click: { uia: { path: [{ controlType: 'Button', automationId: 'btnRow1', name: 'Row 1' }] } } },
+        { intent: 'Type the amount', fill: { field: { uia: { path: [{ controlType: 'Edit', name: 'Amount Row 2' }] } }, value: '12' } },
+        { intent: 'Click Post', click: uia('btnPost', 'Button') },
+      ],
+    };
+    const engine = importEngine(() => { throw new Error('a desktop step set is never adopted in a browser'); });
+    const [data, repaired] = await run(engine, { params: docParams(doc, { stepsName: 'erp' }), items: textItem, credentials: {} });
+    expect(data[0].json.error).toBeUndefined();
+    const item = repaired[0].json;
+    const shown = item.reviewSteps as { text: string; marks: string[] }[];
+    expect(shown.map((r) => [r.text, r.marks])).toEqual([
+      ['Click Vendor Row 1', [BY_ROW]],
+      ['Click a control without a name', [BY_POSITION]],
+      ['Click Acme Paper Co', []],
+      ['Click Row 1', []],
+      ['Type "12" into Amount Row 2', [BY_ROW]],
+      ['Click btnPost', []],
+    ]);
+    // Signed with the marks, and without them (an item made before they existed); a mark put on another step, or the
+    // other mark, is refused. What is signed is the same either way.
+    const withMarks = await sign(engine, item, '6');
+    expect(withMarks).toMatchObject({ status: 'active' });
+    const older = shown.map((r) => ({ ...r, marks: r.marks.filter((m) => m !== BY_ROW && m !== BY_POSITION) }));
+    const before = await sign(engine, { ...item, reviewSteps: older as unknown as IDataObject[] }, '6');
+    expect(before).toMatchObject({ status: 'active' });
+    for (const key of ['steps', 'hash', 'writeSteps']) expect(before[key], key).toEqual(withMarks[key]);
+    const NOT_THE_STEPS = 'Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again';
+    expect((await sign(engine, { ...item, reviewSteps: shown.map((r, i) => (i === 2 ? { ...r, marks: [BY_ROW] } : r)) as unknown as IDataObject[] }, '6')).error).toBe(NOT_THE_STEPS);
+    expect((await sign(engine, { ...item, reviewSteps: shown.map((r, i) => (i === 0 ? { ...r, marks: [BY_POSITION] } : r)) as unknown as IDataObject[] }, '6')).error).toBe(NOT_THE_STEPS);
+  });
+
   it("a document without a start address takes the Site Login's when Start URL is empty, as Run Steps does", async () => {
     const engine = importEngine((input) => proved(input));
     const doc = { steps: [
@@ -1338,6 +1377,28 @@ describe('Import Steps: a step document', () => {
       expect(out).not.toHaveProperty('signature');
       // An inner list dropped is refused as well.
       expect((await sign(engine, { ...item, reviewSteps: shown.map(({ each: _e, ...r }) => r) as unknown as IDataObject[] })).error).toMatch(/not the steps to sign/);
+    });
+
+    it('a browser step whose selector picks by place (an nth child, a first row, an XPath index) says so (IW-6); a named control does not; Sign Steps checks it', async () => {
+      const doc = { startUrl: START, steps: [SIGN_IN, OPEN,
+        { intent: 'Click the first row', click: { css: 'table.results tbody tr:nth-child(1) a' } },
+        { intent: 'Click the last row', click: { css: 'tr:last-child td' } },
+        { intent: 'Type the amount', fill: { field: { css: 'input.amount', within: { css: 'tbody > tr:nth-of-type(2)' } }, value: '5' } },
+        { intent: 'Click Edit', click: { css: 'xpath=//table//tr[3]//button' } },
+        // Picked by what it is: not marked.
+        { intent: 'Click Approve', click: { role: 'button', name: 'Approve' } },
+        { intent: 'Click the row', click: { css: 'tr[data-id="42"] a' } },
+        // A read takes columns by place by nature: not marked.
+        { intent: 'Read the rows', extract: { scope: { css: 'table' }, item: { css: 'tbody tr' }, fields: { code: { locator: { css: 'td:nth-child(1)' } } } } },
+        SUBMIT] };
+      const { engine, repaired } = await notReplayed(doc);
+      const item = repaired[0].json;
+      const shown = item.reviewSteps as { text: string; marks: string[] }[];
+      expect(shown.slice(2, 9).map((r) => r.marks)).toEqual([[BY_POSITION], [BY_POSITION], [BY_POSITION], [BY_POSITION], [], [], []]);
+      expect(await sign(engine, item)).toMatchObject({ status: 'active' });
+      const older = shown.map((r) => ({ ...r, marks: r.marks.filter((m) => m !== BY_POSITION) }));
+      expect(await sign(engine, { ...item, reviewSteps: older as unknown as IDataObject[] })).toMatchObject({ status: 'active' });
+      expect((await sign(engine, { ...item, reviewSteps: shown.map((r, i) => (i === 6 ? { ...r, marks: [BY_POSITION] } : r)) as unknown as IDataObject[] })).error).toMatch(/not the steps to sign/);
     });
 
     it('the description is its own field: a marker phrase, brackets or angle brackets in a name, a value or a description stay where they are; Sign Steps refuses a forged, removed or older entry', async () => {

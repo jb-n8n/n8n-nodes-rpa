@@ -49,24 +49,47 @@ first, before anything reads or writes them.
   the new values (no value changed: the row's own steps, and the line adds `No value was changed on the values page:
   approving signs these steps again as they are.`); changed as JSON, the text in the box. It also gives the review
   page its first line: unchanged,
-  or which steps differ and how: for each changed step, at most three, its number and its changed values, old → new
+  or which steps differ and how. The two step lists are lined up first, so a step taken out or put in moves no later
+  step: steps removed by their old number and description (`removed: step 17 ("Click Vendor Row 1")`), steps added
+  by their new number (`added: step 19`), a step moved (`moved: step 3 is now step 8`), and for each changed step,
+  at most three, its number (`step 16 (now step 15)` when it moved up) and its changed values, old → new
   (`step 6: typed value "2026-09-15" → "2026-09-30"`, in the review page's words: typed value, chosen option, address,
   description, control name, field label, visible text, selector), each on one line and cut at 60 characters, `several fields` for a
-  step with more than three, then the other steps by number. **Review** sends those steps to **Import steps** as a step document, then to the same review
+  step with more than three, then the other steps by number. When the part that differs is too long to line up
+  (more than 250,000 pairs of steps), the steps are compared in place, step n with step n, and the line says so. **Review** sends those steps to **Import steps** as a step document, then to the same review
   page and **Sign steps**. Text that is not a step document ends on **Import failed**, which says the old version keeps
   running.
   The steps get the next version: **Import steps → Options → Version** is one more than the highest version any row
   of that name has, active, rejected or superseded, read by **The bot to change** (never from the box). A rejected
   attempt keeps its number and the next attempt takes a new one, and an answer is refused when another one of that name
-  came first (see the review page below), so the table does not hold two rows of one name and version. The review page names the version that runs: `version 2, replacing version 1`, or after a rejected
+  came first (see the review page below), so the table holds two rows of one name and version only when two answers
+  came within a moment of each other (see below). The review page names the version that runs: `version 2, replacing version 1`, or after a rejected
   attempt `version 3, replacing version 1`. Signing the same steps again also gives the next version: it is a new
   approval. The workflow that runs the bot
   reads Expected Version from the active row, so it keeps running. Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
   the bot's workflow exists already. A name with no active row ends on **No approved bot**, which lists the approved
   names.
-- Before the review page, **Sign steps** runs once with **Check Only** on: it signs nothing. It gives the name of the
+- Before **Change or sign again** shows any step, **Sign steps** checks the version that runs now (**Check Only**, as
+  below) and **Change page next?** sends that check to **Fits this form?**. When its signature fits (or there is
+  none, or no key to check it with), the change page follows. When it does not fit, **Approved on another form?**
+  asks first, with no step on the page and no answer chosen: `This bot was approved on another import form: take me
+  back` ends on **Change it on its own form** (nothing is shown, imported or signed; the About note of the bot's
+  workflow names the import form that approved it, and this form cannot list the others), as does the page not
+  answered in time; `I changed the signing key or the row was changed: show me the steps to read and sign again`
+  goes on to the change page and to the review page with its warning. Only that answer goes on (**Sign it again
+  here?**); the first page's address cannot fill it in (**Plain address?**).
+- Two `active` rows of one name (two approvals saved at the same moment, or a row added in the table by hand): a run
+  uses the one of the highest version, and of two of one version the one saved first (n8n orders them by id). The
+  table read cannot check a signature, so when that row is not a signed one, the run is refused as `script_untrusted`;
+  it does not fall back to another row. On the form, the change page shows that row and says how many are active, and
+  the question above (or the review page's warning) says it does not fit. Nothing on the form writes to the table
+  before an approver signed: an approval's **Supersede older versions** marks every active row of the name saved
+  before the new one `superseded`, whatever its version, so the name has one active row again.
+- Before the review page, **Sign steps** runs with **Check Only** on (on the change path it has already run so once,
+  before the change page): it signs nothing. It gives the name of the
   RPA Site Login it signs for, and after **Change or sign again** it checks the approved version's signature with its
-  own signing key and Site Login, as a run checks it. **Checked?** sends that to the review page. The page's opening
+  own signing key and Site Login, and that the row's name and version are the ones its steps were signed with, as a run
+  checks them. **Checked?** and **Change page next?** send that to the review page. The page's opening
   lines name the Site Login (desktop steps are signed for the app they start, without one). When the approved version
   does not fit, a warning at the top says so: it was signed for another Site Login than this form's (browser steps),
   or with another signing key, or its row was changed after it was approved. The page cannot tell which, so it says to
@@ -93,7 +116,9 @@ first, before anything reads or writes them.
   open at the same time, may have been answered first. Then nothing is signed or rejected, and **Approved meanwhile**
   says that another version was approved or rejected meanwhile and to start again. The check runs a moment before
   **Save signed steps** writes, not in one step with it (n8n has no transaction across nodes): two answers sent within
-  that moment, well under a second, can still both be saved.
+  that moment, well under a second, can still both be saved. A reader of `playwright_steps` then sees two rows of that
+  name and version, the one saved last `active` and the other `superseded` (**Supersede older versions** takes only
+  rows saved before its own), and both last pages said their version runs.
 - The last page says `Approved and signed: <name> version <version> is now the version that runs under that name.`,
   or `Rejected: <name> version <version>. Nothing was signed.` An import of a new name is version 1. A file uploaded
   under a name used before gets the number after the highest any row of that name has (**Running versions** and
