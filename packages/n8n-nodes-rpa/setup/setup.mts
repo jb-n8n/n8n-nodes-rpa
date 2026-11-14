@@ -121,8 +121,8 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
     const project = options.projectId !== undefined ? ownership.projects.get(options.projectId) : ownership.ownerProject;
     if (!project) throw new Stop(`--project-id: n8n has no project with the id ${clean(options.projectId)}. Nothing was changed.`, 2);
     say(options.projectId !== undefined
-      ? `  Your project: "${clean(project.name, project.id)}" (id ${clean(project.id)}), as --project-id says.`
-      : `  Your project: n8n's owner's personal project "${clean(project.name, project.id)}" (id ${clean(project.id)}), where n8n's command line puts what it imports.`);
+      ? `  Your project: ${nameAndId(project)}, as --project-id says.`
+      : `  Your project: n8n's owner's personal project ${nameAndId(project)}, where n8n's command line puts what it imports.`);
     cli = { client: cliClient(commandLine, ownership, redact, clean), ownership };
   }
   if (n8n.plaintext && !options.allowHttp && !cliWay) {
@@ -216,6 +216,9 @@ async function checkN8n({ client, origin }: Inputs, types: { type: string; field
 const newPassword = () => randomBytes(24).toString('base64url'); // 32 characters
 const newSigningKey = () => randomBytes(32).toString('hex'); // 64 hex characters
 
+/** A project, credential or workflow as a printed line names it: its name (cleaned) in quotes, then its id. */
+const nameAndId = (x: any) => `"${clean(x.name, x.id)}" (id ${clean(x.id)})`;
+
 /** Names for one printed line: cleaned, at most eight, then how many more. */
 const someNames = (names: string[]) => `${names.slice(0, 8).map((n) => `"${clean(n)}"`).join(', ')}${names.length > 8 ? ` and ${names.length - 8} more` : ''}`;
 
@@ -224,7 +227,7 @@ const someNames = (names: string[]) => `${names.slice(0, 8).map((n) => `"${clean
  * without a terminal it asks nothing and changes nothing.
  */
 async function askUpdate(workflow: any, changes: Changes): Promise<boolean> {
-  const what = `"${clean(workflow.name, workflow.id)}" (id ${clean(workflow.id)})`;
+  const what = nameAndId(workflow);
   say(`The form ${what} was made by this command, and differs from this version's template:`);
   if (changes.added.length) say(`  Added in the template:     ${someNames(changes.added)}`);
   if (changes.removed.length) say(`  Not in the template:       ${someNames(changes.removed)}`);
@@ -427,12 +430,12 @@ async function run(inputs: Inputs): Promise<number> {
   if (!workflow && otherLogin) {
     const auth = formAuthentication(otherLogin);
     const has = auth === FORM_AUTH.basic ? 'Basic Auth' : auth === FORM_AUTH.n8n ? "n8n's sign-in" : 'no sign-in';
-    say(`not used workflow "${clean(otherLogin.name, otherLogin.id)}" (id ${clean(otherLogin.id)}): its form uses ${has}, and this run sets up ${basic ? 'Basic Auth (--form-login basic)' : "n8n's sign-in"}. This run makes a fresh one: unpublish the old one in n8n when you no longer use it.`);
+    say(`not used workflow ${nameAndId(otherLogin)}: its form uses ${has}, and this run sets up ${basic ? 'Basic Auth (--form-login basic)' : "n8n's sign-in"}. This run makes a fresh one: unpublish the old one in n8n when you no longer use it.`);
   }
   if (!workflow && differs && !options.newWorkflow) {
     reportOthers();
     const state = differs.active ? 'This run changed nothing: that form is still published at its address.' : 'It is not published, and this run changed nothing.';
-    throw new Stop(`The workflow "${clean(differs.name, differs.id)}" (id ${clean(differs.id)}) in your project differs from the template: ${differs.why}. ${state} To keep its address, undo that change in n8n, or delete that workflow, and run this again. --new-workflow makes another form at a new address${options.siteLogin !== undefined ? ", with --site-login a form of that Site Login's own" : ''}.`);
+    throw new Stop(`The workflow ${nameAndId(differs)} in your project differs from the template: ${differs.why}. ${state} To keep its address, undo that change in n8n, or delete that workflow, and run this again. --new-workflow makes another form at a new address${options.siteLogin !== undefined ? ", with --site-login a form of that Site Login's own" : ''}.`);
   }
 
   // The credentials found in the project, by name (the browser's too without --browser-url: a reused workflow may use it).
@@ -479,7 +482,7 @@ async function run(inputs: Inputs): Promise<number> {
         const ref = n.credentials?.[type]?.id;
         const odd = ref !== undefined ? runs[type] === undefined || String(ref) !== String(runs[type]) : type === required;
         if (odd) {
-          say(`not used workflow "${clean(workflow.name, workflow.id)}" (id ${clean(workflow.id)}): its node "${n.name}" does not use the ${type} credential this run uses. This run makes a fresh one.`);
+          say(`not used workflow ${nameAndId(workflow)}: its node "${n.name}" does not use the ${type} credential this run uses. This run makes a fresh one.`);
           workflow = undefined;
           break;
         }
@@ -592,7 +595,7 @@ async function run(inputs: Inputs): Promise<number> {
     const pick = DESKTOP ? of(DESKTOP).mine : found.get(ONLY_RUNNER)?.mine;
     if (pick) {
       runnerRef = { id: String(pick.id), name: String(pick.name) };
-      say(`picked   credential "${clean(pick.name, pick.id)}" (id ${clean(pick.id)}): ${DESKTOP ? 'the RPA Desktop Runner --desktop-runner names' : 'the only RPA Desktop Runner in your project. Not tested: this run tests a Windows machine only when you give its Connection Line or name it with --desktop-runner'}`);
+      say(`picked   credential ${nameAndId(pick)}: ${DESKTOP ? 'the RPA Desktop Runner --desktop-runner names' : 'the only RPA Desktop Runner in your project. Not tested: this run tests a Windows machine only when you give its Connection Line or name it with --desktop-runner'}`);
     } else if (DESKTOP || runners.length === 1) {
       // Found in a shared project whose set this run does not use.
       say(`not used credential "${clean(DESKTOP ? DESKTOP.name : runners[0].name)}": this run does not use what it found in the shared project, so no RPA Desktop Runner is set. Pick one on "${NODE.importSteps}" in n8n.`);
@@ -623,16 +626,16 @@ async function run(inputs: Inputs): Promise<number> {
     if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not update the workflow "${clean(old.name, old.id)}" (id ${clean(old.id)}) (${client.reason(r)}). ${old.active ? 'n8n keeps its published version until another is published.' : ''}`.trim());
     workflow = { ...r.json, active: inputs.cli ? false : r.json.active };
     updated = true;
-    say(`updated  workflow "${clean(old.name, old.id)}" (id ${clean(old.id)}): its nodes and connections are this version's template, with what you set kept`);
+    say(`updated  workflow ${nameAndId(old)}: its nodes and connections are this version's template, with what you set kept`);
   } else if (workflow) {
-    say(`reused   workflow "${clean(workflow.name, workflow.id)}" (id ${clean(workflow.id)}): it matches the template${workflow.active ? '' : ', publishing it'}`);
+    say(`reused   workflow ${nameAndId(workflow)}: it matches the template${workflow.active ? '' : ', publishing it'}`);
   }
   if (workflow) {
     if (options.approver !== undefined) say(`         its Approver Allowlist was left as it is: change it on "${NODE.signSteps}" in n8n.`);
     const onImport = workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.credentials ?? {};
     // The runner by name and id: the one picked may have any name, and Import steps may hold another one.
     const toPick = [inputs.browser && !onImport[BROWSER.type] ? `"${BROWSER.name}"` : '', !onImport[SIGNING.type] ? `"${SIGNING.name}"` : '',
-      runnerRef && String(onImport[RUNNER.type]?.id) !== runnerRef.id ? `"${clean(runnerRef.name, runnerRef.id)}" (id ${clean(runnerRef.id)})` : ''].filter(Boolean);
+      runnerRef && String(onImport[RUNNER.type]?.id) !== runnerRef.id ? nameAndId(runnerRef) : ''].filter(Boolean);
     if (toPick.length) say(`         its credentials were left as they are: pick ${toPick.join(', ')} on "${NODE.importSteps}" in n8n, so the workflow file the form hands over carries them.`);
     // --site-login and --allow-private-network change a workflow only when this run makes it: one it reuses is left as it is.
     const onSign = workflow.nodes.find((n: any) => n.name === NODE.signSteps)?.credentials ?? {};
@@ -738,9 +741,9 @@ async function run(inputs: Inputs): Promise<number> {
   const handed = workflow.nodes?.find((n: any) => n.name === NODE.importSteps)?.credentials?.[RUNNER.type];
   const handsOther = handed?.id !== undefined && handed?.id !== null && runnerRef !== undefined && String(handed.id) !== runnerRef.id;
   if (handsOther && runnerRef) {
-    say(`The workflow the form gives you uses the RPA Desktop Runner "${clean(handed.name, handed.id)}" (id ${clean(handed.id)}), not "${clean(runnerRef.name, runnerRef.id)}" (id ${clean(runnerRef.id)}), which this run ${runnerTest && runnerTest.result !== 'untested' ? 'tested' : 'picked'}: to hand that one over, pick it on "${NODE.importSteps}" in n8n.`);
+    say(`The workflow the form gives you uses the RPA Desktop Runner ${nameAndId(handed)}, not ${nameAndId(runnerRef)}, which this run ${runnerTest && runnerTest.result !== 'untested' ? 'tested' : 'picked'}: to hand that one over, pick it on "${NODE.importSteps}" in n8n.`);
   } else if (handed?.id !== undefined && handed?.id !== null) {
-    say(`The workflow the form gives you already uses the RPA Desktop Runner "${clean(handed.name, handed.id)}" (id ${clean(handed.id)}).`);
+    say(`The workflow the form gives you already uses the RPA Desktop Runner ${nameAndId(handed)}.`);
   } else if (runnerRef) {
     say(`The workflow the form gives you does not use "${clean(runnerRef.name, runnerRef.id)}" yet: pick it on "${NODE.importSteps}" in n8n (see above).`);
   } else if (!runners.length && !browserRef) {
