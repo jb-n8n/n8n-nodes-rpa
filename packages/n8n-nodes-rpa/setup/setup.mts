@@ -459,28 +459,35 @@ async function run(inputs: Inputs): Promise<number> {
   // Line for one the project has may replace its line (offerLine).
   const DESKTOP = options.desktopRunner !== undefined ? { name: options.desktopRunner, type: RUNNER.type } : undefined;
   const specs = [...(basic ? [FORM] : []), SIGNING, ...(DESKTOP ? [DESKTOP] : inputs.line ? [RUNNER] : []), BROWSER, ...(SITE ? [SITE] : [])];
-  // Its key in `found`: no credential name has a control character (--site-login and --desktop-runner refuse them).
-  const ONLY_RUNNER = '\u0000the only RPA Desktop Runner';
   let runners: any[] = [];
   let found = new Map<string, { mine?: any; others: any[] }>();
+  // The project's only RPA Desktop Runner, when it has exactly one and no other is named: found beside `found`.
+  let onlyRunner: { mine?: any; others: any[] } | undefined;
   const findAll = () => {
     found = new Map(specs.map((spec) => [spec.name, sameName(list.items, spec, home)]));
+    onlyRunner = undefined;
     if (SITE && !found.get(SITE.name)?.mine) throw new Stop(noSiteLogin(SITE.name, list.items, home), 2);
     if (DESKTOP && !found.get(DESKTOP.name)?.mine) throw new Stop(noDesktopRunner(DESKTOP.name, list.items, home), 2);
     if (!inputs.line && !DESKTOP) {
       runners = projectCredentials(list.items, RUNNER.type, home);
-      if (runners.length === 1) found.set(ONLY_RUNNER, { mine: runners[0], others: [] });
+      if (runners.length === 1) onlyRunner = { mine: runners[0], others: [] };
     }
   };
+  // Everything found, in the order it was found: by name, then the only RPA Desktop Runner.
+  const allFound = () => [...found.values(), ...(onlyRunner ? [onlyRunner] : [])];
+  // What was found that this run would use, as useFound lists it: the credentials, then the workflow when there is one.
+  const foundSet = (w?: Record<string, any>) => [...allFound().filter((f) => f.mine).map((f) => ({ kind: 'credential', name: String(f.mine.name), id: String(f.mine.id) })),
+    ...(w ? [{ kind: 'workflow', name: String(w.name), id: String(w.id) }] : [])];
+  // A set this run does not use: each credential found is left alone, as one of another project would be.
+  const useNoneFound = () => { for (const f of allFound()) { if (f.mine) f.others.push(f.mine); f.mine = undefined; } };
   if (home) findAll();
 
   // In a shared project, one answer for what was found there, as a set: all of it is used, or none of it.
   if (home) {
-    const set = [...[...found].filter(([, f]) => f.mine).map(([, f]) => ({ kind: 'credential', name: String(f.mine.name), id: String(f.mine.id) })),
-      ...(workflow ? [{ kind: 'workflow', name: String(workflow.name), id: String(workflow.id) }] : [])];
+    const set = foundSet(workflow);
     if (!(await useFound(set))) {
       say(`left alone in the shared project: ${set.map((f) => `${f.kind} id ${clean(f.id)}`).join(', ')}. This run makes its own set.`);
-      for (const f of found.values()) { if (f.mine) f.others.push(f.mine); f.mine = undefined; }
+      useNoneFound();
       workflow = undefined;
     }
   }
@@ -550,9 +557,7 @@ async function run(inputs: Inputs): Promise<number> {
       if (!home) say('Note: n8n does not say which project owns the new workflow, so no credential of the same name is reused: fresh ones are made.');
       if (!home && SITE) throw new Stop(`--site-login: n8n does not say which project owns the new workflow, so this run cannot tell that "${clean(SITE.name)}" is yours. Pick it on "${NODE.importSteps}" and "${NODE.signSteps}" in n8n instead.`);
       findAll();
-      if (shared.is && !(await useFound([...found].filter(([, f]) => f.mine).map(([, f]) => ({ kind: 'credential', name: String(f.mine.name), id: String(f.mine.id) }))))) {
-        for (const f of found.values()) { if (f.mine) f.others.push(f.mine); f.mine = undefined; }
-      }
+      if (shared.is && !(await useFound(foundSet()))) useNoneFound();
     }
   }
   reportOthers();
@@ -605,7 +610,7 @@ async function run(inputs: Inputs): Promise<number> {
     else runnerRef = (await credential(client, of(RUNNER), projectId, RUNNER, () => ({ connectionLine: line }), '')).ref;
   } else {
     // Picked by id and name, as n8n listed them: its values are never read.
-    const pick = DESKTOP ? of(DESKTOP).mine : found.get(ONLY_RUNNER)?.mine;
+    const pick = DESKTOP ? of(DESKTOP).mine : onlyRunner?.mine;
     if (pick) {
       runnerRef = { id: String(pick.id), name: String(pick.name) };
       say(`picked   credential ${nameAndId(pick)}: ${DESKTOP ? 'the RPA Desktop Runner --desktop-runner names' : 'the only RPA Desktop Runner in your project. Not tested: this run tests a Windows machine only when you give its Connection Line or name it with --desktop-runner'}`);
