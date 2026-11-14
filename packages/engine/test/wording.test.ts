@@ -15,6 +15,9 @@ const SAMPLE_ARGS: Record<string, unknown[]> = {
   formPostsElsewhere: ['other.example', ['example.com']],
   expectedFileInvalid: [['check.name is not a valid regex']],
   emptyChoice: [['company_code']],
+  pageShows: ['buttons', ['Line Items', 'Reports'], 2],
+  checkedWithoutActing: [[5, 6], false],
+  notCheckedFrom: [7, 9],
 };
 
 /** Every string export of messages.ts as text; builders are called with neutral sample arguments. */
