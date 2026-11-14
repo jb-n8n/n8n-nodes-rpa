@@ -1,4 +1,4 @@
-// n8n's public API for the two scripts that set n8n up: `npx n8n-nodes-rpa setup` (setup/setup.ts, bundled into
+// n8n's public API for the two scripts that set n8n up: `npx n8n-nodes-rpa setup` (setup/*.mts, bundled into
 // dist/setup.mjs) and deploy/scripts/configure-n8n.mjs. Node 22+, no dependencies.
 //
 // Secrets never reach the output: every line a script prints passes through a redactor that knows them, which also

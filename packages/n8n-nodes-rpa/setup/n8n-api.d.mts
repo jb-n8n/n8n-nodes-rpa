@@ -1,4 +1,4 @@
-// Types for setup/n8n-api.mjs (used by setup/setup.mts).
+// Types for setup/n8n-api.mjs (used by the setup command's modules, setup/*.mts).
 export interface Redactor {
   add(secret: string | undefined): void;
   redact(text: unknown): string;
