@@ -4,7 +4,7 @@
 // its type is displayed). Every check here runs n8n's own functions on the node's real description.
 import { describe, expect, it } from 'vitest';
 import {
-  NodeHelpers, Workflow, type ICredentialDataDecryptedObject, type IDataObject, type INode, type INodeCredentialDescription, type INodeParameters, type INodeTypeDescription, type INodeTypes,
+  NodeHelpers, type ICredentialDataDecryptedObject, type IDataObject, type INode, type INodeCredentialDescription, type INodeParameters, type INodeTypeDescription,
 } from 'n8n-workflow';
 import { CREDENTIALS, HIDDEN_BY_RUNS_ON, type RunsOn } from '../nodes/Playwright/config.js';
 import { RUNS_ON_PROPERTY, RUNS_ON_PROPERTY_V2 } from '../nodes/Playwright/description/runSteps.js';
@@ -15,6 +15,7 @@ import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { fakeEngine } from './fake-engine.js';
 import { harness } from './harness.js';
 import { okResult, quickParams } from './quick-fixtures.js';
+import { runParameters } from './n8n-harness.js';
 
 const playwright = new Playwright();
 const d = playwright.description;
@@ -36,10 +37,6 @@ const BEFORE_CREDENTIALS: INodeCredentialDescription[] = [
 ];
 const BEFORE: INodeTypeDescription = { ...d, credentials: BEFORE_CREDENTIALS, properties: d.properties.filter((p) => p.name !== 'runsOn') };
 
-const nodeTypes = (description: INodeTypeDescription): INodeTypes => {
-  const type = { description };
-  return { getByName: () => type, getByNameAndVersion: () => type, getKnownTypes: () => ({}) } as unknown as INodeTypes;
-};
 const savedNode = (parameters: INodeParameters, types: string[] = [], typeVersion = 1): INode => ({
   id: 'n1', name: 'RPA', type: RPA_NODE_TYPE, typeVersion, position: [0, 0], parameters,
   credentials: Object.fromEntries(types.map((t) => [t, { id: `id-${t}`, name: t }])),
@@ -50,9 +47,6 @@ const kept = (node: INode, description = d): string[] => {
   if (!active) throw new Error('n8n could not work out the active credentials');
   return Object.keys(node.credentials ?? {}).filter((t) => active.has(t));
 };
-/** The node's parameters as a run sees them: n8n's Workflow constructor fills the defaults and strips what is not shown. */
-const runParameters = (node: INode, description = d): INodeParameters =>
-  new Workflow({ nodes: [structuredClone(node)], connections: {}, nodeTypes: nodeTypes(description), active: false }).getNode(node.name)!.parameters;
 /** n8n-core's rule for getCredentials: the first entry of the type must be displayed for the run's parameters. */
 const readable = (node: INode, type: string, description = d): boolean =>
   NodeHelpers.displayParameter(runParameters(node, description), description.credentials!.find((c) => c.name === type)!, node, description, runParameters(node, description));

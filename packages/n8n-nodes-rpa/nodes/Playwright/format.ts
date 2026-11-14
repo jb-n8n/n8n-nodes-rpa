@@ -197,7 +197,6 @@ const variablesIn = (text: string): string[] =>
  */
 const stepVariables = (s: unknown): string[] => variablesIn(JSON.stringify(Object.fromEntries(Object.entries(asJson(s)).filter(([k]) => k !== 'intent'))));
 
-/** The name of a desktop target's own (last) condition, or ''. */
 /** A target's own condition: the last one of its UI Automation path. */
 function ownCondition(t: unknown): Json | undefined {
   const path = asJson(asJson(t).uia).path;
@@ -385,13 +384,6 @@ function browserAction(s: Json, shownUrl: (url: string) => string): { core: stri
  */
 export const comparable = (t: string): string =>
   t.replace(/["'\u2018\u2019\u201c\u201d]/g, '').replace(/\s+/g, ' ').trim().replace(/\.$/, '').trimEnd().toLowerCase();
-/**
- * The label the review page and the approval emails write before a step's `describedAs`, as a warning. Written by them,
- * never part of the sentence.
- */
-export const DESCRIBED_DIFFERENTLY = 'described differently as:';
-/** The label the review page and the approval emails write before a `describedAs` shown quietly (`quiet`). */
-export const AUTHOR_CALLS_IT = 'the author calls it:';
 
 /**
  * The kinds of action a description names by its first word (or two), and the kinds each step may be described as. A
