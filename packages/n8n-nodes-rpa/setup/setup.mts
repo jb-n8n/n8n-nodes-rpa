@@ -340,6 +340,66 @@ async function confirmReplace() {
   if ((await ask('Type REPLACE to make a new key, anything else to stop: ')) !== 'REPLACE') throw new Stop('Nothing was changed.');
 }
 
+/**
+ * The workflow this run uses, from this project's workflows of this run's names (ours), newest first: one that matches
+ * the template and signs people in as asked; else one this command made that differs from this version's template, with
+ * its changes (updating: brought up to date when the person agrees, asked later). Says why one that signs in another way
+ * is not used. Stops on one that differs, unless --new-workflow; differs is the first one that does.
+ */
+async function chooseWorkflow(inputs: Inputs, ours: any[], credentials: any[], home: string | undefined, siteForm: boolean, reportOthers: () => void) {
+  const { client, options } = inputs;
+  const basic = options.formLogin === 'basic';
+  let workflow: Record<string, any> | undefined;
+  let differs: { id: string; name: string; why: string; active: boolean; own?: { json: any; changes: Changes } } | undefined;
+  // One that matches the template but signs people in another way (Basic Auth or n8n's sign-in) is not used.
+  let otherLogin: Record<string, any> | undefined;
+  for (const w of [...ours].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))) {
+    const r = await client.api('GET', `/workflows/${encodeURIComponent(String(w.id))}`);
+    if (r.status !== 200 || !Array.isArray(r.json?.nodes)) throw new Stop(`Could not read the workflow "${clean(w.name, w.id)}" (${client.reason(r)}).`);
+    // Read again, from the workflow itself: it is used only when it still belongs to this project.
+    const notMine = ownerProject(r.json, 'workflow') !== home ? 'n8n does not say it belongs to your project' : undefined;
+    const credentialWhy = notMine ?? credentialProblem(r.json, credentials, home as string);
+    const changes = credentialWhy ? undefined : templateChanges(r.json);
+    if (!credentialWhy && !changes) {
+      if (formAuthentication(r.json) === FORM_AUTH[options.formLogin]) {
+        workflow = r.json;
+        break;
+      }
+      otherLogin ??= r.json;
+      continue;
+    }
+    // One this command made (its name, its project, the template's three nodes, credentials of the project) that
+    // differs from this version's template: it may be brought up to date (askUpdate), when it signs in as asked.
+    const own = !credentialWhy && changes && isOwnForm(r.json);
+    if (own && formAuthentication(r.json) !== FORM_AUTH[options.formLogin]) {
+      otherLogin ??= r.json;
+      continue;
+    }
+    differs ??= {
+      id: String(w.id), name: String(w.name), active: r.json.active === true,
+      why: credentialWhy ?? structuralDifference(r.json) ?? "its nodes' settings or connections differ from this version's template",
+      ...(own ? { own: { json: r.json, changes } } : {}),
+    };
+  }
+  // The form to bring up to date, when the person agrees (asked below, before anything is written).
+  let updating: Changes | undefined;
+  if (!workflow && differs?.own && (!options.newWorkflow || siteForm)) {
+    workflow = differs.own.json;
+    updating = differs.own.changes;
+  }
+  if (!workflow && otherLogin) {
+    const auth = formAuthentication(otherLogin);
+    const has = auth === FORM_AUTH.basic ? 'Basic Auth' : auth === FORM_AUTH.n8n ? "n8n's sign-in" : 'no sign-in';
+    say(`not used workflow ${nameAndId(otherLogin)}: its form uses ${has}, and this run sets up ${basic ? 'Basic Auth (--form-login basic)' : "n8n's sign-in"}. This run makes a fresh one: unpublish the old one in n8n when you no longer use it.`);
+  }
+  if (!workflow && differs && !options.newWorkflow) {
+    reportOthers();
+    const state = differs.active ? 'This run changed nothing: that form is still published at its address.' : 'It is not published, and this run changed nothing.';
+    throw new Stop(`The workflow ${nameAndId(differs)} in your project differs from the template: ${differs.why}. ${state} To keep its address, undo that change in n8n, or delete that workflow, and run this again. --new-workflow makes another form at a new address${options.siteLogin !== undefined ? ", with --site-login a form of that Site Login's own" : ''}.`);
+  }
+  return { workflow, updating, differs };
+}
+
 async function run(inputs: Inputs): Promise<number> {
   const { client, options, origin } = inputs;
   const basic = options.formLogin === 'basic';
@@ -402,54 +462,9 @@ async function run(inputs: Inputs): Promise<number> {
   const ours = home ? named.filter((w) => ownerProject(w, 'workflow') === home) : [];
   // Reported once the project is known (it may be learned from the workflow this run makes).
   const reportOthers = () => { for (const w of named.filter((x) => !ours.includes(x))) leftAlone('workflow', w, '', home); };
-  let workflow: Record<string, any> | undefined;
-  let differs: { id: string; name: string; why: string; active: boolean; own?: { json: any; changes: Changes } } | undefined;
-  // One that matches the template but signs people in another way (Basic Auth or n8n's sign-in) is not used.
-  let otherLogin: Record<string, any> | undefined;
-  for (const w of [...ours].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))) {
-    const r = await client.api('GET', `/workflows/${encodeURIComponent(String(w.id))}`);
-    if (r.status !== 200 || !Array.isArray(r.json?.nodes)) throw new Stop(`Could not read the workflow "${clean(w.name, w.id)}" (${client.reason(r)}).`);
-    // Read again, from the workflow itself: it is used only when it still belongs to this project.
-    const notMine = ownerProject(r.json, 'workflow') !== home ? 'n8n does not say it belongs to your project' : undefined;
-    const credentialWhy = notMine ?? credentialProblem(r.json, list.items, home as string);
-    const changes = credentialWhy ? undefined : templateChanges(r.json);
-    if (!credentialWhy && !changes) {
-      if (formAuthentication(r.json) === FORM_AUTH[options.formLogin]) {
-        workflow = r.json;
-        break;
-      }
-      otherLogin ??= r.json;
-      continue;
-    }
-    // One this command made (its name, its project, the template's three nodes, credentials of the project) that
-    // differs from this version's template: it may be brought up to date (askUpdate), when it signs in as asked.
-    const own = !credentialWhy && changes && isOwnForm(r.json);
-    if (own && formAuthentication(r.json) !== FORM_AUTH[options.formLogin]) {
-      otherLogin ??= r.json;
-      continue;
-    }
-    differs ??= {
-      id: String(w.id), name: String(w.name), active: r.json.active === true,
-      why: credentialWhy ?? structuralDifference(r.json) ?? "its nodes' settings or connections differ from this version's template",
-      ...(own ? { own: { json: r.json, changes } } : {}),
-    };
-  }
-  // The form to bring up to date, when the person agrees (asked below, before anything is written).
-  let updating: Changes | undefined;
-  if (!workflow && differs?.own && (!options.newWorkflow || siteForm)) {
-    workflow = differs.own.json;
-    updating = differs.own.changes;
-  }
-  if (!workflow && otherLogin) {
-    const auth = formAuthentication(otherLogin);
-    const has = auth === FORM_AUTH.basic ? 'Basic Auth' : auth === FORM_AUTH.n8n ? "n8n's sign-in" : 'no sign-in';
-    say(`not used workflow ${nameAndId(otherLogin)}: its form uses ${has}, and this run sets up ${basic ? 'Basic Auth (--form-login basic)' : "n8n's sign-in"}. This run makes a fresh one: unpublish the old one in n8n when you no longer use it.`);
-  }
-  if (!workflow && differs && !options.newWorkflow) {
-    reportOthers();
-    const state = differs.active ? 'This run changed nothing: that form is still published at its address.' : 'It is not published, and this run changed nothing.';
-    throw new Stop(`The workflow ${nameAndId(differs)} in your project differs from the template: ${differs.why}. ${state} To keep its address, undo that change in n8n, or delete that workflow, and run this again. --new-workflow makes another form at a new address${options.siteLogin !== undefined ? ", with --site-login a form of that Site Login's own" : ''}.`);
-  }
+  const chosen = await chooseWorkflow(inputs, ours, list.items, home, siteForm, reportOthers);
+  let { workflow, updating } = chosen;
+  const { differs } = chosen;
 
   // The credentials found in the project, by name (the browser's too without --browser-url: a reused workflow may use it).
   // The Site Login (--site-login) is found the same way, and only picked: it must be there.
