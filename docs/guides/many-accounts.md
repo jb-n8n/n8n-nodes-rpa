@@ -35,11 +35,6 @@ Site Login can read the fallback password: use an account made for testing. And 
 signs in as the fallback account, so keep the column names exact. Each output item's `account` says which account it
 signed in as. An empty TOTP Secret means that account gets no code.
 
-When the accounts take their one-time codes from different places (one from an authenticator app on a Windows machine,
-another from an email), give each its own code workflow and pick it per item: on the RPA node, open **Options →
-One-Time Code Workflow**, choose **By ID**, and set it as an expression such as `{{ $json.codeWorkflowId }}`, with the
-workflow's ID in a column of your account data. It must give a workflow ID. Publish each code workflow.
-
 ## Approving the steps
 
 One approval covers every account: a signature binds the Site Login's credential ID, not the values it holds. Give this

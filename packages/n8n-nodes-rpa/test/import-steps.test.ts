@@ -692,13 +692,13 @@ describe('Import Steps: execution', () => {
     const NO_SEED = { ...CREDS, playwrightSiteLoginApi: { ...siteLoginData(SITE), totpSecret: '' } };
     const signInOf = (script: Script) => script.steps.find((s): s is Extract<Script['steps'][number], { signIn: unknown }> => 'signIn' in s);
 
-    it('a One-Time Code Workflow that is not a workflow ID is refused, as in Run Steps, before anything is imported', async () => {
+    it('an expression as the One-Time Code Workflow is refused, as in Run Steps, before anything is imported', async () => {
       const engine = importEngine(async (input) => proved(input));
       const ctx = nodeContext({
-        params: params({}, { codeWorkflowId: { __rl: true, mode: 'id', value: 'not an id' } }), items: [fileItem(CHROME)], credentials: NO_SEED as never, continueOnFail: true,
+        params: params({}, { codeWorkflowId: { __rl: true, mode: 'id', value: '={{ $json.wf }}' } }), items: [fileItem(CHROME)], credentials: NO_SEED as never, continueOnFail: true,
       }) as Harness;
       const [data] = await run(engine, {}, ctx);
-      expect(data[0].json.error).toBe('One-Time Code Workflow is not a workflow ID: it must give letters, digits, - and _ only, or nothing.');
+      expect(data[0].json.error).toBe('One-Time Code Workflow must be set directly, not with an expression.');
       expect(engine.imports).toHaveLength(0);
     });
     it('an import whose sign-in asks for a code runs with the code from the workflow and imports totp.source "workflow"', async () => {

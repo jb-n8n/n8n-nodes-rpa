@@ -68,17 +68,11 @@ Entra's `GetCredentialType` is one): declare that path as a login page too (or i
 
 ## Settings you must type
 
-Seven settings must be set directly on the node. Set with an expression, they are a configuration error, so item data
+Eight settings must be set directly on the node. Set with an expression, they are a configuration error, so item data
 cannot switch them: **Require Signed Steps**, **Allow Private Network**, **Allow Unsigned Writes**, **Deliver
-Unconfirmed Rows**, Run Steps' **Login Breaker Reset Key**, and Sign Steps' **Approver Allowlist** and **Approval Form
-Page**. If the whole Options collection is set with one expression, n8n drops it before the node runs, and these
+Unconfirmed Rows**, Run Steps' **Login Breaker Reset Key**, **One-Time Code Workflow**, and Sign Steps' **Approver
+Allowlist** and **Approval Form Page**. If the whole Options collection is set with one expression, n8n drops it before the node runs, and these
 switches stay off. Type the RPA Browser credential's Endpoint URL, Token and Certificate Fingerprint directly too.
-
-**One-Time Code Workflow** may be an expression, so one workflow can pick the code workflow for each account. What it
-picks can only hand back a code: the sign-in types it into the code field of a page listed under **Pages Where the
-Password May Be Typed**, masked like every code, and nothing signed or checked before the run depends on it. n8n runs
-the picked workflow only when that workflow's own settings let this one call it. The expression must give a workflow
-ID, or nothing.
 
 ## Signing and approval
 
