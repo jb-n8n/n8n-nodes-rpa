@@ -20,6 +20,8 @@ export interface NodeContext {
   getExecutionCancelSignal(): AbortSignal | undefined;
   continueOnFail(): boolean;
   getExecutionId(): string;
+  /** The workflow's id (n8n always has it; optional so small test stubs may leave it out). Keys a failed repair's record. */
+  getWorkflow?(): { id?: string };
   /** Evaluates an n8n expression (`{{ … }}`) for one item: Sign Steps reads who signed in on the approval form page. */
   evaluateExpression(expression: string, itemIndex: number): unknown;
   /** Runs another workflow and waits for its output (Run Steps → One-Time Code Workflow). */

@@ -64,7 +64,12 @@ export const PASSWORD_CHANGED_GUIDANCE =
 
 /** incomplete because self-repair stopped before it found the data: it went in circles, or used its actions or tokens. */
 export const REPAIR_STOPPED_GUIDANCE =
-  'Self-repair did not find the data and stopped; the message says why and what it used. Find the data on the site yourself, then say where it is now in the Goal on the RPA node (for example the menu and the section\'s name), or change the steps on the import form. Until then every run tries again: turn AI Repair off to stop that.';
+  'Self-repair did not find the data and stopped; the message says why and what it used. The next runs do not try again until you act. Find the data on the site yourself, then say where it is now in the Goal on the RPA node (for example the menu and the section\'s name), or change the steps on the import form: either one lets it try again. To let it try again unchanged, type a new value (any text) in Options → AI Repair Reset Key.';
+/** drift_detected whose repair did not run because a repair of these steps already failed (repair-stop.ts repairHeld). */
+export const REPAIR_HELD_GUIDANCE =
+  'A repair of these steps already failed, so this run did not call the chat model. Find the data on the site yourself, then say where it is now in the Goal on the RPA node, or change the steps on the import form: either one lets it try again. To let it try again unchanged, type a new value (any text) in Options → AI Repair Reset Key.';
+/** The words of repair-stop.ts repairHeld that guidanceFor looks for. */
+export const REPAIR_HELD_WORDS = ', so AI Repair did not run: ';
 /**
  * The engine's words for that stop: the circle guard, or Max Agent Actions or Max LLM Tokens used up. Copies of the
  * engine's WENT_IN_CIRCLES and AGENT_OUT_OF_BUDGET (this module may not load the engine); description.test.ts pins them.
@@ -97,6 +102,7 @@ export function guidanceFor(code: ErrorCode, message: string): string {
   if (code === 'locked_out' && message.includes('was changed earlier in this execution')) return PASSWORD_CHANGED_GUIDANCE;
   if (code === 'locked_out' && message.includes('before the upgrade stopped every account')) return LOCKED_BEFORE_UPGRADE_GUIDANCE;
   if (repairStopped(code, message)) return REPAIR_STOPPED_GUIDANCE;
+  if (code === 'drift_detected' && message.includes(REPAIR_HELD_WORDS)) return REPAIR_HELD_GUIDANCE;
   return GUIDANCE[code];
 }
 

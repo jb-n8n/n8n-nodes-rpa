@@ -161,16 +161,16 @@ const GOAL = 'Read every current recall and stop-sale notice.';
 type Over = Partial<TaskInput> & {
   /** Turns AI repair on with the v1 node's settings: this Goal, rows delivered unconfirmed unless said otherwise. */
   model?: ChatModel; name?: string; agentBudget?: { maxActions?: number; maxTokens?: number };
-  deliverUnconfirmed?: boolean; alreadyRan?: boolean; download?: DownloadTemplate;
+  deliverUnconfirmed?: boolean; alreadyRan?: boolean; held?: string; download?: DownloadTemplate;
 };
 function task(over: Over = {}, script: Script = baselineScript(portal.url)): TaskInput {
-  const { model, name, agentBudget, deliverUnconfirmed = true, alreadyRan, download, ...rest } = over;
+  const { model, name, agentBudget, deliverUnconfirmed = true, alreadyRan, held, download, ...rest } = over;
   const { signature } = signScript(script, TEST_KEY, { approvedBy: APPROVER });
   return {
     script, trust: { required: true, signature, approvedBy: APPROVER, key: TEST_KEY }, policy: policyFor(portal), secrets: { ...SECRETS },
     output: { idPattern: 'N26-\\d{4}', totalPattern: TOTAL_PATTERN }, endpoint: LOCAL, defaultStepTimeoutMs: 3000,
     ...(model ? {
-      repair: { model, goal: GOAL, deliverUnconfirmed, ...(name ? { name } : {}), ...(agentBudget ? { agentBudget } : {}), ...(alreadyRan ? { alreadyRan } : {}), ...(download ? { download } : {}) },
+      repair: { model, goal: GOAL, deliverUnconfirmed, ...(name ? { name } : {}), ...(agentBudget ? { agentBudget } : {}), ...(alreadyRan ? { alreadyRan } : {}), ...(held !== undefined ? { held } : {}), ...(download ? { download } : {}) },
     } : {}),
     ...rest,
   };
@@ -853,6 +853,24 @@ describe('repair rules', () => {
     const first = await runTask(firstRun({ model, alreadyRan: true, endpoint: NO_BROWSER }));
     expect(first).toMatchObject({ ok: false, code: 'drift_detected', lane: 'agent', message: REPAIR_ALREADY_RAN });
     expect(model.invocations).toHaveLength(0);
+  });
+
+  it('a held repair (the node remembers a failed one): the drift says why and never calls the model; a blank reason holds nothing', async () => {
+    portal.setState({ label: 'Field Actions' });
+    const HELD = 'a repair already failed for steps version 1, so AI Repair did not run';
+    const model = fakeModel(HEAL());
+    const r = await runTask(task({ model, held: HELD }));
+    expect(r).toMatchObject({ ok: false, code: 'drift_detected', lane: 'script' });
+    if (!r.ok) expect(r.message.endsWith(` (${HELD})`)).toBe(true);
+    const first = await runTask(firstRun({ model, held: HELD, endpoint: NO_BROWSER }));
+    expect(first).toMatchObject({ ok: false, code: 'drift_detected', lane: 'agent', message: HELD });
+    expect(model.invocations).toHaveLength(0);
+    // alreadyRan wins: its own words
+    const both = await runTask(task({ model, held: HELD, alreadyRan: true }));
+    if (!both.ok) expect(both.message.endsWith(` (${REPAIR_ALREADY_RAN})`)).toBe(true);
+    // a blank reason is no hold: the repair runs
+    const healed = await runTask(task({ model: fakeModel(HEAL()), held: '  ' }));
+    expect(healed).toMatchObject({ ok: true, lane: 'agent' });
   });
 
   it("repaired steps keep the steps' own name; Options → Name is only the fallback", async () => {

@@ -1,4 +1,4 @@
-import type { BreakerRecord, LoginFingerprint } from './guard-store.js';
+import type { BreakerRecord, LoginFingerprint, RepairStop } from './guard-store.js';
 
 // A leaf module, so guard.ts and redis-store.ts share it without a cycle.
 
@@ -27,4 +27,15 @@ export function readRecord(v: unknown): BreakerRecord | undefined {
   if (!isRecord(v)) return undefined;
   const login = v.code === 'login_failed' ? loginOf(v.login) : undefined;
   return { code: v.code, at: v.at, resetKey: v.resetKey, message: v.message, ...(login ? { login } : {}) };
+}
+
+const count = (v: unknown): number => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : 0);
+
+/** A stored failed-repair record (repair-stop.ts), copied field by field, or undefined when it is not well formed. */
+export function readRepairStop(v: unknown): RepairStop | undefined {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return undefined;
+  const r = v as Record<string, unknown>;
+  if (typeof r.at !== 'string' || typeof r.resetKey !== 'string') return undefined;
+  const version = typeof r.version === 'number' && Number.isInteger(r.version) ? r.version : null;
+  return { at: r.at, resetKey: r.resetKey, version, code: typeof r.code === 'string' ? r.code : '', llmCalls: count(r.llmCalls), tokens: count(r.tokens) };
 }

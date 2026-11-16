@@ -108,7 +108,7 @@ export const SHARE_ACROSS_WORKERS_PROPERTY: INodeProperties = {
   default: false,
   noDataExpression: true,
   description:
-    'Whether the login breaker and the run lock are kept in Redis, so that every n8n worker shares them. Turn it on when n8n runs in queue mode and the node has a Site Login, then attach an RPA Redis credential.',
+    'Whether the login breaker, the run lock and the record of a failed AI repair are kept in Redis, so that every n8n worker shares them. Turn it on when n8n runs in queue mode and the node has a Site Login or AI Repair, then attach an RPA Redis credential.',
   displayOptions: { show: { operation: [...RUNS_ON_OPERATIONS], ...VERSION_2_ON }, hide: { runsOn: ['desktop'] } },
 };
 

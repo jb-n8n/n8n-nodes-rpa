@@ -246,7 +246,9 @@ Create these credentials:
    and its message names version 2 and says to approve it from the approval email.
    A repair that does not find the data stops: when it goes in circles, or at its limits (**Max Agent Actions**, **Max
    LLM Tokens**). Its message says how many chat model calls and tokens it used
-   ([A repair that stops](../reference/errors.md#a-repair-that-stops)).
+   ([A repair that stops](../reference/errors.md#a-repair-that-stops)). The next runs then do not call the model for
+   the same steps: change the Goal, approve new steps, or type a new **AI Repair Reset Key** in the RPA node's Options
+   to let it try again.
 
 To run the feed every 6 hours, **Publish** it. Replace **Send data to destination** with where the data should go, such
 as a spreadsheet or a database node. To let the first bot repair itself too, its RPA node's note lists the three

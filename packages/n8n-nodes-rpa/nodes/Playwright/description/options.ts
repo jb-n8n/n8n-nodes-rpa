@@ -298,6 +298,16 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     displayOptions: withAiRepair,
   },
   {
+    displayName: 'AI Repair Reset Key',
+    name: 'repairResetKey',
+    type: 'string',
+    default: '',
+    noDataExpression: true,
+    description:
+      "A repair that failed does not try again for the same steps and Goal, so that each run does not pay for it. To let it try again, change this value (for example to today's date). A new approved version of the steps, or a new Goal, tries again by itself. Type it, not an expression.",
+    displayOptions: withAiRepair,
+  },
+  {
     displayName: 'One-Time Code Workflow',
     name: 'codeWorkflowId',
     // n8n's workflow selector (as its Execute Workflow node), by list or by ID. A plain ID saved before arrives as text.

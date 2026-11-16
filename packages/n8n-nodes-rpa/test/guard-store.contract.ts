@@ -134,5 +134,17 @@ export function guardStoreContract(name: string, make: () => Promise<GuardStore>
       const other = both.find((r) => r.logins === 0)!.result;
       expect(other.kind === 'blocked' && ['busy', 'locked_out'].includes(other.code)).toBe(true);
     });
+
+    it('a failed-repair record one store writes, another reads, and a delete clears it for both', async () => {
+      await beforeEachTest();
+      const [a, b] = [await made(), await made()];
+      const stop = { at: '2026-11-16T10:00:00.000Z', resetKey: 'one', version: 3, code: 'incomplete', llmCalls: 1, tokens: 1200 };
+      expect(await b.getRepairStop('repair:contract')).toBeUndefined();
+      await a.setRepairStop('repair:contract', stop);
+      expect(await b.getRepairStop('repair:contract')).toEqual(stop);
+      expect(await b.getBreaker('repair:contract')).toBeUndefined();
+      await b.deleteRepairStop('repair:contract');
+      expect(await a.getRepairStop('repair:contract')).toBeUndefined();
+    });
   });
 }
