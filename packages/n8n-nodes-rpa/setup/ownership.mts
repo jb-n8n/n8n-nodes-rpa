@@ -236,5 +236,6 @@ export async function credential(client: Client, found: { mine?: any; others: an
 export async function replaceData(client: Client, ref: Ref, type: string, data: Record<string, unknown>) {
   const r = await client.api('PATCH', `/credentials/${encodeURIComponent(ref.id)}`, { name: ref.name, type, data });
   if (r.status !== 200) throw new Stop(`Could not change the credential "${ref.name}" (${client.reason(r)}). Nothing else was changed.`);
-  record.changed.push(`"${clean(ref.name, ref.id)}"`);
+  const what = type === CREDENTIALS.signing ? 'the key in' : type === CREDENTIALS.desktopRunner ? 'the Connection Line of' : 'the password of';
+  record.changed.push(`${what} "${clean(ref.name, ref.id)}"`);
 }

@@ -118,7 +118,7 @@ export async function correctLine(client: Client, ref: Ref, test: RunnerTest): P
     say(`         not used: n8n did not take it (${client.reason(r)}). The Connection Line of ${what} stays as it is.`);
     return undefined;
   }
-  record.changed.push(`"${clean(ref.name, ref.id)}"`);
+  record.changed.push(`the Connection Line of "${clean(ref.name, ref.id)}"`);
   say(`Replaced the Connection Line of ${what}: it now names ${to}.`);
   return line;
 }

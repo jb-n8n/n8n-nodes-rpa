@@ -2397,7 +2397,7 @@ describe('an existing form: an empty RPA Desktop Runner slot on Import steps is 
     expect(after.versionId).not.toBe(version);
     expect(after.active).toBe(true);
     expect(fake.state.requests.some((q) => q.method === 'POST' && q.path === `/api/v1/workflows/${wf.id}/activate`)).toBe(true);
-    expect(lines(r.stdout)).toContain(`Changed the form "RPA: 5 Import a bot", which now hands over "RPA Desktop Runner account" (id c-hand).`);
+    expect(lines(r.stdout)).toContain(`Changed the form "RPA: 5 Import a bot" (it now hands over "RPA Desktop Runner account").`);
     expect(r.out).not.toContain('pick it on');
     // A set one is never replaced: another project runner later changes nothing.
     fake.state.credentials.find((c) => c.id === 'c-hand')!.name = 'Renamed';

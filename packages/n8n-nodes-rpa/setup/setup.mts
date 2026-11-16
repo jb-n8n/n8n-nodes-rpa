@@ -487,7 +487,7 @@ const listed = (names: string[]) => (names.length < 2 ? names.join('') : `${name
 function madeLine(): string {
   const { made, changed } = record;
   if (!made.length && !changed.length) return 'Nothing new was made: your project has the form and its credentials.';
-  return [made.length ? `Made ${listed(made)}.` : '', changed.length ? `Changed ${listed(changed)}.` : ''].filter(Boolean).join(' ');
+  return [made.length ? `Made ${listed(made)}.` : '', changed.length ? `Changed ${changed.join('; ')}.` : ''].filter(Boolean).join(' ');
 }
 
 /**
@@ -905,7 +905,7 @@ async function run(inputs: Inputs): Promise<number> {
     if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not update the workflow "${clean(old.name, old.id)}" (id ${clean(old.id)}) (${client.reason(r)}). ${old.active ? 'n8n keeps its published version until another is published.' : ''}`.trim());
     workflow = { ...r.json, active: inputs.cli ? false : r.json.active };
     updated = true;
-    record.changed.push(`the form "${clean(old.name, old.id)}", brought up to this version`);
+    record.changed.push(`the form "${clean(old.name, old.id)}" (brought up to this version)`);
     detail(`updated  workflow ${nameAndId(old)}: its nodes and connections are this version's template, with what you set kept`);
     if (made010) {
       const site = updatedTo.find((n) => n.name === NODE.signSteps)?.credentials?.[CREDENTIALS.siteLogin];
@@ -928,7 +928,7 @@ async function run(inputs: Inputs): Promise<number> {
       if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not set the RPA Desktop Runner on "${NODE.importSteps}" of the workflow "${clean(w.name, w.id)}" (id ${clean(w.id)}) (${client.reason(r)}). ${w.active ? 'n8n keeps its published version until another is published.' : ''}`.trim());
       workflow = { ...r.json, active: inputs.cli ? false : r.json.active };
       filled = true;
-      if (!updated) record.changed.push(`the form "${clean(w.name, w.id)}", which now hands over ${nameAndId(ref)}`);
+      if (!updated) record.changed.push(`the form "${clean(w.name, w.id)}" (it now hands over "${clean(ref.name, ref.id)}")`);
       detail(`set      the RPA Desktop Runner ${nameAndId(ref)} on "${NODE.importSteps}" of workflow ${nameAndId(w)}: its slot was empty`);
     }
   }
