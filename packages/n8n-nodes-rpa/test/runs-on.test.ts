@@ -221,25 +221,25 @@ describe('the workflows the import generates', () => {
   };
 
   it('set Runs On on each Run steps: A browser on browser steps, A Windows desktop app on desktop steps', () => {
-    expect(w.nodes.find((n) => n.name === 'Web')!.parameters).toMatchObject({ operation: 'runSteps', runsOn: 'browser' });
-    expect(w.nodes.find((n) => n.name === 'Desk')!.parameters).toMatchObject({ operation: 'runSteps', runsOn: 'desktop' });
-    expect(slots(w.nodes.find((n) => n.name === 'Desk')!.parameters as INodeParameters)).toEqual(['RPA Step Signing', 'RPA Desktop Runner', 'RPA Secret Variables']);
+    expect(w.nodes.find((n) => n.name === 'g-1')!.parameters).toMatchObject({ operation: 'runSteps', runsOn: 'browser' });
+    expect(w.nodes.find((n) => n.name === 'g-2')!.parameters).toMatchObject({ operation: 'runSteps', runsOn: 'desktop' });
+    expect(slots(w.nodes.find((n) => n.name === 'g-2')!.parameters as INodeParameters)).toEqual(['RPA Step Signing', 'RPA Desktop Runner', 'RPA Secret Variables']);
   });
 
   it('a generated desktop node keeps its three, a generated browser node its four, and RPA Redis with the switch on', () => {
     // As generated, plus the credentials a person adds there (Secret Variables; Redis on a browser node).
     expect(w.nodes.filter((n) => n.type === RPA_NODE_TYPE).map((n) => n.typeVersion)).toEqual([2, 2]);
-    const desk = asNode('Desk', [CREDENTIALS.secretVariables]);
+    const desk = asNode('g-2', [CREDENTIALS.secretVariables]);
     expect(Object.keys(desk.credentials!).sort()).toEqual([CREDENTIALS.desktopRunner, CREDENTIALS.signing, CREDENTIALS.secretVariables].sort());
     expect(kept(desk).sort()).toEqual(Object.keys(desk.credentials!).sort());
     for (const t of Object.keys(desk.credentials!)) expect(readable(desk, t), t).toBe(true);
-    const web = asNode('Web', [CREDENTIALS.secretVariables]);
+    const web = asNode('g-1', [CREDENTIALS.secretVariables]);
     expect(Object.keys(web.credentials!).sort()).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.secretVariables].sort());
     expect(kept(web).sort()).toEqual(Object.keys(web.credentials!).sort());
     for (const t of Object.keys(web.credentials!)) expect(readable(web, t), t).toBe(true);
-    expect(slots(w.nodes.find((n) => n.name === 'Web')!.parameters as INodeParameters, 2)).toEqual(['RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Secret Variables']);
+    expect(slots(w.nodes.find((n) => n.name === 'g-1')!.parameters as INodeParameters, 2)).toEqual(['RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Secret Variables']);
     // RPA Redis: kept and read only once a person turns on Share Login Breaker Across Workers.
-    const off = asNode('Web', [CREDENTIALS.redis]);
+    const off = asNode('g-1', [CREDENTIALS.redis]);
     expect(kept(off)).not.toContain(CREDENTIALS.redis);
     const on = { ...off, parameters: { ...off.parameters, shareAcrossWorkers: true } };
     expect(kept(on)).toContain(CREDENTIALS.redis);

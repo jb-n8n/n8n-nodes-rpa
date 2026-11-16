@@ -16,7 +16,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   const CHANGE = 'Change the steps as JSON';
   const VALUES = 'Change values';
   /**
-   * Sign steps' first run, before the review page: The approved version (from `ran`), then Sign steps with the parameters
+   * Sign steps' first run, before the review page: The approved version (from `ran`), its rows one item each (Rows to
+   * check, a Split Out), then Sign steps with the parameters
    * it reads then resolved as n8n resolves them (Check Only on: the review page has not run; the parameters that read the
    * review page are never read), the key `key` and the Site Login `siteLogin` (none when not given). Returns `ran` with both.
    */
@@ -36,13 +37,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     }));
     expect(params.checkOnly).toBe(true);
     const out = await executeSignSteps(harness({
-      params, rawParameters: sign, items: [{ json: item }], continueOnFail: true,
+      params, rawParameters: sign, items: (item.rows as IDataObject[]).map((json) => ({ json })), continueOnFail: true,
       credentials: { playwrightScriptSigningApi: { secretKey: key }, ...(siteLogin ? { playwrightSiteLoginApi: siteLoginData(SITE) } : {}) },
       ...(siteLogin ? { credentialIds: { playwrightSiteLoginApi: siteLogin.id }, credentialNames: { playwrightSiteLoginApi: siteLogin.name } } : {}),
     }), importEngine(() => NOT_ADOPTABLE));
-    expect(out[0]).toHaveLength(1);
-    expect(out[0][0].json.checkOnly).toBe(true);
-    return { ...ran, 'The approved version': [[{ json: item }]], 'Sign steps': [out[0], []] } as Record<string, INodeExecutionData[][]>;
+    expect(out[0]).toHaveLength((item.rows as IDataObject[]).length);
+    for (const o of out[0]) expect(o.json.checkOnly).toBe(true);
+    return { ...ran, 'The approved version': [[{ json: item }]], 'Rows to check': [(item.rows as IDataObject[]).map((json) => ({ json }))], 'Sign steps': [out[0], []] } as Record<string, INodeExecutionData[][]>;
   }
   const RUNNING = 'Compared with the running version';
   /** The line Compared with the approved version gives the review page for the box submitted as `text`. */
@@ -1057,7 +1058,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
 
     // A new bot: no approved version to check, only the line. Sign steps' check gets an empty item.
     const fresh = await checkBeforeReview({ Settings: [[{ json: { name: 'feed', ...settingsJson() } }]], 'Import steps': [[{ json: {} }], [next()]] }, KEY, SHOP);
-    expect(fresh['The approved version'][0][0].json).toEqual({});
+    expect(fresh['The approved version'][0][0].json).toEqual({ rows: [{}] });
     expect(fresh['Sign steps'][0][0].json).toEqual({ checkOnly: true, siteLogin: SHOP.name, approvedVersion: null });
     expect(reviewHead({ $: nodesRan(fresh) })).toBe(NAMED);
     // Desktop steps bind no Site Login: the line says what they bind, whatever Sign steps holds.
@@ -1074,6 +1075,71 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const last = render(completion('Imported').completionMessage, { $: nodesRan({ ...fresh, 'Import steps': [[{ json: { drafts: [], report: { steps: 1, items: [] } } }], [next()]], [REVIEW]: [[{ json: {} }]] }) });
     expect(last).toContain('Nothing was signed: the review page was not answered in time.');
     expect(last).not.toContain('Rejected');
+  });
+
+  describe('an upload under running names: every list\'s stored row is checked (F1)', () => {
+    const KEY = 'k'.repeat(32);
+    const SHOP = { id: 'site-a', name: 'Shop <login>' };
+    const docOf = (name: string, version: number, steps: object[], more: object = {}) => ({ startUrl: `${SITE.url}/list`, name, version, steps, ...more });
+    /** An active row as Sign Steps saved it, signed with KEY for SHOP; `edit` changes its steps after (signature kept). */
+    const signedRow = (id: number, d: ReturnType<typeof docOf>, edit?: object[]): IDataObject => ({
+      id, name: d.name, version: d.version, signature: signScript(d, KEY, { approvedBy: APPROVER, siteLoginId: SHOP.id }).signature, approvedBy: APPROVER, status: 'active',
+      steps: JSON.stringify(edit ? { ...d, steps: edit } : d),
+    });
+    const listOf = (d: object, name: string, version: number) => ({ json: { name, version, baseVersion: null, steps: { ...d, name, version }, reviewSteps: [], safetyFlags: [] } });
+    /** The review page's html for a file of `lists` uploaded as `feed`, with these running rows. */
+    const page = async (rows: IDataObject[], lists: { json: IDataObject }[], over: (ran: Record<string, INodeExecutionData[][]>) => Record<string, INodeExecutionData[][]> = (r) => r) => {
+      const base: Record<string, INodeExecutionData[][]> = { Settings: [[{ json: { name: 'feed', ...settingsJson() } }]], 'Running versions': [rows.map((json) => ({ json }))] };
+      base['What it replaces'] = [[{ json: evaluate(String(byName(t, 'What it replaces').parameters.jsonOutput), { $: nodesRan(base) }) as IDataObject }]];
+      const ran = over(await checkBeforeReview({ ...base, 'Import steps': [[{ json: {} }], lists] }, KEY, SHOP));
+      return reviewHead({ $: nodesRan(ran) }) + reviewFields({ $: nodesRan(ran) }).filter((f) => f.fieldType === 'html').map((f) => String(f.html)).join('');
+    };
+    const lineOf = (html: string, name: string) => [...html.matchAll(/<p><b>(.*?)<\/b><\/p>/g)].map((m) => m[1]).find((l) => l.startsWith(`${name}: `));
+    const OPEN = [{ intent: 'Open the list', goto: `${SITE.url}/list` }];
+    const OTHER = [{ intent: 'Open the list', goto: `${SITE.url}/other` }];
+
+    it('a file of several step lists under running names: a list whose row was not checked is never called approved or unchanged (IB-3)', async () => {
+      const one = docOf('feed-1', 2, OPEN);
+      const two = docOf('feed-2', 3, OPEN);
+      // feed-1's row fits; feed-2's row was edited in the Data Table after it was approved, its signature kept. The file
+      // holds the edited steps for feed-2, so a comparison alone would call it unchanged.
+      const rows = [signedRow(1, one), signedRow(2, two, OTHER)];
+      const lists = [listOf(docOf('', 0, OPEN), 'feed-1', 3), listOf(docOf('', 0, OTHER), 'feed-2', 4)];
+      const html = await page(rows, lists);
+      expect(lineOf(html, 'feed-1')).toBe('feed-1: unchanged from the approved version 2.');
+      const second = String(lineOf(html, 'feed-2'));
+      expect(second).toBe('feed-2: these are the steps of the stored version 3, whose signature does not fit this form (the warning says what that can mean).');
+      expect(second).not.toMatch(/approved version|unchanged/);
+      // The warning names the row that does not fit and says to read every step.
+      expect(html).toContain('⚠ Version 3 does not fit this form: it was signed for another Site Login than "Shop &lt;login&gt;", or with another signing key, or its row was changed after it was approved.');
+      expect(html).toContain('read every step before you approve');
+      // A list whose row the check did not reach (here Sign steps' check of feed-2 is missing): it says to read every step.
+      const unchecked = await page(rows, lists, (ran) => ({ ...ran, 'Sign steps': [ran['Sign steps'][0].slice(0, 2), []] }));
+      expect(lineOf(unchecked, 'feed-2')).toBe('feed-2: could not be compared with the stored version 3: read every step.');
+    });
+
+    it('with a signature that does not fit, no line of the review page says approved or unchanged', async () => {
+      const three = [...OPEN, { intent: 'Click Next', click: { role: 'button', name: 'Next' } }, { intent: 'Click Save', click: { role: 'button', name: 'Save' } }];
+      const stored = docOf('feed', 4, three);
+      const misfit = { ...signedRow(9, stored), signature: signScript(stored, 'o'.repeat(32), { approvedBy: APPROVER, siteLoginId: SHOP.id }).signature };
+      const desk = (write: boolean) => ({ surface: 'desktop', name: 'feed', version: 4, app: { exe: 'App.exe' }, steps: [{ intent: 'Click Save', click: { uia: { path: [{ name: 'Save' }] }, ...(write ? { write: true } : {}) } }] });
+      const deskRow = { ...misfit, steps: JSON.stringify(desk(true)) };
+      const outcomes: [string, IDataObject, { json: IDataObject }[]][] = [
+        ['unchanged', misfit, [listOf(stored, 'feed', 5)]],
+        ['changed', misfit, [listOf(docOf('feed', 5, [OTHER[0], three[1], three[2]]), 'feed', 5)]],
+        ['removed', misfit, [listOf(docOf('feed', 5, [three[0], three[2]]), 'feed', 5)]],
+        ['added', misfit, [listOf(docOf('feed', 5, [...three, { intent: 'Click Done', click: { role: 'button', name: 'Done' } }]), 'feed', 5)]],
+        ['moved', misfit, [listOf(docOf('feed', 5, [three[0], three[2], three[1]]), 'feed', 5)]],
+        ['could not compare', misfit, [listOf(stored, 'feed', 5), listOf(stored, 'feed', 5)]],
+        ['writes not compared', deskRow, [listOf(desk(false), 'feed', 5)]],
+      ];
+      for (const [outcome, row, lists] of outcomes) {
+        const html = await page([row], lists);
+        expect(html, outcome).toMatch(/stored version 4/);
+        expect(html, outcome).not.toContain('the approved version');
+        expect(html, outcome).not.toContain('unchanged from');
+      }
+    });
   });
 
   it('a bot whose approved version does not fit this form: before any step is shown, the person says why, and only a new key or a changed row goes on (IB-4)', async () => {
@@ -1298,7 +1364,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(targets(t, REVIEW)).toEqual([['Versions now']]);
     const into = (name: string) => Object.entries(t.connections).filter(([, c]) => (c.main ?? []).some((out) => out.some((x) => x.node === name))).map(([from]) => from).sort();
     expect(into('Step lists')).toEqual(['Still the next version?']);
-    expect(into('Sign steps')).toEqual(['Step lists to sign', 'The approved version']);
+    expect(into('Sign steps')).toEqual(['Rows to check', 'Step lists to sign']);
+    expect(into('Rows to check')).toEqual(['The approved version']);
     expect(into('Versions now')).toEqual([REVIEW]);
     // The read is the steps table's full read, made on every answer (several rows: the check runs once).
     expect(table(byName(t, 'Versions now'))).toEqual(table(byName(t, 'Running versions')));
@@ -1444,8 +1511,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // The change path keeps its own line at the top (Compared with the approved version); this node finds no upload there.
     expect(evaluate(String(byName(t, RUNNING).parameters.jsonOutput), { $: nodesRan({ Settings: [[{ json: { name: 'line-item-export' } }]], 'Import steps': [[{ json: {} }], [imported('line-item-export', '2026-09-30')]] }) })).toEqual({ lists: [] });
     // The version that runs is what Sign steps checks before the review page, as on a change.
-    expect(evaluate(String(byName(t, 'The approved version').parameters.jsonOutput), { $: nodesRan(ran) })).toEqual({ name: 'line-item-export', version: 4, steps: '{}', signature: 's', approvedBy: APPROVER });
-    expect(evaluate(String(byName(t, 'The approved version').parameters.jsonOutput), { $: nodesRan(filePath([])) })).toEqual({});
+    const running = { name: 'line-item-export', version: 4, steps: '{}', signature: 's', approvedBy: APPROVER };
+    expect(evaluate(String(byName(t, 'The approved version').parameters.jsonOutput), { $: nodesRan(ran) })).toEqual({ ...running, rows: [running] });
+    expect(evaluate(String(byName(t, 'The approved version').parameters.jsonOutput), { $: nodesRan(filePath([])) })).toEqual({ rows: [{}] });
 
     // The last page: approved, it replaces version 4; rejected or refused, version 4 keeps running.
     const last = (signed: IDataObject[], errors: IDataObject[] = []) => render(completion('Imported').completionMessage, { $: nodesRan({

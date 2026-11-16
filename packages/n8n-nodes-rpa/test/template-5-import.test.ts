@@ -76,7 +76,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // A file under the name of an approved bot: Compared with the running version gives the review page its first line.
     expect(targets(t, 'Approve on this form?')).toEqual([['Compared with the running version'], ['Workflow file?']]);
     expect(targets(t, 'Compared with the running version')).toEqual([['The approved version']]);
-    expect(targets(t, 'The approved version')).toEqual([['Sign steps']]);
+    expect(targets(t, 'The approved version')).toEqual([['Rows to check']]);
+    expect(targets(t, 'Rows to check')).toEqual([['Sign steps']]);
     expect(targets(t, 'Checked?')).toEqual([['Change page next?'], ['Signed?']]);
     // v1 order runs the topmost child's branch to its end first: every step list is signed and saved before the last page.
     // Once the review page is answered, the steps table is read again, and only if no other approval or rejection of a
@@ -111,7 +112,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(working).toEqual([
       'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Approved meanwhile', 'Approved on another form?', 'Asks about a download?', 'Change an approved bot?',
       'Change it on its own form', 'Change or sign again', 'Change page next?', 'Change values', 'Change values?', 'Checked?', 'Choice and box differ', 'Choice fits the box?', 'Compared with the approved version', 'Compared with the running version', 'Create run log table', 'Create steps table', 'Fits this form?', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
-      'No approved bot', 'Page answered?', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign it again here?', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older versions',
+      'No approved bot', 'Page answered?', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Rows to check', 'Running versions', 'Save signed steps', 'Settings', 'Sign it again here?', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older versions',
       'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Value not taken', 'Values taken?', 'Values to steps', 'Versions now', 'What it replaces', 'Workflow file?',
     ]);
     expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual(Array(15).fill(2.5));

@@ -94,6 +94,11 @@ first, before anything reads or writes them.
   the question above (or the review page's warning) says it does not fit. Nothing on the form writes to the table
   before an approver signed: an approval's **Supersede older versions** marks every active row of the name saved
   before the new one `superseded`, whatever its version, so the name has one active row again.
+- **The approved version** lists the stored rows to check: the version that runs now and, for an upload of several
+  step lists under running names (`<name>-1`, `<name>-2`), the running row of each; **Rows to check** gives each to
+  **Sign steps**' check. A list whose row does not fit is called the stored version on the review page, never the
+  approved one and never unchanged, and the warning shows; a list whose row the check did not reach says to read
+  every step.
 - Before the review page, **Sign steps** runs with **Check Only** on (on the change path it has already run so once,
   before the change page): it signs nothing. It gives the name of the
   RPA Site Login it signs for, and after **Change or sign again** it checks the approved version's signature with its
