@@ -128,6 +128,10 @@ Write the steps as JSON ([Steps](../reference/steps.md)), save them as a `.json`
 download through a form, type a secret or change a password are not run by the import: they go to approval as
 written, marked so.
 
+Steps that use a run variable (`{{var.name}}`) need a value for the replay: before you upload, open the import form's
+workflow and add each one, with a value to try, in **Import steps → Options → Variables**. Without it, the replay
+stops with `missing input "name"` and says where the value goes. A secret one is not replayed, as above.
+
 Steps that read rows need an `idPattern` on each `extract` and `extractTable` step ([ID Pattern](../reference/steps.md#id-pattern)).
 The import checks the rows it reads with it, and the workflow file's **Run steps** gets the same **ID Pattern**. The
 form asks for nothing more. Without one, the last page says:

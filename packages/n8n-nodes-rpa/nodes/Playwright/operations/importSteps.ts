@@ -51,6 +51,12 @@ export const DEFAULT_GOAL = 'Do what the imported steps do, on the page as it is
 export const NOT_TRIED_LIMIT = `not tried: an import replays at most ${MAX_ADOPTIONS} step lists`;
 export const NOT_TRIED_CANCELLED = 'not tried: the execution was cancelled';
 /** A step list after one that failed on its one-time code: another sign-in would ask for (or type) another code. */
+/**
+ * A replay that stopped on a run variable nobody supplied (the engine's `missing input "<name>"`, a step document's
+ * `{{var.name}}`) says where the replay takes its value: Import Steps' own Options → Variables.
+ */
+export const REPLAY_VARIABLE_HINT = "the replay takes run variables from Options → Variables of Import Steps: give it a value there";
+export const withReplayVariableHint = (message: string): string => (/missing input "[A-Za-z0-9_]+"/.test(message) ? `${message} (${REPLAY_VARIABLE_HINT})` : message);
 export const NOT_TRIED_CODE = (name: string, reason: string) => `not tried: ${name} failed on its one-time code (${reason})`;
 export const NOTHING_IMPORTED = (reason: string) => `Nothing was imported: ${reason}`;
 export const NONE_ADOPTED = (n: number, first: string) => `None of the ${n} imported step lists could be replayed. ${first}`;
@@ -405,7 +411,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   }
   const entries: IDataObject[] = outcomes.map((o, k) => {
     const withheld = containsSecret(o.draft.script);
-    const reason = o.kind === 'forApproval' ? WRITES_FOR_APPROVAL : o.kind !== 'adopted' ? shownMessage(mask(o.reason)) : undefined;
+    const reason = o.kind === 'forApproval' ? WRITES_FOR_APPROVAL : o.kind !== 'adopted' ? withReplayVariableHint(shownMessage(mask(o.reason))) : undefined;
     const why = withheld ? (reason ? `${reason} ${STEPS_WITHHELD}` : STEPS_WITHHELD) : reason;
     // The variables a secret fill or a password change types, and the start site's host, for the last page's copy block.
     const secret = stepVariables(o.draft.script).secret;
@@ -430,7 +436,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
   if (allFailed) {
     const first = failed[0];
-    const what = `${first.code ? `${first.code}: ` : ''}${shownMessage(mask(first.reason))}`;
+    const what = `${first.code ? `${first.code}: ` : ''}${withReplayVariableHint(shownMessage(mask(first.reason)))}`;
     const message = outcomes.length === 1 ? what : NONE_ADOPTED(outcomes.length, `${first.draft.name}: ${what}`);
     // No description when the message itself says what to do (guidanceFor gives '').
     const guidance = first.code ? first.guidance ?? guidanceFor(first.code, first.reason) : '';

@@ -17,7 +17,7 @@ import type { Engine } from '../nodes/Playwright/engine.js';
 import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
 import { memoryGuardStore } from '../nodes/Playwright/guard-store.js';
 import {
-  executeImportSteps, IMPORT_NEEDS_START, MAX_IMPORT_BYTES, NOT_TRIED_CANCELLED, SOURCE_UNKNOWN, STEPS_WITHHELD,
+  executeImportSteps, IMPORT_NEEDS_START, MAX_IMPORT_BYTES, NOT_TRIED_CANCELLED, SOURCE_UNKNOWN, STEPS_WITHHELD, withReplayVariableHint,
 } from '../nodes/Playwright/operations/importSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
 import { BY_POSITION, BY_ROW, fullSafetyFlags, reviewSteps } from '../nodes/Playwright/format.js';
@@ -690,6 +690,13 @@ describe('Import Steps: execution', () => {
     const [data] = await run(engine, { params: params({ aiRepair: true }) });
     expect(engine.adoptions[0].repair).toBeUndefined();
     expect(data[0].json.error).toBe(`drift_detected: No element found for Visible Text "Line Item Report" (${NO_MODEL})`);
+  });
+
+  it('a replay that stops on a run variable nobody gave says that the replay takes it from Import Steps\' Options → Variables', async () => {
+    const engine = importEngine(() => adoptFailure('incomplete', 'Type into To: missing input "to"'));
+    const [data] = await run(engine, { params: params({}) });
+    expect(data[0].json.error).toBe('incomplete: Type into To: missing input "to" (the replay takes run variables from Options → Variables of Import Steps: give it a value there)');
+    expect(withReplayVariableHint('No element found')).toBe('No element found');
   });
 
   describe('the sign-in code', () => {
