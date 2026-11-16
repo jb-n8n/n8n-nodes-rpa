@@ -617,38 +617,45 @@ const LOOKALIKE =
       (u) => u.split('://').join(':\u200b//').split('.').join('.\u200b')
     );
 
-// A Repaired steps item j compared with the version it repairs (COMPARE_STEPS, the import review page's words), or ''
+// A Repaired steps item compared with the version it repairs (COMPARE_STEPS, the import review page's words), or ''
 // when there is none to compare with: a first version, or no row of that name and version that was approved (active or
 // superseded, with a signature and Approved By) and whose signature fits (Check the approved version, Check Only, the
 // check a run makes). Never a row nothing verified: an edited, pending, rejected or added row is not compared with.
-// Template 3, Email repaired steps and Ask for approval.
+// Template 3, Email repaired steps and Ask for approval. No optional chaining on an indexed value (`list[n]?.field`):
+// in n8n 2.45, in the same expression as COMPARE_STEPS, it gave undefined, so the comparison was never shown (seen
+// live; the same text in plain JavaScript showed it).
 const COMPARED_WITH_BASE =
-  (j) => (
-    (row) => (
-      row
-        ? (COMPARE_STEPS)({ found: true, name: j.name, version: row.version, steps: row.steps }, JSON.stringify(j.steps)).compared
+  (repaired) => (
+    (approvedRow) => (
+      approvedRow
+        ? (COMPARE_STEPS)(
+          { found: true, name: repaired.name, version: approvedRow.version, steps: approvedRow.steps },
+          JSON.stringify(repaired.steps)
+        ).compared
         : ''
     )
   )(
-    typeof j.baseVersion !== 'number' || !$('The approved version').isExecuted || !$('Check the approved version').isExecuted
+    typeof repaired.baseVersion !== 'number' || !$('The approved version').isExecuted || !$('Check the approved version').isExecuted
       ? undefined
       : (
-        (rows, checks) => rows.filter(
-          (r, i) => r.name === j.name
-            && r.version === j.baseVersion
-            && ['active', 'superseded'].includes(r.status)
-            && typeof r.steps === 'string'
-            && r.steps !== ''
-            && typeof r.signature === 'string'
-            && r.signature !== ''
-            && typeof r.approvedBy === 'string'
-            && r.approvedBy !== ''
-            && checks.length === rows.length
-            && checks[i]?.approvedVersion?.signatureFits === true
-        ).sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1))[0]
+        (storedRows, signatureChecks) => storedRows.filter(
+          (stored, at) => stored.name === repaired.name
+            && stored.version === repaired.baseVersion
+            && ['active', 'superseded'].includes(stored.status)
+            && typeof stored.steps === 'string'
+            && stored.steps !== ''
+            && typeof stored.signature === 'string'
+            && stored.signature !== ''
+            && typeof stored.approvedBy === 'string'
+            && stored.approvedBy !== ''
+            && signatureChecks.length === storedRows.length
+            && ((check) => Boolean(check && check.approvedVersion && check.approvedVersion.signatureFits === true))(signatureChecks[at])
+        ).sort(
+          (first, second) => (first.status === 'active' ? 0 : 1) - (second.status === 'active' ? 0 : 1)
+        )[0]
       )(
-        $('The approved version').all().map((x) => x.json),
-        $('Check the approved version').all().map((x) => x.json)
+        $('The approved version').all().map((found) => found.json),
+        $('Check the approved version').all().map((checked) => checked.json)
       )
   );
 

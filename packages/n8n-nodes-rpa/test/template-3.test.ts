@@ -801,3 +801,18 @@ describe('template 3 emails of a repair: the whole repaired bot, and what change
     expect(JSON.stringify(byName(t3, 'Sign steps').parameters)).not.toMatch(/approved version/i);
   });
 });
+
+describe('the comparison runs in n8n as it runs here', () => {
+  it('no expression that holds COMPARE_STEPS uses optional chaining on an indexed value (n8n 2.45 gave undefined there, live)', () => {
+    let blocks = 0;
+    for (const file of ['3-approve-steps.json', '5-import-a-bot.json']) {
+      const text = JSON.stringify(load(file).nodes.map((n) => n.parameters));
+      for (const m of JSON.parse(`[${JSON.stringify(text)}]`)[0].matchAll(/\{\{([\s\S]*?)\}\}/g)) {
+        if (!m[1].includes('const canon')) continue;
+        blocks += 1;
+        expect(m[1], file).not.toMatch(/\]\?\./);
+      }
+    }
+    expect(blocks).toBeGreaterThanOrEqual(4);
+  });
+});
