@@ -10,6 +10,22 @@ export const warn = (line: string) => process.stderr.write(`${redact(line)}\n`);
 /** The one line that shows a secret: the words around it are redacted, the secret itself is not. */
 export const reveal = (before: string, secret: string, after = '') => process.stdout.write(`${redact(before)}${secret}${redact(after)}\n`);
 
+/**
+ * A line a person does not act on (which credential was reused, what was published, a test's progress): printed at once
+ * with --verbose, else kept, and printed before a Stop's message (replayDetails), so that a stop still shows what led there.
+ * Every line still passes through the redactor when it is printed.
+ */
+const details: string[] = [];
+export const verbose = { on: false };
+export const detail = (line = '') => {
+  if (verbose.on) say(line);
+  else details.push(line);
+};
+/** The kept details, before a stop: on stdout, as --verbose would have printed them. */
+export function replayDetails() {
+  for (const line of details.splice(0)) say(line);
+}
+
 /** A problem the user fixes: printed, exit 2 (wrong input) or 1 (n8n's answer), nothing more is done. */
 export class Stop extends Error {
   constructor(message: string, readonly code = 1) {

@@ -29,6 +29,7 @@ export const FIELDS: Record<string, string[]> = {
   rpaDesktopRunnerApi: ['about', 'connectionLine', 'url', 'token', 'fingerprint'],
   playwrightBrowserApi: ['notice', 'mode', 'wsUrl', 'token', 'fingerprint', 'privateNetwork', 'headless', 'slowMo'],
   httpBasicAuth: ['user', 'password'],
+  playwrightSiteLoginApi: ['notice', 'loginUrl', 'username', 'password', 'totpSecret', 'navHosts', 'subresourceHosts', 'frameHosts', 'login', 'allowedSubmits', 'readPosts'],
 };
 
 export interface Cred { id: string; name: string; type: string; data: Record<string, any>; projectId?: string; sharedWith?: string[] }

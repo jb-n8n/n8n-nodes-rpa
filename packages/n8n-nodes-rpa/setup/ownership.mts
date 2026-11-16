@@ -3,7 +3,7 @@
 import { Buffer } from 'node:buffer';
 import { CREDENTIALS } from '../nodes/Playwright/config.js';
 import { clean, type Client } from './n8n-api.mjs';
-import { ask, interactive, say, Stop } from './io.mjs';
+import { ask, detail, interactive, say, Stop } from './io.mjs';
 import { EMAIL } from './options.mjs';
 
 const MAX_PROJECT_LOOKUPS = 50;
@@ -123,6 +123,20 @@ export async function useFound(found: { kind: string; name: string; id: string }
 export interface Ref { id: string; name: string }
 
 /**
+ * The order of every list of credentials this command shows or numbers: by name, then by id, compared character by
+ * character (no locale). n8n's API and its command line list credentials in different orders, so a numbered answer
+ * means the same credential on both ways in only when the command sorts them itself.
+ */
+export function byNameThenId(a: any, b: any): number {
+  const [an, bn, ai, bi] = [String(a?.name ?? ''), String(b?.name ?? ''), String(a?.id ?? ''), String(b?.id ?? '')];
+  if (an !== bn) return an < bn ? -1 : 1;
+  return ai < bi ? -1 : ai > bi ? 1 : 0;
+}
+
+/** What this run made and changed, by name, for the one line that says so at the end. */
+export const record = { made: [] as string[], changed: [] as string[] };
+
+/**
  * The credentials of this name: the one this run's project owns (mine), and those it leaves alone (others: another
  * project or user, or an owner n8n does not tell), each said in one line. Stops on a same-name credential of another
  * type in the project, or on two of the same name and type there (it could not tell which one is meant).
@@ -153,7 +167,8 @@ export async function byType(items: any[], spec: { name: string; type: string },
   const conflict = items.find((c) => c?.name === spec.name && c?.type !== spec.type && owned(c));
   if (conflict) throw new Stop(`A credential named "${spec.name}" (id ${clean(conflict.id)}) has the type ${clean(conflict.type)}, not ${spec.type}. Rename it in n8n, then run this again.`);
   const sharedIn = (c: any) => home !== undefined && Array.isArray(c?.shared) && c.shared.some((s: any) => s?.id === home);
-  const ours = items.filter((c) => c?.type === spec.type && owned(c));
+  // Sorted (byNameThenId): the numbered question below picks the same credential on both ways in.
+  const ours = items.filter((c) => c?.type === spec.type && owned(c)).sort(byNameThenId);
   const others = items.filter((c) => !ours.includes(c) && (c?.name === spec.name || (c?.type === spec.type && sharedIn(c))));
   for (const o of others) leftAlone('credential', o, clean(o.type), home);
   if (opts.named !== undefined) {
@@ -190,8 +205,8 @@ export function noSiteLogin(name: string, items: any[], home: string | undefined
 }
 
 /** This run's project's credentials of a type (the owner n8n names is that project), by id and name only. */
-export const projectCredentials = (items: any[], type: string, home: string | undefined) => (home === undefined ? [] : items.filter((c) => c?.type === type && ownerProject(c, 'credential') === home));
-export const byNameAndId = (items: any[]) => items.map((c) => `"${clean(c.name, c.id)}" (id ${clean(c.id)})`).join(', ');
+export const projectCredentials = (items: any[], type: string, home: string | undefined) => (home === undefined ? [] : items.filter((c) => c?.type === type && ownerProject(c, 'credential') === home).sort(byNameThenId));
+export const byNameAndId = (items: any[]) => [...items].sort(byNameThenId).map((c) => `"${clean(c.name, c.id)}" (id ${clean(c.id)})`).join(', ');
 
 /** Why --desktop-runner found nothing to pick, with the RPA Desktop Runners this run's project has, by name and id. */
 export function noDesktopRunner(name: string, items: any[], home: string | undefined): string {
@@ -207,7 +222,7 @@ export function leftAlone(kind: string, item: any, typeOrNothing: string, home: 
     : owner === home ? 'the API key does not say whose it is, so this run could not tell it was yours before it made a new one'
       : owner ? 'it belongs to another project or user' : 'n8n does not say whose it is';
   const id = clean(item.id);
-  say(`left alone ${kind} "${clean(item.name, id)}"${typeOrNothing ? ` (${typeOrNothing}, id ${id})` : ` (id ${id})`}: ${why}, so it is not used`);
+  detail(`left alone ${kind} "${clean(item.name, id)}"${typeOrNothing ? ` (${typeOrNothing}, id ${id})` : ` (id ${id})`}: ${why}, so it is not used`);
 }
 
 /** The credential this run uses: the one found (mine, when the run uses what it found), else one made in the project. */
@@ -216,13 +231,14 @@ export async function credential(client: Client, found: { mine?: any; others: an
   if (mine) {
     // By its own name: one found by its type may have any name ("RPA Step Signing account").
     const name = String(mine.name ?? spec.name);
-    say(`reused   credential "${clean(name, mine.id)}" (id ${clean(mine.id)}): ${keptNote}`);
+    detail(`reused   credential "${clean(name, mine.id)}" (id ${clean(mine.id)}): ${keptNote}`);
     return { ref: { id: String(mine.id), name }, created: false };
   }
   const r = await client.api('POST', '/credentials', { name: spec.name, type: spec.type, data: data(), ...(projectId ? { projectId } : {}) });
   if ((r.status !== 200 && r.status !== 201) || !r.json?.id) throw new Stop(`Could not create the credential "${spec.name}" (${client.reason(r)}).`);
   const id = clean(r.json.id);
-  say(`created  credential "${spec.name}" (id ${id})`);
+  detail(`created  credential "${spec.name}" (id ${id})`);
+  record.made.push(`"${clean(spec.name)}"`);
   const same = others.filter((o) => o?.name === spec.name);
   if (same.length) say(`         n8n now has more than one credential named "${spec.name}": this run's is id ${id}. Do not pick ids ${same.map((o) => clean(o.id)).join(', ')}.`);
   return { ref: { id: String(r.json.id), name: spec.name }, created: true };
@@ -232,4 +248,6 @@ export async function credential(client: Client, found: { mine?: any; others: an
 export async function replaceData(client: Client, ref: Ref, type: string, data: Record<string, unknown>) {
   const r = await client.api('PATCH', `/credentials/${encodeURIComponent(ref.id)}`, { name: ref.name, type, data });
   if (r.status !== 200) throw new Stop(`Could not change the credential "${ref.name}" (${client.reason(r)}). Nothing else was changed.`);
+  const what = type === CREDENTIALS.signing ? 'the key in' : type === CREDENTIALS.desktopRunner ? 'the Connection Line of' : 'the password of';
+  record.changed.push(`${what} "${clean(ref.name, ref.id)}"`);
 }

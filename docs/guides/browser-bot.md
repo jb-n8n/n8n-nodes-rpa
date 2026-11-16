@@ -35,71 +35,61 @@ The stack runs:
 Open http://localhost:5678 and create the owner account. If the page does not show the setup form yet, n8n is still
 starting: reload after a minute. When n8n offers its own Assistant, choose **Set up later in Settings**.
 
-## 2. Add the sample site's login
+## 2. Set up the import form with one command
 
-A **Site Login** is the credential for one site: its username, password and one-time code secret, and the pages the
-bot may open. The bot types the password only on the pages listed there. The steps do not contain it, and the bot
-masks it in its logs. In n8n's left sidebar, choose **+ → New credential → RPA Site Login**, and fill in these
-fields. The values are the sandbox's sample values, not real secrets.
+The **import form** is an n8n form where you upload a bot, read its steps and approve them. One command sets it up. It
+runs inside the n8n container, where the package is installed already, and works through n8n's own command line: it
+needs no API key. In the repository folder, run it. The first part of the line hands it the browser token from `.env`:
 
-- Login Page URL `http://sandbox:8080/acme/login`
-- Username `summit-ops`, Password `demo-password`, TOTP Secret `JBSWY3DPEHPK3PXP`
-- Pages Where the Password May Be Typed `sandbox:8080/acme/login` and `sandbox:8080/acme/mfa` (one per line)
-- Requests That Only Read `POST sandbox:8080/sap*/bc/gui/sap/its/webgui`. The sample site's SAP pages post a form to
-  show every screen. A run may not post anything else unless the Site Login lists it.
+```bash
+RPA_BROWSER_TOKEN="$(sed -n 's/^BROWSER_TOKEN=//p' .env)" docker compose exec -e RPA_BROWSER_TOKEN n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --browser-url ws://browser:3000/ --sample-site
+```
 
-Click **Save**. n8n names it **RPA Site Login account** and says `Connection tested successfully`. The test checks the
-fields, not the password: a wrong password shows on the first run.
-
-## 3. Set up the import form with one command
-
-The **import form** is an n8n form where you upload a bot, read its steps and approve them. One command sets it up,
-with the Site Login of step 2. It runs inside the n8n container, where the package is installed already, and works
-through n8n's own command line: it needs no API key.
-
-1. In the repository folder, run the setup command. The first part of the line hands it the browser token from `.env`:
-
-   ```bash
-   RPA_BROWSER_TOKEN="$(sed -n 's/^BROWSER_TOKEN=//p' .env)" docker compose exec -e RPA_BROWSER_TOKEN n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --browser-url ws://browser:3000/ --site-login "RPA Site Login account" --allow-private-network
-   ```
-
-   `--site-login` picks the Site Login of step 2 by its name. `--allow-private-network` lets the import open the
-   sandbox, which is on your own network: the bot opens private addresses only with this on. Leave it out for a site on
-   the internet.
-2. Answer `n` when it asks `Connect a Windows machine now?`.
-
-Its first lines say which way it took and why: `Setting up n8n for RPA through n8n's own command line: no API key is
-needed.`, and the project it works in, your own (the n8n owner's personal project). Before it changes anything, it
-checks that n8n's command line works on the database of the n8n that runs in the container. The command creates two
-**credentials** (a credential is where n8n keeps an address or a key, with its secret): **RPA Browser**, the
-browser's address and token, and **RPA Step Signing**, a key that marks steps as approved. The bot runs only steps
-whose signature matches that key. The command also creates the workflow **RPA: 5 Import a bot**, with the Site Login
-on its nodes **Import steps** and **Sign steps** and **Allow Private Network** on, and publishes it, with you (the
-n8n owner's address) as its approver. It never reads the Site Login's values. It waits until the form answers, which
-takes a few seconds, and then prints:
+It waits until the form answers, which takes a few seconds, and then prints:
 
 ```text
+Setting up n8n for RPA through n8n's own command line: no API key is needed.
+Made "RPA Step Signing", "RPA Browser", "RPA Site Login (sample site)" and the form "RPA: 5 Import a bot".
+
 The import form is ready.
-  Address:    http://localhost:5678/form/rpa-import
-  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
+  Sign-in:    your n8n login. The first time, n8n asks whether the form may use it: choose Allow access.
+  Approvers:  you@example.com. Only the n8n users on "Sign steps" → Approver Allowlist may approve: add others there in n8n.
   Private network: on. Imports may open sites on this computer or your own network, and the workflow the form hands over has it on too.
+  Signing key: made by this run and kept in n8n, which does not show it again. Most people need no copy: it is for moving signed bots to another n8n, or for a lost n8n. To have one, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.
+Next: open the address below. Upload a bot file (an RPA recording, a UiPath project, a Chrome Recorder export, Playwright code or a step document), name the steps and submit. Then review the steps and approve them.
+  Address:    http://localhost:5678/form/rpa-import
 ```
 
 Keep the address. It ends in `/form/rpa-import`, or in a long id when another form in your n8n has that address
-already (the command says so). Run the command again at any time: it reuses what is there and changes nothing. It
-uses your project's **RPA Step Signing** and **RPA Browser** credentials whatever their names, such as
-`RPA Step Signing account`; with several, it asks which, or takes `--signing-key "<its name>"`. If
-**RPA: 5 Import a bot** differs from this version's template, for example after an upgrade, it lists what differs and
-asks `Update this form to this version? (y/N)`. `y` updates it in place and keeps its address, approvers and
-credentials. Anything else changed by hand in it is lost, and the question names what. A form RPA 0.1.0 made gets the
-same question: the command says so, and lists only what was changed by hand since. Its sign-in becomes n8n's sign-in;
-add `--form-login basic` to keep its Basic Auth login. An archived workflow is not counted. The signing key stays in n8n,
-and n8n does not show it again. The `Signing key:` line says how to keep a copy: you need one only to move signed bots
-to another n8n or for a lost n8n, so most people skip it. The command's other options are in step 2 of the
-[desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command), with the way for an n8n where you cannot run a
-command (an API key).
+already (the command says so).
 
-## 4. Import the sample bot and approve it
+What it made. A **credential** is where n8n keeps an address or a key, with its secret. **RPA Browser** holds the
+browser's address and token. **RPA Step Signing** holds a key that marks steps as approved: the bot runs only steps
+whose signature matches that key. **RPA Site Login (sample site)** is the sample site's **Site Login**: the credential
+for one site, with its username, password and one-time code secret, and the pages the bot may open. The bot types the
+password only on the pages listed there; the steps do not contain it, and the bot masks it in its logs. It holds the
+sandbox's sample values, not real secrets: Login Page URL `http://sandbox:8080/acme/login`, Username `summit-ops`,
+Password `demo-password`, TOTP Secret `JBSWY3DPEHPK3PXP`, Pages Where the Password May Be Typed
+`sandbox:8080/acme/login` and `sandbox:8080/acme/mfa`, and Requests That Only Read `POST sandbox:8080/sap*/bc/gui/sap/its/webgui`
+(the sample site's SAP pages post a form to show every screen; a run may not post anything else unless the Site Login
+lists it). The workflow **RPA: 5 Import a bot** has that Site Login on its nodes **Import steps** and **Sign steps**,
+with you (the n8n owner) as its approver. `--sample-site` also turns on **Allow Private Network**, because the sandbox is
+on your own network: a bot opens private addresses only with this on. For your own site, see **Your own site** below.
+`--verbose` prints every step the command takes.
+
+Run the command again at any time: it reuses what is there and changes nothing. It uses your project's **RPA Step
+Signing** and **RPA Browser** credentials whatever their names, such as `RPA Step Signing account`; with several, it
+asks which, or takes `--signing-key "<its name>"`. If **RPA: 5 Import a bot** differs from this version's template, for
+example after an upgrade, it lists what differs and asks `Update this form to this version? (y/N)`. `y` updates it in
+place and keeps its address, approvers and credentials. Anything else changed by hand in it is lost, and the question
+names what. A form RPA 0.1.0 made gets the same question: the command says so, and lists only what was changed by hand
+since. Its sign-in becomes n8n's sign-in; add `--form-login basic` to keep its Basic Auth login. An archived workflow is
+not counted. The signing key stays in n8n, and n8n does not show it again. The `Signing key:` line says how to keep a
+copy: you need one only to move signed bots to another n8n or for a lost n8n, so most people skip it. The command's
+other options are in step 2 of the [desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command), with the way for
+an n8n where you cannot run a command (an API key).
+
+## 3. Import the sample bot and approve it
 
 The sample bot is the file `docs/samples/sandbox-line-items.steps.json` in this repository: a **step document**, the
 steps written as JSON. It signs in, opens the sandbox's SAP report screen, runs the line item report for company code
@@ -123,9 +113,9 @@ If the last page says `Nothing to approve`, it names the problem:
 |---|---|
 | `browser_unavailable: Could not connect to the browser server at ws://browser:3000/. ...` | Start the browser: `docker compose up -d browser`. |
 | `browser_unavailable: The browser server at ws://browser:3000/ refused the token. Check the Token in the RPA Browser credential.` | Copy the value after `BROWSER_TOKEN=` in `.env` into the RPA Browser credential's **Token**. |
-| `policy_violation: Blocked: sandbox:8080 resolves to a private network address. ...` | Turn on **Options → Allow Private Network** on **Import steps** of **RPA: 5 Import a bot** and **Publish** it again, or run step 3 with `--allow-private-network` before the workflow exists. |
+| `policy_violation: Blocked: sandbox:8080 resolves to a private network address. ...` | Turn on **Options → Allow Private Network** on **Import steps** of **RPA: 5 Import a bot** and **Publish** it again, or run step 2 with `--allow-private-network` before the workflow exists. |
 
-## 5. Run it
+## 4. Run it
 
 1. In n8n, create a workflow, choose **⋯ → Import → From File**, and pick the downloaded
    `sandbox-line-items.workflow.json`.
@@ -140,7 +130,12 @@ Each run writes one row to `playwright_runs`, a table in n8n's Data Tables (**Lo
 error code there (**Log failed run**) and then stops at **Stop and Error**, so it shows as failed under **Executions**.
 After a failed run, open the RPA node: the failed item on its error output has `details.guidance`, which says what
 to do. **Stop and Error** and the run log's row show it too.
-To run the bot on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow.
+
+## 5. Run it on a schedule
+
+Open **On a schedule**, set the time, turn the node on, and **Publish** the workflow. The node is off in the workflow
+the form hands over, so that **Execute workflow** runs the bot at once without asking which trigger to use.
+
 
 **When the site changes.** To see it, open http://localhost:8080/admin (user `admin`, password `change-me`) and set
 **Report screen** to **Renamed labels**: the sandbox renames Line Item Report to G/L Line Items, Execute to Run and
@@ -173,16 +168,20 @@ expects the renamed labels, so leave **Report screen** on **Renamed labels** whi
 back to.
 
 **A bot that reads rows.** `docs/samples/sandbox-rows.steps.json` signs in and reads the sample site's notices. Import
-it as in step 4, with the name `sandbox-rows`. Run its workflow as in step 5.
+it as in step 3, with the name `sandbox-rows`. Run its workflow as in step 4.
 The RPA node returns one item with a `rows` list: one entry per notice, with its `id`, `Bulletin`, `Date`, `Type`,
 `Models` and `Summary` (the title and text). For one item per row, add n8n's **Split Out** node after it, with
 **Fields To Split Out** `rows`. A bot that reads rows is a step document whose `extract` or `extractTable` steps each have an
 `idPattern`, the shape of the ID every row has ([Steps](../reference/steps.md#id-pattern)). The import checks the rows
 with it, and the workflow it hands over does too.
 
-**Your own site.** Record it with Chrome's Recorder (DevTools → Recorder, then Export as JSON) and upload the export on
-the same form, with a Site Login for that site on **Import steps** and **Sign steps**. Turn **Allow Private Network**
-off for a public site. A recording that downloads a file needs the file's name or columns on the page **The file it
+**Your own site.** Make its Site Login in n8n: **+ → New credential → RPA Site Login**, with the fields the sample's
+has (above), for your site. n8n names it **RPA Site Login account** and says `Connection tested successfully`: the
+test checks the fields, not the password, so a wrong password shows on the first run. Then give the import form that
+Site Login: run the setup command of step 2 with `--new-workflow --site-login "RPA Site Login account"` in place of
+`--sample-site`. It makes a form of that Site Login's own, beside the sample's, and prints its address. Add
+`--allow-private-network` only for a site on your own network. Record the site with Chrome's Recorder (DevTools → Recorder, then Export as JSON)
+and upload the export on that form. A recording that downloads a file needs the file's name or columns on the page **The file it
 downloads**, which the form shows for every upload but a step document or an RPA recording. A recording made on the sample site in your own browser holds `localhost:8080`: change it to `sandbox:8080` in the file
 before you upload it, because the bot's browser runs inside the stack, where the sample site is named `sandbox`.
 [Move a bot](move-a-bot.md) covers recordings, Playwright code, UiPath projects and step documents.
