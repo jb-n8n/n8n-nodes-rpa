@@ -201,7 +201,7 @@ There is no importer. Rebuild the flow in n8n: record each UI part with a record
 | Email, Outlook | n8n's Send Email, Email Trigger (IMAP), Microsoft Outlook and Gmail nodes |
 | HTTP, web services | n8n's HTTP Request node |
 | Database | n8n's database nodes, such as Postgres, MySQL and Microsoft SQL |
-| File, Folder, Compression | n8n's Read/Write Files from Disk and Compression nodes, on the n8n machine. A desktop run returns files its app saved (`expectFile`). Nothing puts a file on the Windows machine |
+| File, Folder, Compression | n8n's Read/Write Files from Disk and Compression nodes, on the n8n machine. A desktop run returns files its app saved (`expectFile`). Nothing puts a file on the Windows machine. To a file share or SharePoint: [Send the files a run returns](#send-the-files-a-run-returns) |
 | Clipboard | Read only: a desktop `read` with `clipboard` right after a Copy click |
 | Scripting (PowerShell, Python, VBScript, JavaScript) | n8n's Code node (JavaScript or Python), which runs in n8n. Nothing runs a script on the Windows machine |
 | Run application | A desktop run starts its one allowed app and closes it at the end |
@@ -210,6 +210,41 @@ There is no importer. Rebuild the flow in n8n: record each UI part with a record
 | Mouse at a position, image-based clicks, OCR | No equivalent |
 | Terminal emulation, Citrix, SAP GUI for Windows | No equivalent |
 | Triggers and schedules | n8n's Schedule Trigger, Webhook, Form Trigger and Email Trigger |
+
+## Send the files a run returns
+
+A run returns each file it downloaded as a binary, `file_<n>`, and lists them in `files` with `fileName` and
+`binaryProperty`. A run that failed after some downloads keeps those files on its error item, listed in
+`details.files`. Upload nodes take one file per item, so split them first with a **Code** node after the RPA node:
+
+```js
+return $input.all().flatMap((item) => (item.json.files ?? item.json.details?.files ?? []).map((f) => ({
+  json: { fileName: f.fileName, account: item.json.account ?? item.json.details?.account ?? null },
+  binary: { data: item.binary[f.binaryProperty] },
+})));
+```
+
+Each item then holds one file in `data`, and its name in `fileName`. The day as text for a folder or a file name:
+`{{ $now.toFormat('yyyy-MM-dd') }}`. These nodes are in n8n 2.45:
+
+- **SharePoint**: the **Microsoft SharePoint** node, **File → Upload**: pick the **Site** and the **Parent Folder**,
+  set **File Name** to `{{ $json.fileName }}` and **Input Binary Field** to `data`. It does not make folders, and the
+  file name cannot hold a folder path. For a dated archive, put the day in the file name, such as
+  `{{ $now.toFormat('yyyy-MM-dd') }}_{{ $json.fileName }}`, or make the day's folders ahead.
+- **A file share reached over SFTP** (a file server with an SFTP service, such as Windows' OpenSSH server): the
+  **FTP** node with **Protocol** SFTP, **Upload**, **Path** `/Reports/{{ $now.toFormat('yyyy-MM-dd') }}/{{ $json.fileName }}`,
+  **Binary File** on, **Input Binary Field** `data`. It makes the missing folders of the path itself.
+- **A Windows (SMB) share**: n8n has no SMB node. Mount the share on the machine n8n runs on (in Docker, a volume of
+  the share), and use **Read/Write Files from Disk → Write File to Disk** with a path under that mount. It does not
+  make folders and fails with `The file or directory does not exist`: put the day in the file name, or make the
+  folders ahead. n8n 2 turns off its Execute Command node by default, so a workflow cannot make one with a command.
+  The path must be inside the folders n8n may write to (`N8N_RESTRICT_FILE_ACCESS_TO`).
+- **Azure**: the **Azure Storage** node has blobs and containers, not Azure Files. **Blob → Create** with **Blob
+  Name** `{{ $now.toFormat('yyyy-MM-dd') }}/{{ $json.fileName }}` and **From** Binary, field `data`: a name with `/`
+  shows as a folder, with nothing to make first. An Azure file share is an SMB share: mount it as above.
+
+On the error output, put the same Code node before your alert: the files that came are sent, and the alert names the
+step that failed.
 
 ## From toema/n8n-playwright
 
