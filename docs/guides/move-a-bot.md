@@ -219,18 +219,20 @@ A run returns each file it downloaded as a binary, `file_<n>`, and lists them in
 
 ```js
 return $input.all().flatMap((item) => (item.json.files ?? item.json.details?.files ?? []).map((f) => ({
-  json: { fileName: f.fileName, account: item.json.account ?? item.json.details?.account ?? null },
+  json: { fileName: f.fileName, binaryProperty: f.binaryProperty, account: item.json.account ?? item.json.details?.account ?? null },
   binary: { data: item.binary[f.binaryProperty] },
 })));
 ```
 
-Each item then holds one file in `data`, and its name in `fileName`. The day as text for a folder or a file name:
-`{{ $now.toFormat('yyyy-MM-dd') }}`. These nodes are in n8n 2.45:
+Each item then holds one file in `data`, its name in `fileName`, and the binary it came from (`file_13`) in
+`binaryProperty`. Two steps may download files of the same name, such as `Enquiries.xlsx` twice: put
+`binaryProperty` in the name you give each file, or the second overwrites the first. The day as text for a folder or a
+file name: `{{ $now.toFormat('yyyy-MM-dd') }}`. These nodes are in n8n 2.45:
 
 - **SharePoint**: the **Microsoft SharePoint** node, **File → Upload**: pick the **Site** and the **Parent Folder**,
   set **File Name** to `{{ $json.fileName }}` and **Input Binary Field** to `data`. It does not make folders, and the
   file name cannot hold a folder path. For a dated archive, put the day in the file name, such as
-  `{{ $now.toFormat('yyyy-MM-dd') }}_{{ $json.fileName }}`, or make the day's folders ahead.
+  `{{ $now.toFormat('yyyy-MM-dd') }}_{{ $json.binaryProperty }}_{{ $json.fileName }}`, or make the day's folders ahead.
 - **A file share reached over SFTP** (a file server with an SFTP service, such as Windows' OpenSSH server): the
   **FTP** node with **Protocol** SFTP, **Upload**, **Path** `/Reports/{{ $now.toFormat('yyyy-MM-dd') }}/{{ $json.fileName }}`,
   **Binary File** on, **Input Binary Field** `data`. It makes the missing folders of the path itself.
