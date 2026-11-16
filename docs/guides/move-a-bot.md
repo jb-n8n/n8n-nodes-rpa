@@ -245,8 +245,9 @@ file name: `{{ $now.toFormat('yyyy-MM-dd') }}`. These nodes are in n8n 2.45:
   Name** `{{ $now.toFormat('yyyy-MM-dd') }}/{{ $json.fileName }}` and **From** Binary, field `data`: a name with `/`
   shows as a folder, with nothing to make first. An Azure file share is an SMB share: mount it as above.
 
-On the error output, put the same Code node before your alert: the files that came are sent, and the alert names the
-step that failed.
+On the error output too: in the workflow the import form hands over, that output ends at **Stop and Error**, which
+ends the execution, and n8n runs the branches of an output from the top down. So place the Code node and its upload
+above **Log failed run** on the canvas.
 
 ## From toema/n8n-playwright
 
