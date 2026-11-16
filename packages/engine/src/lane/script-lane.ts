@@ -106,6 +106,11 @@ export type LaneFailure = {
   /** True when signIn.changePassword set a new password before the run failed; absent otherwise. */
   passwordChanged?: true;
   /**
+   * The files earlier steps downloaded before a step failed, each one past its own step's checks, with the binary names
+   * a success gives them: a run that fails late does not lose them. Absent when there were none.
+   */
+  files?: DownloadedFile[];
+  /**
    * drift_detected because a browser step's control was not found: that control and what the page showed instead, then
    * (Report Every Missing Control) each later step on the same page whose control was not there either. Masked.
    */
@@ -324,6 +329,7 @@ async function executeScript(
       failure, violations: session.violations, log: maskLog(res.state.log, masker), screenshot,
       lastCheckpoint: res.state.lastCheckpoint, credentialsSubmitted: res.state.credentialsSubmitted,
       ...(wrote(res.state) ? { submitted: true } : {}), ...changed(res.state),
+      ...(res.state.downloads.length ? { files: [...res.state.downloads] } : {}),
     };
     const o = runtime.override(res.failure.intent, res.failure.message.startsWith(DETECTED_PREFIX));
     if (o) {

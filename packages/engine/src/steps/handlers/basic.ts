@@ -1,9 +1,9 @@
 import type { BrowserContext, Locator as PwLocator, Request } from 'playwright-core';
-import { formPostsElsewhere, notHttp, offListSite, PASSWORD_FILL_REFUSED, PASSWORD_FILL_REFUSED_STEPS, secretFillValue, UNSIGNED_SECRET_FILL, valueNotTaken } from '../../messages.js';
+import { describeForUser, formPostsElsewhere, locatorNotFound, notHttp, offListSite, PASSWORD_FILL_REFUSED, PASSWORD_FILL_REFUSED_STEPS, secretFillValue, UNSIGNED_SECRET_FILL, valueNotTaken } from '../../messages.js';
 import { renderVars, SECRET_FILL_VALUE } from '../../secrets/render.js';
 import { renderSecretValue } from '../../secrets/secret-fills.js';
 import type { Locator, RunState, Step } from '../../types.js';
-import { PolicyError } from '../errors.js';
+import { ControlNotFound, PolicyError } from '../errors.js';
 import { formTarget as formTargetInPage, type FormTarget } from '../form-target.js';
 import { build, resolveUnique } from '../locator.js';
 import { typeSecret } from '../secret-target.js';
@@ -265,7 +265,16 @@ const waitFor: Handler = async (ctx, step, _state, timeout) => {
     const ok = await poll(async () => (await build(ctx.page, target).count()) >= min, timeout);
     if (!ok) throw new Error(`waited for at least ${min} matching elements`);
   } else {
-    await build(ctx.page, target).first().waitFor({ state: w.state ?? 'visible', timeout });
+    const state = w.state ?? 'visible';
+    try {
+      await build(ctx.page, target).first().waitFor({ state, timeout });
+    } catch (err) {
+      // A control that did not show: the same failure as a click's, so the run looks once at what the page shows instead.
+      if ((state === 'visible' || state === 'attached') && err instanceof Error && err.name === 'TimeoutError' && !ctx.page.isClosed()) {
+        throw new ControlNotFound(locatorNotFound(describeForUser(target), shownUrl(ctx.page.url()), Math.max(1, Math.round(timeout / 1000))), target);
+      }
+      throw err;
+    }
   }
   if (w.hasText) {
     const text = w.hasText;

@@ -35,11 +35,13 @@ const LOOKED_FOR_CHARS = 120;
 const FIELD_ROLES = new Set(['textbox', 'combobox', 'listbox', 'searchbox', 'spinbutton', 'checkbox', 'radio', 'switch', 'slider']);
 const BUTTON_ROLES = new Set(['button', 'link']);
 const FIELD_VERBS = new Set(['fill', 'select', 'check', 'signIn']);
-const BUTTON_VERBS = new Set(['click', 'hover', 'submit', 'download', 'popup', 'clickAll', 'press']);
+// A wait for a text or an element: what the page offers to click is the most telling list (a field by its label lists fields).
+const BUTTON_VERBS = new Set(['click', 'hover', 'submit', 'download', 'popup', 'clickAll', 'press', 'waitFor']);
 
 /**
  * Which list helps for this step's missing control: fields for a label or a field role, links and buttons for a button
- * or link role, else by the step's verb. Undefined for a step that neither clicks nor types (extract, a table, a wait).
+ * or link role, else by the step's verb (a wait lists links and buttons). Undefined for a step that neither clicks, types
+ * nor waits for a control (extract, a table).
  */
 export function controlKind(step: Step, loc: Locator): ControlKind | undefined {
   if ('label' in loc) return 'fields';

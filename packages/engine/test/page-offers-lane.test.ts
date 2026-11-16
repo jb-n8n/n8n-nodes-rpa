@@ -35,6 +35,24 @@ describe('a run that meets a control that is not there', () => {
     expect(r.log.at(-1)?.note).not.toContain('The page shows');
   });
 
+  it('a wait for a control that is not there says what the page shows, as a click does', async () => {
+    const base = webguiScript(portal.url);
+    const wait: Step = { intent: 'Wait for Line Item Report', waitFor: { target: { role: 'button', name: 'Line Item Report' } } };
+    const text: Step = { intent: 'Wait for the report title', waitFor: { target: { text: 'Line Item Report' } } };
+    for (const [step, lookedFor] of [[wait, 'Role and Name button "Line Item Report"'], [text, 'Visible Text "Line Item Report"']] as const) {
+      const script: Script = { ...base, steps: [...base.steps.slice(0, 4), step, ...base.steps.slice(4)] };
+      const r = await runScriptLane(signedLaneInput(script, {
+        policy: sapPolicy(portal), secrets: SECRETS, output: OUTPUT, endpoint: LOCAL, defaultStepTimeoutMs: 1000, vars: SAP_VARS,
+      }));
+      if (r.ok) throw new Error('expected a drift');
+      expect(r.code).toBe('drift_detected');
+      expect(r.message.startsWith(`${step.intent}: No element found for ${lookedFor} on `)).toBe(true);
+      expect(r.message).toContain(` after 1 s. ${PAGE_SHOWS}`);
+      expect(r.message).not.toContain('Timeout');
+      expect(r.missingControls).toEqual([{ step: 5, intent: step.intent, lookedFor, kind: 'buttons', offered: ['G/L Line Items', 'Enter'], more: 0 }]);
+    }
+  });
+
   it('self-repair is not given the list: its first message quotes the step\'s own failure', async () => {
     const model = fakeModel([done('not_found', 'stop here')]);
     const script: Script = { ...webguiScript(portal.url), steps: [...webguiScript(portal.url).steps.slice(0, -1), { intent: 'Read the line items', extract: { scope: { role: 'grid' }, idPattern: SANDBOX.erp.idPattern } }] };
