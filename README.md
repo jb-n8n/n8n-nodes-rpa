@@ -114,12 +114,22 @@ Known limits:
 - **Self-hosted n8n only.** n8n Cloud runs only verified community nodes, and a node that drives a browser cannot be
   verified.
 - **Not released yet:** the Windows package and node version 0.2.0. The Windows package is not code-signed.
+- **n8n versions:** tried on n8n 2.45.3 only. Other versions, 2.47 among them, were not tried.
 - **Windows:** tested on Windows Server 2022 (CI also installs it on Windows Server 2025). Windows 10 and 11 were not
-  tested. The recorder was tried on WinForms and Win32 apps only.
+  tested. The recorder was tried on WinForms and Win32 apps only, not on WPF apps or apps that show WebView2.
 - **n8n connects in to the Windows machine.** The machine never dials out to n8n, so n8n must reach it on the runner's port. Where it cannot, a private network or tunnel between them is needed. The product does not run one, and the Windows guide has a recipe ([When n8n cannot reach this machine](docs/install/windows.md#when-n8n-cannot-reach-this-machine)).
 - **Desktop steps** have no AI repair, no replay before approval, no loops and no right-click, scroll or drag
   ([Steps](docs/reference/steps.md#desktop-steps)).
 - **AI-built and AI-repaired steps** read record IDs only, and AI repair does not write.
+<!-- T2: self-repair status -->
+- **Queue mode** (several n8n workers): the version 2 node's switch that shares the login breaker through RPA Redis
+  was tried in unit tests only. The setup command without an API key refuses queue mode: use the API key way there.
+- **The setup command without an API key** passes n8n's data through `/dev/shm`, which Docker makes 64 MB by default.
+  On a large n8n it stops before it writes anything and names the API key way. It was not tried on a large n8n.
+- **The import form's address** assumes n8n's default form addresses (`/form/`). With `N8N_ENDPOINT_FORM` or
+  `N8N_ENDPOINT_FORM_WAITING` changed, the address the setup command prints is wrong.
+- **Approval emails** were checked in Mailpit only. How Outlook and Gmail show them was not tried.
+- **Power Automate Desktop** has no importer: its flows are rebuilt with n8n nodes and steps ([Move a bot](docs/guides/move-a-bot.md)).
 - **No equivalent** for SAP GUI for Windows, Citrix, image or text recognition on the screen, or Java apps.
 
 ## Development
