@@ -11,9 +11,9 @@ import { INPUTS_EXPRESSION, nodeInputs, nodeOutputs, OUTPUTS_EXPRESSION } from '
 import { OPERATIONS, properties, SUBTITLE, URL_HINT } from '../nodes/Playwright/description/index.js';
 import { ALL_OPERATIONS, ID_PATTERN_OPTION, QUICK_OPERATIONS } from '../nodes/Playwright/description/options.js';
 import { STEPS_PLACEHOLDER, UNSIGNED_NOTICE } from '../nodes/Playwright/description/runSteps.js';
-import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, SAYS_WHAT_TO_DO, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOCKED_BEFORE_UPGRADE_GUIDANCE, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, SAYS_WHAT_TO_DO, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
 import { runnerAppNotAllowed, secretAppNotListed, secretHostNotListed } from '../../engine/src/messages.js';
-import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut } from '../nodes/Playwright/execute.js';
+import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut, siteLoginLockedOutBeforeUpgrade } from '../nodes/Playwright/execute.js';
 import { COMPILERS, quickFieldNames, type QuickOp } from '../nodes/Playwright/operations/quick.js';
 import { executeRunSteps, STEPS_EMPTY_NEEDS_REPAIR } from '../nodes/Playwright/operations/runSteps.js';
 import { readRunStepsParams } from '../nodes/Playwright/operations/runStepsParams.js';
@@ -435,8 +435,12 @@ describe('wording and guidance', () => {
     // errors.ts matches the engine's text by its words (the node never loads the engine to read a constant).
     expect(VALUE_NOT_TAKEN).toBe(' did not take the value ');
     expect(guidanceFor('locked_out', siteLoginLockedOut('example.com'))).toBe(GUIDANCE.locked_out);
+    // B3c: a breaker 0.1.0 opened stops every account of the Site Login, and only a new reset key clears it.
+    expect(siteLoginLockedOutBeforeUpgrade('example.com')).toBe('A login failure on example.com before the upgrade stopped every account of this Site Login, so no login was tried.');
+    expect(LOCKED_BEFORE_UPGRADE_GUIDANCE).toBe('A login failure before the upgrade stopped every account of this Site Login: type a new value (any text) in Options → Login Breaker Reset Key. Correcting the username or password alone does not clear it.');
+    expect(guidanceFor('locked_out', siteLoginLockedOutBeforeUpgrade('example.com'))).toBe(LOCKED_BEFORE_UPGRADE_GUIDANCE);
     // No message names a version: the history of the breaker is in the changelog.
-    for (const text of [...Object.values(GUIDANCE), CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, LOGIN_PAGE_GUIDANCE, PASSWORD_CHANGED_GUIDANCE]) {
+    for (const text of [...Object.values(GUIDANCE), CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, LOGIN_PAGE_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, LOCKED_BEFORE_UPGRADE_GUIDANCE, siteLoginLockedOutBeforeUpgrade('example.com')]) {
       expect(text, text).not.toMatch(/\d+\.\d+\.\d+/);
     }
   });

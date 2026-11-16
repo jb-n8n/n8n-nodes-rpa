@@ -26,7 +26,8 @@ export interface GuardSpec {
   store: GuardStore;
   /** How long the lock is held at most (run budget plus LOCK_GRACE_MS). */
   ttlMs: number;
-  lockedOutMessage: (b: BreakerRecord) => string;
+  /** `beforeUpgrade`: the breaker is one an older version kept under legacyKey without a login fingerprint (siteLoginLockedOut). */
+  lockedOutMessage: (b: BreakerRecord, beforeUpgrade: boolean) => string;
   busyMessage: string;
   /**
    * The Site Login's fingerprints. With them, a login_failed record whose fingerprint is not of the current login lets
@@ -37,6 +38,12 @@ export interface GuardSpec {
 
 /** Golden `locked_out` message for a Site Login: the breaker is kept per account, so it says this account (the item's `account` names it). */
 export const siteLoginLockedOut = (loginHost: string): string => `A previous login of this account on ${loginHost} failed, so no login was tried.`;
+/**
+ * Golden `locked_out` message for a breaker RPA 0.1.0 opened: kept under the Site Login alone (legacySiteLoginKey, the
+ * static-data key `site-login:<credential id>` without an account part) and without a login fingerprint, it stops every
+ * account of the Site Login, and only a new Login Breaker Reset Key clears it (LOCKED_BEFORE_UPGRADE_GUIDANCE).
+ */
+export const siteLoginLockedOutBeforeUpgrade = (loginHost: string): string => `A login failure on ${loginHost} before the upgrade stopped every account of this Site Login, so no login was tried.`;
 /**
  * Golden `locked_out` message for a Site Login whose password a run changed earlier in this execution: the credential
  * still holds the old one, so no later item or node of the execution signs in with it.
@@ -144,29 +151,33 @@ async function guardedCall<T>(ctx: NodeContext, opts: GuardedOptions<T>): Promis
   if (!guard) return { kind: 'ran', result: await opts.call(), tripped: false };
   if (changedInExecution(ctx)[guard.key]) return { kind: 'blocked', code: 'locked_out', message: SITE_LOGIN_PASSWORD_CHANGED, passwordChanged: true };
   const staticData = ctx.getWorkflowStaticData('global');
-  /** The breaker that turns this call away, or the ones a corrected login gets past (`passed`: this key's, the legacy key's). */
-  const breaker = async (): Promise<{ open: BreakerRecord } | { passed: { key: string; record: BreakerRecord }[] }> => {
+  /**
+   * The breaker that turns this call away (`beforeUpgrade`: one an older version kept under the legacy key, with no
+   * login fingerprint, which a corrected login never clears), or the ones a corrected login gets past (`passed`: this
+   * key's, the legacy key's).
+   */
+  const breaker = async (): Promise<{ open: BreakerRecord; beforeUpgrade: boolean } | { passed: { key: string; record: BreakerRecord }[] }> => {
     const tripped = trippedInExecution(ctx)[guard.key];
-    if (tripped) return { open: tripped };
+    if (tripped) return { open: tripped, beforeUpgrade: false };
     const passed: { key: string; record: BreakerRecord }[] = [];
     for (const key of guard.legacyKey ? [guard.key, guard.legacyKey] : [guard.key]) {
       const record = await openBreaker(guard.store, staticData, key, guard.resetKey);
       if (!record) continue;
-      if (!(await loginCorrected(record, guard.fingerprints))) return { open: record };
+      if (!(await loginCorrected(record, guard.fingerprints))) return { open: record, beforeUpgrade: key === guard.legacyKey && !record.login };
       passed.push({ key, record });
     }
     return { passed };
   };
-  const lockedOut = (b: BreakerRecord): GuardedResult<T> => ({ kind: 'blocked', code: 'locked_out', message: guard.lockedOutMessage(b) });
+  const lockedOut = (b: { open: BreakerRecord; beforeUpgrade: boolean }): GuardedResult<T> => ({ kind: 'blocked', code: 'locked_out', message: guard.lockedOutMessage(b.open, b.beforeUpgrade) });
 
   const before = await breaker();
-  if ('open' in before) return lockedOut(before.open);
+  if ('open' in before) return lockedOut(before);
   const lock = await guard.store.acquireLock(guard.key, guard.ttlMs);
   if (!lock) return { kind: 'blocked', code: 'busy', message: guard.busyMessage };
   try {
     // Under the lock, so two workers with the same corrected login cannot both take its one try.
     const after = await breaker();
-    if ('open' in after) return lockedOut(after.open);
+    if ('open' in after) return lockedOut(after);
     const result = await opts.call();
     // A run that changed the password signed in with the stored one: a later login failure in it says nothing about the
     // credential, so it does not open the breaker (the in-execution block stops later items).
@@ -222,6 +233,6 @@ export function siteLoginGuard(siteLogin: SiteLogin, id: string, resetKey: strin
   const loginHost = new URL(siteLogin.policy.startUrl).host;
   return (store) => ({
     key: siteLoginKey(id, siteLogin.secrets.username), legacyKey: legacySiteLoginKey(id), resetKey, store, ttlMs: budgetMs + LOCK_GRACE_MS,
-    lockedOutMessage: () => siteLoginLockedOut(loginHost), busyMessage: SITE_LOGIN_BUSY, fingerprints: loginFingerprints(siteLogin.secrets),
+    lockedOutMessage: (_b, beforeUpgrade) => (beforeUpgrade ? siteLoginLockedOutBeforeUpgrade(loginHost) : siteLoginLockedOut(loginHost)), busyMessage: SITE_LOGIN_BUSY, fingerprints: loginFingerprints(siteLogin.secrets),
   });
 }
