@@ -26,8 +26,9 @@ services:
       N8N_PORT: "5678"
       N8N_PROTOCOL: http
       # n8n's address for its webhooks and forms. n8n 2.45 warns that WEBHOOK_URL is deprecated; every n8n the guides
-      # support (2.41 and later) reads N8N_WEBHOOK_URL.
-      N8N_WEBHOOK_URL: http://localhost:5678/
+      # support (2.41 and later) reads N8N_WEBHOOK_URL. Its port and the published port below are one setting,
+      # RPA_N8N_PORT in .env (default 5678): forms and approval links always name the port this stack publishes.
+      N8N_WEBHOOK_URL: http://localhost:${RPA_N8N_PORT:-5678}/
       N8N_SECURE_COOKIE: "false"
       GENERIC_TIMEZONE: UTC
       # The key that encrypts credentials comes from .env, not from n8n's own first start. n8n 2.41 still writes it
@@ -42,7 +43,7 @@ services:
       N8N_GRACEFUL_SHUTDOWN_TIMEOUT: "30"
       N8N_DIAGNOSTICS_ENABLED: "false"
     ports:
-      - "127.0.0.1:5678:5678" # n8n editor
+      - "127.0.0.1:${RPA_N8N_PORT:-5678}:5678" # n8n editor (RPA_N8N_PORT, the same as in N8N_WEBHOOK_URL above)
     volumes:
       - n8n_data:/home/node/.n8n
     networks: [browser, mail]
