@@ -3299,23 +3299,32 @@ Describe 'Moving an install with automatic sign-in to -Unattended' {
     @($kept.signInChanges | ForEach-Object { $_.key }) | Should -BeExactly @('RPA Supervisor', 'DefaultPassword')
   }
 
-  It 'Install-Rpa.ps1 ends with the short commands, and after an unattended install with the connection lines and when its own sign-in ends' {
-    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+  It 'Install-Rpa.ps1 ends with the short commands, and after an unattended install with the connection lines; the log says when its own sign-in ends' {
+    $source = (Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')) -replace "`r`n", "`n"
     $closing = $source.Substring($source.IndexOf("Write-Host 'RPA is installed.'"))
-    $closing | Should -Match ([regex]::Escape("`$rpa = Join-Path `$layout.InstallDir 'rpa.cmd'"))
-    $closing | Should -Match ([regex]::Escape("Write-Host ('  & `"{0}`" connection' -f `$rpa)"))
-    $closing | Should -Match ([regex]::Escape("Write-Host ('For how the supervisor is doing: & `"{0}`" status' -f `$rpa)"))
-    $closing | Should -Match ([regex]::Escape("Write-Host ('The installer signed {0} in once, to check the runner; that session ends by itself {1} s after the check (the idle time).' -f `$User, `$plan.IdleSeconds)"))
-    $closing | Should -Match ([regex]::Escape("& (Join-Path (Join-Path `$layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') | Out-Host"))
+    $closing | Should -Match ([regex]::Escape("& (Join-Path (Join-Path `$layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') -Short -ShowTokens:`$tokens | Out-Host"))
+    $layout = @{ InstallDir = 'C:\Program Files\RPA Runner'; DataDir = $script:DataDir; SupervisorDir = "$($script:DataDir)\supervisor" }
+    $parameters = New-TestParameters @{ Unattended = $true; UnattendedGiven = $true }
+    $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+    $ending = Get-RpaInstallEnding -Plan $plan -Parameters $parameters -Layout $layout -Console $true
+    $ending.Details | Should -Contain 'For how the supervisor is doing: & "C:\Program Files\RPA Runner\rpa.cmd" status'
+    $ending.Details | Should -Contain 'The installer signed rpa-runner in once, to check the runner; that session ends by itself 15 s after the check (the idle time).'
     # No 110-character command any more.
     $closing | Should -Not -Match 'ExecutionPolicy Bypass -File'
+    ((@($ending.Lines) + @($ending.Details)) -join "`n") | Should -Not -Match 'ExecutionPolicy Bypass -File'
   }
 
   It 'Install-Rpa.ps1 names one token, certificate and line without the browser, and two with it' {
-    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+    $layout = @{ InstallDir = 'C:\Program Files\RPA Runner'; DataDir = $script:DataDir; SupervisorDir = "$($script:DataDir)\supervisor" }
+    foreach ($with in $false, $true) {
+      $parameters = New-TestParameters @{ WithBrowser = $with }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $details = (Get-RpaInstallEnding -Plan $plan -Parameters $parameters -Layout $layout -Console $true).Details
+      if ($with) { $details | Should -Contain "  Data:      $($script:DataDir) (policy.json, the tokens, the certificates, logs)" }
+      else { $details | Should -Contain "  Data:      $($script:DataDir) (policy.json, the token, the certificate, logs)" }
+    }
+    $source = (Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')) -replace "`r`n", "`n"
     $closing = $source.Substring($source.IndexOf("Write-Host 'RPA is installed.'"))
-    $closing | Should -Match ([regex]::Escape("if (-not `$browser) { Write-Host ('  Data:      {0} (policy.json, the token, the certificate, logs)' -f `$layout.DataDir) }"))
-    $closing | Should -Match ([regex]::Escape("else { Write-Host ('  Data:      {0} (policy.json, the tokens, the certificates, logs)' -f `$layout.DataDir) }"))
     $closing | Should -Match ([regex]::Escape("`$shown = 'The connection lines could not be shown'"))
     $closing | Should -Match ([regex]::Escape("if (-not `$browser) { `$shown = 'The connection line could not be shown' }"))
   }
@@ -3680,6 +3689,268 @@ Describe 'Get-RpaAccount' {
   }
 }
 
+# What Install-Rpa.ps1 says when it has finished: 'RPA is installed.', what is installed in three lines, then one Next
+# block. Where everything is goes to the install log. The Connection Line follows an unattended install, with its token
+# only after a yes at a console.
+Describe "The installer's ending" {
+  BeforeAll {
+    $script:Layout = @{
+      InstallDir = 'C:\Program Files\RPA Runner'; DataDir = $script:DataDir
+      SupervisorDir = "$($script:DataDir)\supervisor"; InstallFile = 'C:\Program Files\RPA Runner\install.json'
+    }
+    $script:Rpa = 'C:\Program Files\RPA Runner\rpa.cmd'
+    $script:Log = 'C:\Program Files\RPA Runner\install.log'
+    $script:Question = 'Show the Connection Line now, to paste into the setup command? (y/N)'
+    $script:FirstNext = "Next: in n8n, run the setup command and paste this machine's Connection Line into it."
+    # The ending of a plan made from these parameters and facts, as Install-Rpa.ps1 gets it.
+    function Get-TestEnding([hashtable]$Change = @{}, $Facts = (New-TestFacts), [bool]$Console = $true) {
+      $merged = @{ WithBrowser = $false }
+      foreach ($key in $Change.Keys) { $merged[$key] = $Change[$key] }
+      $parameters = New-TestParameters $merged
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts $Facts
+      $plan.Refusals | Should -BeNullOrEmpty
+      Get-RpaInstallEnding -Plan $plan -Parameters $parameters -Layout $script:Layout -Console $Console
+    }
+  }
+
+  It 'after an unattended first install: what is installed in three lines, then Next, and the line is offered' {
+    $ending = Get-TestEnding
+    $ending.Lines | Should -BeExactly @(
+      '  The runner runs as rpa-runner. Nobody needs to be signed in: the RPA Supervisor signs rpa-runner in for each run.'
+      '  Firewall:  inbound TCP 8765 is open to 10.0.0.5 (rule RPA-Runner-In)'
+      ('  Where everything is, and what changed: {0}' -f $script:Log)
+      ''
+      $script:FirstNext
+    )
+    $ending.Line | Should -BeTrue
+    $ending.Ask | Should -BeTrue
+    $ending.Question | Should -BeExactly $script:Question
+    $ending.Caveat | Should -BeExactly "Close this window after you paste it, or run Clear-Host: a PowerShell transcript, or a run-command tool's history, keeps what the window shows."
+    $ending.LogFile | Should -BeExactly $script:Log
+  }
+
+  It 'with the browser names both programs, both ports and both lines' {
+    $ending = Get-TestEnding @{ WithBrowser = $true }
+    $ending.Lines[0] | Should -BeExactly '  The runner and the browser run as rpa-runner. Nobody needs to be signed in: the RPA Supervisor signs rpa-runner in for each run.'
+    $ending.Lines[1] | Should -BeExactly '  Firewall:  inbound TCP 8765 and 3000 are open to 10.0.0.5 (rules RPA-Runner-In and RPA-Browser-In)'
+    $ending.Lines[-1] | Should -BeExactly "Next: in n8n, run the setup command and paste the runner's Connection Line into it, and the browser's into an RPA Browser credential."
+    $ending.Question | Should -BeExactly 'Show the Connection Lines now, to paste into the setup command and the RPA Browser credential? (y/N)'
+    $ending.Caveat | Should -BeExactly "Close this window after you paste them, or run Clear-Host: a PowerShell transcript, or a run-command tool's history, keeps what the window shows."
+  }
+
+  # The line then follows with its token hidden, and the command that shows it, as rpa connection prints it.
+  It 'asks nothing when <Why>' -ForEach @(
+    @{ Why = '-Force is given'; Change = @{ Force = $true }; Console = $true }
+    @{ Why = '-Unattended is given'; Change = @{ Unattended = $true; UnattendedGiven = $true }; Console = $true }
+    @{ Why = 'there is no console (a remote command, or output read by a program)'; Change = @{}; Console = $false }
+  ) {
+    $ending = Get-TestEnding $Change -Console $Console
+    $ending.Line | Should -BeTrue
+    $ending.Ask | Should -BeFalse
+  }
+
+  It 'after a plain upgrade of an unattended install offers no line: n8n keeps the one it has' {
+    $ending = Get-TestEnding @{} (New-UnattendedFacts @{ InstalledBrowser = $false; InstalledBrowserPort = $null })
+    $ending.Line | Should -BeFalse
+    $ending.Lines[-1] | Should -BeExactly ('Next: nothing in n8n, which keeps its Connection Line. To print it again: & "{0}" connection -ShowTokens' -f $script:Rpa)
+  }
+
+  It 'after a change of user says that the tokens are new, then offers the new line' {
+    $facts = New-UnattendedFacts @{ InstalledUser = 'old-bot'; InstalledForUser = $false; InstalledBrowser = $false; InstalledBrowserPort = $null; UserExists = $true; UserSid = 'S-1-5-21-1-2-3-1002' }
+    $ending = Get-TestEnding @{ Force = $true; UserPassword = (New-TestPassword) } $facts
+    $ending.Lines | Should -Contain 'The runner token is new and the browser token is removed: the earlier bot user could read them.'
+    $ending.Lines[-1] | Should -BeExactly $script:FirstNext
+    $ending.Line | Should -BeTrue
+  }
+
+  It 'after an install a person signs in to: sign in, then the one command, with the token' {
+    $ending = Get-TestEnding @{ UserPassword = (New-TestPassword) }
+    $ending.Lines | Should -BeExactly @(
+      '  The runner runs as rpa-runner, while rpa-runner is signed in.'
+      '  Firewall:  inbound TCP 8765 is open to 10.0.0.5 (rule RPA-Runner-In)'
+      ('  Where everything is, and what changed: {0}' -f $script:Log)
+      ''
+      'Next: sign in as rpa-runner (if rpa-runner is signed in already, sign out first). Then, in an administrator PowerShell, run:'
+      ('  & "{0}" connection -ShowTokens' -f $script:Rpa)
+    )
+    $ending.Line | Should -BeFalse
+  }
+
+  It 'after an install with automatic sign-in: restart, then the one command, with the token' {
+    $ending = Get-TestEnding @{ AutoSignIn = $true }
+    $ending.Lines[0] | Should -BeExactly '  The runner runs as rpa-runner. Automatic sign-in is on: Windows signs rpa-runner in at every start.'
+    $ending.Lines[-2] | Should -BeExactly 'Next: restart this machine now (Restart-Computer): Windows then signs rpa-runner in and starts the runner. About a minute after its desktop shows, in an administrator PowerShell, run:'
+    $ending.Lines[-1] | Should -BeExactly ('  & "{0}" connection -ShowTokens' -f $script:Rpa)
+    $ending.Line | Should -BeFalse
+  }
+
+  It 'says the firewall in one line: <Why>' -ForEach @(
+    @{ Why = '-NoFirewall'; Change = @{ NoFirewall = $true; AllowFrom = @() }; Expected = '  Firewall:  not changed (-NoFirewall)' }
+    @{ Why = 'any address'; Change = @{ AllowFrom = @(); AllowFromAnyAddress = $true; IncludePublicNetwork = $true }; Expected = '  Firewall:  inbound TCP 8765 is open to any address (rule RPA-Runner-In)' }
+  ) {
+    (Get-TestEnding $Change).Lines[1] | Should -BeExactly $Expected
+  }
+
+  It 'keeps for the install log what the window said before: where everything is, the service, the firewall and how to remove it' {
+    $ending = Get-TestEnding
+    $ending.Details | Should -BeExactly @(
+      '  Programs:  C:\Program Files\RPA Runner'
+      '  Data:      C:\ProgramData\RPA Runner (policy.json, the token, the certificate, logs)'
+      '  Policy:    C:\ProgramData\RPA Runner\policy.json'
+      '             It is new and allows no app. Change it with C:\Program Files\RPA Runner\runner\RpaPolicy.exe'
+      '  Task:      \RPA\RPA Runner starts when rpa-runner signs in'
+      '  Service:   RPA Supervisor signs rpa-runner in when n8n connects, and out 15 s after the last connection;'
+      '             its log is C:\ProgramData\RPA Runner\supervisor\supervisor.log'
+      '  Firewall:  inbound TCP 8765 is open to 10.0.0.5 (rule RPA-Runner-In)'
+      '             for the RPA Supervisor'
+      '             on Domain, Private and Public networks'
+      '  Remove:    C:\Program Files\RPA Runner\Uninstall-Rpa.ps1'
+      'The installer signed rpa-runner in once, to check the runner; that session ends by itself 15 s after the check (the idle time).'
+      ('For how the supervisor is doing: & "{0}" status' -f $script:Rpa)
+      'While someone is signed in as rpa-runner, runs are refused: sign rpa-runner out after looking at something.'
+    )
+  }
+
+  It 'names no secret and no browser in what an install without the browser says' {
+    $password = New-MadeUpPassword
+    $ending = Get-TestEnding @{ UserPassword = $password.Secure }
+    $all = (@($ending.Lines) + @($ending.Details) + $ending.Question + $ending.Caveat) -join "`n"
+    $all.Contains($password.Text) | Should -BeFalse
+    $all | Should -Not -Match '(?i)browser|3000'
+  }
+
+  Context 'the answer to the question' {
+    It 'shows the token for <Answer>' -ForEach @(@{ Answer = 'y' }, @{ Answer = 'Y' }, @{ Answer = 'yes' }, @{ Answer = ' YES ' }, @{ Answer = "y`r" }, @{ Answer = "yes`r`n" }) {
+      $script:Asked = $null
+      Read-RpaYes $script:Question { param($Prompt) $script:Asked = $Prompt; $Answer } | Should -BeTrue
+      $script:Asked | Should -BeExactly $script:Question
+    }
+
+    It 'keeps the token hidden for <Why>' -ForEach @(
+      @{ Why = 'Enter'; Answer = '' }, @{ Why = 'n'; Answer = 'n' }, @{ Why = 'no'; Answer = 'no' }, @{ Why = 'yes and more'; Answer = 'yes please' }
+      @{ Why = 'YES on two lines'; Answer = "y`r`nes" }
+    ) {
+      Read-RpaYes $script:Question { $Answer } | Should -BeFalse
+    }
+
+    It 'keeps the token hidden when the host cannot ask' {
+      Read-RpaYes $script:Question { throw 'The host does not support reading from the console.' } | Should -BeFalse
+    }
+  }
+
+  Context 'the install log' {
+    It 'holds the time, the version, the notice, the steps and what the window said before, with Windows line ends' {
+      $parameters = New-TestParameters @{ WithBrowser = $false }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $time = [DateTimeOffset]::new(2026, 11, 16, 10, 15, 30, [TimeSpan]::FromHours(1))
+      $text = Get-RpaInstallLog -Plan $plan -Version '0.3.0' -Time $time -Details @('  Programs:  C:\x')
+      $text.EndsWith("`r`n`r`n") | Should -BeTrue
+      $text.Replace("`r`n", '').Contains("`n") | Should -BeFalse
+      $lines = $text -split "`r`n"
+      $lines[0] | Should -BeExactly '2026-11-16 10:15:30 +01:00 Install-Rpa.ps1 0.3.0: installed'
+      $lines | Should -Contain $plan.Notice[0]
+      $at = [array]::IndexOf($lines, 'Steps:')
+      $at | Should -BeGreaterThan 0
+      $lines[($at + 1)..($at + $plan.Steps.Count)] | Should -BeExactly @($plan.Steps | ForEach-Object { "  $_" })
+      $lines[$at + $plan.Steps.Count + 1] | Should -BeExactly '  Programs:  C:\x'
+    }
+
+    It 'after an upgrade says upgraded' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts (New-UnattendedFacts @{ InstalledBrowser = $false; InstalledBrowserPort = $null })
+      $text = Get-RpaInstallLog -Plan $plan -Version '0.3.0' -Time ([DateTimeOffset]::UtcNow) -Details @()
+      ($text -split "`r`n")[0] | Should -Match ' Install-Rpa\.ps1 0\.3\.0: upgraded$'
+    }
+
+    It 'after a failed step holds the steps up to that one and why it failed' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts (New-TestFacts)
+      $text = Get-RpaInstallLog -Plan $plan -Version '0.3.0' -Time ([DateTimeOffset]::UtcNow) -Failure 'The step "write token" failed: Access is denied.' -FailedStep 'write token'
+      $lines = $text -split "`r`n"
+      $lines[0] | Should -Match ' Install-Rpa\.ps1 0\.3\.0: failed$'
+      $at = [array]::IndexOf($lines, 'Steps:')
+      $done = [array]::IndexOf($plan.Steps, 'write token')
+      $lines[($at + 1)..($at + $done + 1)] | Should -BeExactly @($plan.Steps[0..$done] | ForEach-Object { "  $_" })
+      $lines[$at + $done + 2] | Should -BeExactly 'The step "write token" failed: Access is denied.'
+      $text | Should -Not -Match 'register the supervisor service'
+    }
+
+    It 'after a failure before the first step lists no step' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts (New-TestFacts)
+      $lines = (Get-RpaInstallLog -Plan $plan -Version '0.3.0' -Time ([DateTimeOffset]::UtcNow) -Failure 'runner\RpaRunner.exe is missing.' -FailedStep '') -split "`r`n"
+      $at = [array]::IndexOf($lines, 'Steps:')
+      $lines[$at + 1] | Should -BeExactly 'runner\RpaRunner.exe is missing.'
+    }
+  }
+
+  # Install-Rpa.ps1 itself runs only on Windows: what it does with the ending is read from its text, as a Windows
+  # checkout has it (CRLF) and as this one has it.
+  Context 'in Install-Rpa.ps1, with <Ends> line ends' -ForEach @(@{ Ends = 'Unix' }, @{ Ends = 'Windows' }) {
+    BeforeAll {
+      $text = (Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')) -replace "`r`n", "`n"
+      if ($Ends -eq 'Windows') { $text = $text -replace "`n", "`r`n" }
+      $script:Closing = ($text.Substring($text.IndexOf("Write-Host 'RPA is installed.'"))) -replace "`r`n", "`n"
+      $script:Whole = $text -replace "`r`n", "`n"
+    }
+
+    It 'says RPA is installed, then the lines of the ending, then the line' {
+      $script:Closing | Should -Match ([regex]::Escape("Write-Host 'RPA is installed.'`nforeach (`$line in `$ending.Lines) { Write-Host `$line }`nif (`$ending.Line) {"))
+    }
+
+    It 'shows the token only after a yes to the question it asked, and then says to close the window' {
+      $script:Closing | Should -Match ([regex]::Escape('$tokens = $ending.Ask -and (Read-RpaYes $ending.Question { param($Prompt) Read-Host $Prompt })'))
+      $script:Closing | Should -Match ([regex]::Escape("try { & (Join-Path (Join-Path `$layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') -Short -ShowTokens:`$tokens | Out-Host }"))
+      $script:Closing | Should -Match ([regex]::Escape('if ($tokens) { Write-Host $ending.Caveat }'))
+      @([regex]::Matches($script:Whole, 'ShowTokens:')).Count | Should -Be 1
+      @([regex]::Matches($script:Whole, 'Read-RpaYes')).Count | Should -Be 1
+    }
+
+    It 'asks at a console only: input and output not redirected' {
+      $script:Whole | Should -Match ([regex]::Escape('$console = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected'))
+      $script:Whole | Should -Match ([regex]::Escape('$ending = Get-RpaInstallEnding -Plan $plan -Parameters $parameters -Layout $layout -Console $console'))
+    }
+
+    It 'shows the steps as one progress line at a console, and as lines elsewhere' {
+      $script:Whole | Should -Match ([regex]::Escape('$parameters.Progress = $console'))
+      $script:Whole.IndexOf('$parameters.Progress = $console') | Should -BeLessThan $script:Whole.IndexOf('Invoke-RpaInstallPlan -Plan $plan')
+    }
+
+    It 'adds this run to the install log before the ending, and after a failed step' {
+      $script:Closing | Should -Not -Match 'Add-RpaInstallLog'
+      $logged = $script:Whole.IndexOf('Add-RpaInstallLog $layout (Get-RpaInstallLog -Plan $plan -Version $version -Time ([DateTimeOffset]::Now) -Details $ending.Details)')
+      $logged | Should -BeGreaterThan $script:Whole.IndexOf('Invoke-RpaInstallPlan -Plan $plan')
+      $logged | Should -BeLessThan $script:Whole.IndexOf("Write-Host 'RPA is installed.'")
+      $failed = $script:Whole.IndexOf("-Failure `$_.Exception.Message -FailedStep ([string]`$_.Exception.Data['Step'])")
+      $failed | Should -BeGreaterThan $script:Whole.IndexOf('Invoke-RpaInstallPlan -Plan $plan')
+      $failed | Should -BeLessThan $script:Whole.IndexOf("Write-Host 'RPA is installed.'")
+    }
+
+    It 'says RPA is installed once, as its own line (the cloud module reads it)' {
+      @([regex]::Matches($script:Whole, "(?m)^Write-Host 'RPA is installed\.'$")).Count | Should -Be 1
+    }
+  }
+
+  Context 'Add-RpaInstallLog' {
+    It 'adds to install.log in the install folder and keeps what is there' {
+      $folder = Join-Path $TestDrive 'install-folder'
+      New-Item -ItemType Directory -Path $folder | Out-Null
+      Add-RpaInstallLog @{ InstallDir = $folder } "first`r`n"
+      Add-RpaInstallLog @{ InstallDir = $folder } "second`r`n"
+      [IO.File]::ReadAllText((Join-Path $folder 'install.log')) | Should -BeExactly "first`r`nsecond`r`n"
+    }
+
+    It 'writes nothing when the install folder is not there' {
+      $folder = Join-Path $TestDrive 'no-folder'
+      Add-RpaInstallLog @{ InstallDir = $folder } "text`r`n"
+      Test-Path -LiteralPath $folder | Should -BeFalse
+    }
+  }
+
+  It 'Invoke-RpaInstallPlan names each step as a line, or with -Progress as one progress line, and says which step failed' {
+    $function = $script:ModuleSource.Substring($script:ModuleSource.IndexOf('function Invoke-RpaInstallPlan {'))
+    $function | Should -Match ([regex]::Escape("if (`$Parameters.Progress) { Write-RpaStepProgress `$activity `$step `$done `$steps.Count }`n    else { Write-Host ('  {0}' -f `$step) }"))
+    $function | Should -Match ([regex]::Escape("`$failure.Data['Step'] = `$step"))
+  }
+}
+
 Describe 'Show-RpaConnection.ps1' {
   BeforeAll {
     # A made-up install: <root>/install (install.json, scripts/) and <root>/data/RPA Runner (the log, the certificate,
@@ -3978,6 +4249,51 @@ Describe 'Show-RpaConnection.ps1' {
       }
     }
 
+    # The installer's ending runs this with -Short: the lines, what is wrong with them and where their address comes
+    # from; none of the values for the separate fields, no token line, and nothing about the mode.
+    It 'with -Short prints the line, the hint and the address only, with nothing about the mode' {
+      $file = Join-Path $script:MadeUpInstall 'install.json'
+      $short = $script:InstallJson | ConvertFrom-Json
+      $short.browser = $false
+      $short | Add-Member -NotePropertyName mode -NotePropertyValue 'unattended'
+      $short | Add-Member -NotePropertyName idleSeconds -NotePropertyValue 15
+      $short | Add-Member -NotePropertyName address -NotePropertyValue 'rpa.example'
+      Set-Content -LiteralPath $file -Value ($short | ConvertTo-Json) -Encoding UTF8
+      try {
+        $output = @(& $script:ShowScript -Short)
+        $LASTEXITCODE | Should -Be 0
+        $output | Should -BeExactly @(
+          'Runner connection line, for the setup command or the RPA Desktop Runner credential:'
+          ('rpa-runner://rpa.example:{0}/rpa/v1#token={1}&fingerprint={2}' -f $script:RunnerPort, $script:Hidden, $script:RunnerFingerprint.Replace(':', '').ToLowerInvariant())
+          ('The token is hidden in the line (token={0}). For the line to paste, run as an administrator: {1}' -f $script:Hidden, $script:Hint)
+          "The line's address is rpa.example, the one the installer was given (with -Address or at its question). To use another, run this again with -Address <that name or address>."
+        )
+      } finally {
+        Set-Content -LiteralPath $file -Value $script:InstallJson -Encoding UTF8
+      }
+    }
+
+    It 'with -Short still says that a program is not listening' {
+      $output = @(& $script:ShowScript -Short -Address 203.0.113.10)
+      $output | Should -Contain ("Browser: not listening yet. It starts within a minute of the bot user's sign-in: run this again. If it stays like this, read {0}" -f (Join-Path $script:LogDir 'browser.err.log'))
+      ($output -join "`n") | Should -Not -Match 'URL:|fingerprint:|token:'
+    }
+
+    It 'with -Short writes no token line: the token is in the line only' {
+      $source = (Get-Content -Raw -LiteralPath $script:ShowScript) -replace "`r`n", "`n"
+      $short = $source.IndexOf('if ($Short) {')
+      $short | Should -BeGreaterThan $source.IndexOf('if ($ShowTokens) { $Host.UI.WriteLine($made.Line) } else { Write-Output $made.Line }')
+      $short | Should -BeLessThan $source.IndexOf('if ($ShowTokens) { $Host.UI.WriteLine((Get-TokenLine $service.Name $service.Token)) }')
+    }
+
+    It 'with -Short -ShowTokens prints the lines with their tokens and no token line, in the output of powershell.exe' -Skip:($env:OS -ne 'Windows_NT') {
+      $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:ShowScript -Short -ShowTokens -Address 203.0.113.10)
+      $LASTEXITCODE | Should -Be 0
+      $output | Should -Contain ('rpa-runner://203.0.113.10:{0}/rpa/v1#token={1}&fingerprint={2}' -f $script:RunnerPort, $script:RunnerToken, $script:RunnerFingerprint.Replace(':', '').ToLowerInvariant())
+      @($output | Where-Object { $_ -like '*token: *' }).Count | Should -Be 0
+      ($output -join "`n") | Should -Not -Match 'tokens are hidden'
+    }
+
     It 'refuses an -Address that is not a host name or an IP address, and prints nothing else' {
       $output = @(& $script:ShowScript -Address 'evil.example/#token=x')
       $output | Should -BeExactly @('-Address: evil.example/#token=x is not a host name, an IPv4 address or an IPv6 address.')
@@ -4208,12 +4524,19 @@ Describe 'Show-RpaConnection.ps1' {
 
     # Install-Rpa.ps1 shows the lines by running this same script without -Address, so its lines carry the same address.
     It "the installer's closing lines run this script without -Address, and tell to run rpa connection without it" {
-      $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+      $source = (Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')) -replace "`r`n", "`n"
       $closing = $source.Substring($source.IndexOf("Write-Host 'RPA is installed.'"))
       @([regex]::Matches($closing, 'Show-RpaConnection\.ps1')).Count | Should -Be 1
-      $closing | Should -Match ([regex]::Escape("try { & (Join-Path (Join-Path `$layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') | Out-Host }"))
-      $closing | Should -Match ([regex]::Escape("Write-Host ('  & `"{0}`" connection' -f `$rpa)"))
+      $closing | Should -Match ([regex]::Escape("try { & (Join-Path (Join-Path `$layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') -Short -ShowTokens:`$tokens | Out-Host }"))
       $closing | Should -Not -Match '-Address'
+      $layout = @{ InstallDir = 'C:\Program Files\RPA Runner'; DataDir = 'C:\ProgramData\RPA Runner'; SupervisorDir = 'C:\ProgramData\RPA Runner\supervisor' }
+      foreach ($change in @{ UserPassword = (New-TestPassword) }, @{ AutoSignIn = $true }) {
+        $parameters = New-TestParameters $change
+        $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+        $lines = (Get-RpaInstallEnding -Plan $plan -Parameters $parameters -Layout $layout -Console $true).Lines
+        $lines[-1] | Should -BeExactly '  & "C:\Program Files\RPA Runner\rpa.cmd" connection -ShowTokens'
+        ($lines -join "`n") | Should -Not -Match '-Address'
+      }
     }
   }
 
@@ -4585,21 +4908,34 @@ Describe 'The installer scripts' {
 
   # An upgrade keeps the policy file; only a run that wrote it may call it new.
   It 'Install-Rpa.ps1 says that the policy allows no app only when this run wrote it' {
-    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
-    $source | Should -Match ([regex]::Escape("if (`$plan.Steps -contains 'write policy') { Write-Host ('             It is new and allows no app. Change it with {0}' -f `$policyTool) }"))
-    $source | Should -Match ([regex]::Escape("else { Write-Host ('             It was there already and is kept as it is. Change it with {0}' -f `$policyTool) }"))
-    $source | Should -Not -Match 'A new policy allows no app'
+    $layout = @{ InstallDir = 'C:\Program Files\RPA Runner'; DataDir = $script:DataDir; SupervisorDir = "$($script:DataDir)\supervisor" }
+    $tool = 'C:\Program Files\RPA Runner\runner\RpaPolicy.exe'
+    $parameters = New-TestParameters
+    foreach ($case in @{ Facts = (New-TestFacts); Said = "             It is new and allows no app. Change it with $tool" }, @{ Facts = (New-InstalledFacts); Said = "             It was there already and is kept as it is. Change it with $tool" }) {
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts $case.Facts
+      $details = (Get-RpaInstallEnding -Plan $plan -Parameters $parameters -Layout $layout -Console $true).Details
+      $details | Should -Contain $case.Said
+      ($details -join "`n") | Should -Not -Match 'A new policy allows no app'
+    }
   }
 
   # The earlier bot user could read the tokens the plan replaced on a change of user.
   It 'Install-Rpa.ps1 says at its end when it replaced the tokens, and where the new ones are shown' {
-    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
-    $said = $source.IndexOf("if (`$plan.Steps -contains 'remove the old tokens') {")
-    $said | Should -BeGreaterThan $source.IndexOf("Write-Host 'RPA is installed.'")
-    $source.IndexOf("  if (-not `$browser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }", $said) | Should -BeGreaterThan $said
-    $source.IndexOf("  else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }", $said) | Should -BeGreaterThan $said
-    $source.IndexOf("  if (-not `$browser) { Write-Host ('Update the n8n credential with the new runner token, which & `"{0}`" connection -ShowTokens shows.' -f `$rpa) }", $said) | Should -BeGreaterThan $said
-    $source.IndexOf("  else { Write-Host ('Update the n8n credentials with the new tokens, which & `"{0}`" connection -ShowTokens shows.' -f `$rpa) }", $said) | Should -BeGreaterThan $said
+    $layout = @{ InstallDir = 'C:\Program Files\RPA Runner'; DataDir = $script:DataDir; SupervisorDir = "$($script:DataDir)\supervisor" }
+    $show = '& "C:\Program Files\RPA Runner\rpa.cmd" connection -ShowTokens'
+    $facts = New-InstalledFacts @{ InstalledUser = 'old-bot'; InstalledForUser = $false; UserExists = $true; UserSid = 'S-1-5-21-1-2-3-1002' }
+    foreach ($case in @(
+        @{ With = $false; Said = @('The runner token is new and the browser token is removed: the earlier bot user could read them.', "Update the n8n credential with the new runner token, which $show shows.") }
+        @{ With = $true; Said = @('Both tokens are new: the earlier bot user could read the old ones.', "Update the n8n credentials with the new tokens, which $show shows.") }
+      )) {
+      $parameters = New-TestParameters @{ WithBrowser = $case.With; NoBrowser = (-not $case.With); UserPassword = (New-TestPassword); Force = $true }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts $facts
+      $plan.Steps | Should -Contain 'remove the old tokens'
+      $lines = @((Get-RpaInstallEnding -Plan $plan -Parameters $parameters -Layout $layout -Console $true).Lines)
+      $at = [array]::IndexOf($lines, $case.Said[0])
+      $at | Should -BeGreaterThan 0
+      $lines[$at + 1] | Should -BeExactly $case.Said[1]
+    }
   }
 
   # -WithBrowser, -NoBrowser and the install decide whether it has the browser; the plan says which, from the facts
@@ -5118,18 +5454,17 @@ public static class Program {
       }
       $env:RPA_FAKE_LOG = $script:GhLog
       $script:Command = 'gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa --signer-workflow jb-n8n/n8n-nodes-rpa/.github/workflows/desktop-release.yml --source-ref refs/tags/desktop-v0.3.0'
-      $script:Why = "It shows that this project's release workflow built the zip; the hash only shows that the zip is the file published beside this script."
       function Set-FakeGh([int]$Auth, [int]$Verify) { $env:RPA_FAKE_AUTH = "$Auth"; $env:RPA_FAKE_VERIFY = "$Verify"; Remove-Item -LiteralPath $script:GhLog -ErrorAction SilentlyContinue }
       function Get-GhCalls { if (Test-Path -LiteralPath $script:GhLog) { @(Get-Content -LiteralPath $script:GhLog) } else { @() } }
     }
     AfterAll { Remove-Item -LiteralPath env:RPA_FAKE_LOG, env:RPA_FAKE_AUTH, env:RPA_FAKE_VERIFY -ErrorAction SilentlyContinue }
 
-    It 'without the GitHub CLI goes on, and says in one line that the attestation was NOT checked, why it matters and how to check it' {
+    It 'without the GitHub CLI goes on, and says in two lines that the attestation was NOT checked, and how to check it' {
       $missing = Join-Path $script:GetRoot 'no-gh.exe'
       Get-RpaGhState $missing | Should -BeExactly 'missing'
       $result = Test-RpaAttestation $missing 'missing' 'C:\x\rpa-windows-x64.zip' '0.3.0' $false
       $result.Refusal | Should -BeNullOrEmpty
-      $result.Line | Should -BeExactly ("The build attestation was NOT checked: the GitHub CLI is not installed here ($missing). $($script:Why) To check it on a machine with gh: $($script:Command)")
+      $result.Line | Should -BeExactly @("The build attestation of rpa-windows-x64.zip was NOT checked: the GitHub CLI is not installed here ($missing). To check it on a machine with gh:", "  $($script:Command)")
     }
 
     It 'with a GitHub CLI that is not signed in goes on the same way, and does not ask it to verify' {
@@ -5137,7 +5472,7 @@ public static class Program {
       Get-RpaGhState $script:FakeGh | Should -BeExactly 'signed out'
       $result = Test-RpaAttestation $script:FakeGh 'signed out' 'C:\x\rpa-windows-x64.zip' '0.3.0' $false
       $result.Refusal | Should -BeNullOrEmpty
-      $result.Line | Should -BeExactly ("The build attestation was NOT checked: the GitHub CLI here is not signed in (gh auth status). $($script:Why) To check it on a machine with gh: $($script:Command)")
+      $result.Line | Should -BeExactly @('The build attestation of rpa-windows-x64.zip was NOT checked: the GitHub CLI here is not signed in (gh auth status). To check it on a machine with gh:', "  $($script:Command)")
       Get-GhCalls | Should -BeExactly @('auth status')
     }
 
@@ -5195,7 +5530,8 @@ public static class Program {
 
     It 'names the browser zip in the command that checks its attestation elsewhere' {
       $result = Test-RpaAttestation 'C:\no-gh.exe' 'missing' 'C:\x\rpa-browser-windows-x64.zip' '0.3.0' $false $true 'rpa-browser-windows-x64.zip'
-      $result.Line | Should -Match ([regex]::Escape('To check it on a machine with gh: gh attestation verify rpa-browser-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa'))
+      $result.Line[0] | Should -Match ([regex]::Escape('The build attestation of rpa-browser-windows-x64.zip was NOT checked: '))
+      $result.Line[1] | Should -Match ([regex]::Escape('  gh attestation verify rpa-browser-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa'))
     }
 
     It 'stops before the download when -RequireAttestation cannot be met, and otherwise checks before the unpack' {

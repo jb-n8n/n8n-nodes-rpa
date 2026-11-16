@@ -637,6 +637,133 @@ function Get-RpaInstallPlan {
   }
 }
 
+# What Install-Rpa.ps1 says when the install has finished, below 'RPA is installed.', from the plan that ran and its
+# parameters (User, RunnerPort, BrowserPort, NoFirewall, Force, UnattendedGiven):
+#   Lines     what is installed, in three lines, then the one thing to do next (Next: ...);
+#   Details   where everything is and what to know later, for the install log (LogFile), not for the window;
+#   Line      whether the Connection Line follows: after an unattended install, whose runner answered once, unless it
+#             was an upgrade that kept the tokens (n8n keeps the line it has);
+#   Ask       whether to ask before it follows, and show it with its token after a yes (Question; Caveat is said after
+#             it). Only at a console (-Console) and never with -Force or a -Unattended given: there the line follows
+#             with its token hidden, as rpa connection prints it.
+# -Layout is Get-RpaLayout's. No secret goes in.
+function Get-RpaInstallEnding([hashtable]$Plan, [hashtable]$Parameters, [hashtable]$Layout, [bool]$Console) {
+  $user = [string]$Parameters.User
+  $browser = [bool]$Plan.Browser
+  $steps = @($Plan.Steps)
+  $rpa = '{0}\rpa.cmd' -f $Layout.InstallDir
+  $logFile = '{0}\install.log' -f $Layout.InstallDir
+  $upgrade = $steps -contains 'stop running services'
+  $newTokens = $steps -contains 'remove the old tokens'
+  $autoSignIn = $steps -contains 'turn on automatic sign-in'
+
+  $from = 'any address'
+  if ($Plan.AllowFrom -notcontains 'any') { $from = @($Plan.AllowFrom) -join ', ' }
+  if ($Parameters.NoFirewall) { $firewall = @('  Firewall:  not changed (-NoFirewall)') }
+  elseif (-not $Plan.AllowFrom) { $firewall = @('  Firewall:  not changed (this install was made with -NoFirewall)') }
+  else {
+    if (-not $browser) { $firewall = @('  Firewall:  inbound TCP {0} is open to {1} (rule RPA-Runner-In)' -f $Parameters.RunnerPort, $from) }
+    else { $firewall = @('  Firewall:  inbound TCP {0} and {1} are open to {2} (rules RPA-Runner-In and RPA-Browser-In)' -f $Parameters.RunnerPort, $Parameters.BrowserPort, $from) }
+    if ($Plan.Unattended) { $firewall += '             for the RPA Supervisor' }
+    if ($Plan.PublicNetwork) { $firewall += '             on Domain, Private and Public networks' }
+    else { $firewall += '             on Domain and Private networks, not on Public ones' }
+  }
+
+  # Where everything is, as the window said it before 0.2.0.
+  $details = @('  Programs:  {0}' -f $Layout.InstallDir)
+  if (-not $browser) { $details += '  Data:      {0} (policy.json, the token, the certificate, logs)' -f $Layout.DataDir }
+  else { $details += '  Data:      {0} (policy.json, the tokens, the certificates, logs)' -f $Layout.DataDir }
+  $details += '  Policy:    {0}\policy.json' -f $Layout.DataDir
+  $policyTool = '{0}\runner\RpaPolicy.exe' -f $Layout.InstallDir
+  if ($steps -contains 'write policy') { $details += '             It is new and allows no app. Change it with {0}' -f $policyTool }
+  else { $details += '             It was there already and is kept as it is. Change it with {0}' -f $policyTool }
+  if (-not $browser) { $details += '  Task:      \RPA\RPA Runner starts when {0} signs in' -f $user }
+  else { $details += '  Tasks:     \RPA\RPA Runner and \RPA\RPA Browser start when {0} signs in' -f $user }
+  if ($Plan.Unattended) {
+    $details += '  Service:   RPA Supervisor signs {0} in when n8n connects, and out {1} s after the last connection;' -f $user, $Plan.IdleSeconds
+    $details += '             its log is {0}\supervisor.log' -f $Layout.SupervisorDir
+  }
+  $details += $firewall
+  $details += '  Remove:    {0}\Uninstall-Rpa.ps1' -f $Layout.InstallDir
+  if ($Plan.Unattended) {
+    if ($steps -contains 'register the supervisor service') {
+      $details += 'The installer signed {0} in once, to check the runner; that session ends by itself {1} s after the check (the idle time).' -f $user, $Plan.IdleSeconds
+    }
+    $details += 'For how the supervisor is doing: & "{0}" status' -f $rpa
+    $details += 'While someone is signed in as {0}, runs are refused: sign {0} out after looking at something.' -f $user
+  }
+
+  $programs = 'The runner runs'
+  if ($browser) { $programs = 'The runner and the browser run' }
+  if ($Plan.Unattended) { $what = '  {0} as {1}. Nobody needs to be signed in: the RPA Supervisor signs {1} in for each run.' -f $programs, $user }
+  elseif ($autoSignIn) { $what = '  {0} as {1}. Automatic sign-in is on: Windows signs {1} in at every start.' -f $programs, $user }
+  else { $what = '  {0} as {1}, while {1} is signed in.' -f $programs, $user }
+  $lines = @($what, $firewall[0], ('  Where everything is, and what changed: {0}' -f $logFile), '')
+
+  # A change of user replaced the tokens, which the earlier bot user could read.
+  if ($newTokens) {
+    if (-not $browser) {
+      $lines += 'The runner token is new and the browser token is removed: the earlier bot user could read them.'
+      $lines += 'Update the n8n credential with the new runner token, which & "{0}" connection -ShowTokens shows.' -f $rpa
+    } else {
+      $lines += 'Both tokens are new: the earlier bot user could read the old ones.'
+      $lines += 'Update the n8n credentials with the new tokens, which & "{0}" connection -ShowTokens shows.' -f $rpa
+    }
+  }
+  $line = $Plan.Unattended -and (-not $upgrade -or $newTokens)
+  $show = '  & "{0}" connection -ShowTokens' -f $rpa
+  if ($line) {
+    if (-not $browser) { $lines += "Next: in n8n, run the setup command and paste this machine's Connection Line into it." }
+    else { $lines += "Next: in n8n, run the setup command and paste the runner's Connection Line into it, and the browser's into an RPA Browser credential." }
+  } elseif ($Plan.Unattended) {
+    if (-not $browser) { $lines += 'Next: nothing in n8n, which keeps its Connection Line. To print it again: & "{0}" connection -ShowTokens' -f $rpa }
+    else { $lines += 'Next: nothing in n8n, which keeps its Connection Lines. To print them again: & "{0}" connection -ShowTokens' -f $rpa }
+  } elseif ($autoSignIn) {
+    $starts = 'the runner and the browser'
+    if (-not $browser) { $starts = 'the runner' }
+    $lines += 'Next: restart this machine now (Restart-Computer): Windows then signs {0} in and starts {1}. About a minute after its desktop shows, in an administrator PowerShell, run:' -f $user, $starts
+    $lines += $show
+  } else {
+    if ($upgrade) { $lines += 'Next: sign in as {0}. Then, in an administrator PowerShell, run:' -f $user }
+    else { $lines += 'Next: sign in as {0} (if {0} is signed in already, sign out first). Then, in an administrator PowerShell, run:' -f $user }
+    $lines += $show
+  }
+
+  $question = 'Show the Connection Line now, to paste into the setup command? (y/N)'
+  $caveat = "Close this window after you paste it, or run Clear-Host: a PowerShell transcript, or a run-command tool's history, keeps what the window shows."
+  if ($browser) {
+    $question = 'Show the Connection Lines now, to paste into the setup command and the RPA Browser credential? (y/N)'
+    $caveat = "Close this window after you paste them, or run Clear-Host: a PowerShell transcript, or a run-command tool's history, keeps what the window shows."
+  }
+  @{
+    Lines = $lines; Details = $details; LogFile = $logFile; Line = [bool]$line
+    Ask = [bool]$line -and $Console -and -not $Parameters.Force -and -not $Parameters.UnattendedGiven
+    Question = $question; Caveat = $caveat
+  }
+}
+
+# This run as the install log keeps it, with Windows line ends and a blank line after it: the time, the package
+# version and how it ended, the warnings and notices said before the question, the steps that ran, and then -Details
+# (Get-RpaInstallEnding's) or, after a failed step (-FailedStep), the steps up to that one and -Failure.
+function Get-RpaInstallLog([hashtable]$Plan, [string]$Version, [DateTimeOffset]$Time, [string[]]$Details = @(), [string]$Failure, [string]$FailedStep) {
+  $steps = @($Plan.Steps)
+  $how = 'installed'
+  if ($steps -contains 'stop running services') { $how = 'upgraded' }
+  if ($Failure) {
+    $how = 'failed'
+    # A failure before the first step (a check of the package, for example) names no step.
+    $at = [array]::IndexOf($steps, $FailedStep)
+    if ($at -ge 0) { $steps = @($steps[0..$at]) } else { $steps = @() }
+  }
+  $lines = @('{0} Install-Rpa.ps1 {1}: {2}' -f $Time.ToString('yyyy-MM-dd HH:mm:ss zzz', [Globalization.CultureInfo]::InvariantCulture), $Version, $how)
+  foreach ($warning in @($Plan.Warnings)) { if ($warning) { $lines += 'Warning: {0}' -f $warning } }
+  foreach ($line in @($Plan.Notice) + @($Plan.BrowserNotice)) { if ($null -ne $line) { $lines += $line } }
+  $lines += 'Steps:'
+  foreach ($step in $steps) { $lines += '  {0}' -f $step }
+  if ($Failure) { $lines += $Failure } else { $lines += @($Details) }
+  (($lines + '' + '') -join "`r`n")
+}
+
 # Decides whether an uninstall may run. -Parameters holds Uninstall-Rpa.ps1's parameters (RemoveData); -Facts is what
 # Get-RpaUninstallFacts returns. Only -RemoveData can be refused: the data directory is deleted by path, so no
 # process may be running of an account that can write into it or owns something in it (such a process could swap a

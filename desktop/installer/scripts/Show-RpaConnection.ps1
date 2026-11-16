@@ -13,7 +13,8 @@
 # that may connect (-AllowFrom, the n8n host), the address this machine has on its route to that one, else this
 # machine's name; one line says which, and how to choose another. An IPv6 address goes in brackets.
 # -Status shows whether each program listens, the mode, the bot user's sessions and, in unattended mode, the
-# supervisor's state: nothing that goes into a credential.
+# supervisor's state: nothing that goes into a credential. -Short (the installer's closing lines) shows the lines only,
+# with what is wrong with them and where their address comes from: no URL, fingerprint or token line, and no mode.
 #
 # The tokens are shown only with -ShowTokens, which needs an administrator PowerShell; without it each line holds
 # token=<hidden: run with -ShowTokens>, and the script says so. The token lines and the connection lines with a token
@@ -29,7 +30,7 @@
 # user's sessions (quser.exe), the supervisor's last failure from supervisor-state.json and whether that failure blocks
 # sign-ins until the service is restarted (the service then still shows as running), and where its log is. Its folder
 # can be read by administrators only.
-param([switch]$ShowTokens, [string]$Address, [switch]$Status)
+param([switch]$ShowTokens, [string]$Address, [switch]$Status, [switch]$Short)
 $ErrorActionPreference = 'Stop'
 $installDir = Split-Path -Parent $PSScriptRoot
 $hidden = '<hidden: run with -ShowTokens>'
@@ -253,6 +254,10 @@ foreach ($service in $services) {
       if ($ShowTokens) { $Host.UI.WriteLine($made.Line) } else { Write-Output $made.Line }
     } else { Write-Output ('{0} connection line: {1}' -f $service.Name, $made.Problem) }
   } else { Write-Output ('{0} connection line: not known yet (the program has not started)' -f $service.Name) }
+  if ($Short) {
+    if ($listening -notcontains $service.Port) { Write-Output $notListening }
+    continue
+  }
   # With -Address, the URL for the separate fields names the same address as the line.
   $urlHosts = $addresses
   if ($givenAddress -or $recorded) { $urlHosts = @($lineHost) }
@@ -281,7 +286,7 @@ if ($Status -and $install.mode -ne 'unattended') {
   Write-Sessions ([string]$install.user)
 }
 
-if ($install.mode -eq 'unattended') {
+if ($install.mode -eq 'unattended' -and -not $Short) {
   $supervisorDir = Join-Path $dataDir 'supervisor'
   $stateFile = Join-Path $supervisorDir 'supervisor-state.json'
   $user = [string]$install.user

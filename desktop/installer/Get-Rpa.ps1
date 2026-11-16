@@ -21,8 +21,8 @@
 #   4. Checks the build attestation of each zip with the GitHub CLI when C:\Program Files\GitHub CLI\gh.exe is
 #      installed and signed in, as docs/install/windows.md does: the workflow desktop-release.yml of
 #      jb-n8n/n8n-nodes-rpa attested it, for the tag desktop-v<version>. A failed check stops it. Where gh is not
-#      installed or not signed in, the attestation is NOT checked: it says so in one line, with the command that checks
-#      the zip's attestation on a machine with gh, and goes on; the zip must
+#      installed or not signed in, the attestation is NOT checked: it says so, with the command that checks the zip's
+#      attestation on a machine with gh on the line below, and goes on; the zip must
 #      still have the SHA-256 of the .sha256 file and the one this script names. With -RequireAttestation the check is
 #      mandatory: without a signed-in gh it stops before it downloads anything. A copy that names no SHA-256 (the
 #      repository's own, run with -Zip) has only the .sha256 file beside the zip, from the same place, so there the
@@ -289,7 +289,11 @@ function Test-RpaAttestation([string]$Gh, [string]$State, [string]$ZipPath, [str
   if ($Require) {
     return @{ Refusal = ('-RequireAttestation: the build attestation cannot be checked: {0}. Install the GitHub CLI here and sign it in (gh auth login), then run this again.' -f $reason); Line = $null }
   }
-  $line = "The build attestation was NOT checked: {0}. It shows that this project's release workflow built the zip; the hash only shows that the zip is the file published beside this script. To check it on a machine with gh: gh attestation verify {1} --repo {2} --signer-workflow {3} --source-ref {4}" -f $reason, $ZipName, $Repository, $workflow, $tag
+  # Two lines: what was not checked and why, then the command that checks it.
+  $line = @(
+    ('The build attestation of {0} was NOT checked: {1}. To check it on a machine with gh:' -f $ZipName, $reason)
+    ('  gh attestation verify {0} --repo {1} --signer-workflow {2} --source-ref {3}' -f $ZipName, $Repository, $workflow, $tag)
+  )
   @{ Refusal = $null; Line = $line }
 }
 
