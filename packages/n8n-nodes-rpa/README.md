@@ -50,6 +50,7 @@ The package's `templates/` folder (also in the repository's
 | RPA: 2 Data feed | Runs approved steps on a schedule, and repairs them with AI when the site changes |
 | RPA: 3 Approve steps | Approval by email: emails the evidence, waits for a person, signs the steps |
 | RPA: 5 Import a bot | A form: upload a bot, review and approve it, download the workflow that runs it |
+| RPA: 6 One-time code | Gives a sign-in its one-time code: from an email, an authenticator app on Windows, or typed by a person |
 
 ## Security and support
 

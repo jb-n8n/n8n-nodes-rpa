@@ -1,0 +1,25 @@
+{
+  "surface": "desktop",
+  "name": "authenticator-code",
+  "version": 1,
+  "app": { "exe": "Authenticator.exe" },
+  "steps": [
+    {
+      "intent": "Wait for the Authenticator window",
+      "waitFor": { "target": { "uia": { "window": { "title": "Authenticator" }, "path": [{ "controlType": "Edit", "name": "Search" }] } } },
+      "timeoutMs": 20000
+    },
+    {
+      "intent": "Type the entry name into Search",
+      "fill": { "field": { "uia": { "window": { "title": "Authenticator" }, "path": [{ "controlType": "Edit", "name": "Search" }] } }, "value": "{{var.entryName}}" }
+    },
+    {
+      "intent": "Click Copy on the entry",
+      "click": { "uia": { "window": { "title": "Authenticator" }, "path": [{ "controlType": "Button", "name": "Copy {{var.entryName}}" }] } }
+    },
+    {
+      "intent": "Read the copied code from the clipboard",
+      "read": { "clipboard": true, "as": "code" }
+    }
+  ]
+}

@@ -89,6 +89,39 @@ The sample site of [Your first browser bot](browser-bot.md) has three accounts: 
 5. Execute it again: harbor-ops fails `locked_out` and tries no login, the other two run. Change its password to
    `harbor-password` in **Get accounts** and execute again: all three run.
 
+## When the site sends a one-time code
+
+Some sites ask for a one-time code at each sign-in. Choose where the bot gets it:
+
+| The code comes | Use | What it needs |
+|---|---|---|
+| From an authenticator app whose secret key you have | the Site Login's **TOTP Secret** | the key behind the app's QR code |
+| By email | template 6, `source` `email` | a mail account n8n can read: Outlook, or Gmail |
+| From an authenticator app on the Windows machine | template 6, `source` `app` | the RPA Desktop Runner, and the app on that machine with an entry per account |
+| To a person, by text message or a phone app | template 6, `source` `typed` | a person who types it on a form while the bot waits |
+
+With a TOTP Secret the run makes the code itself, and you are done. For the other three:
+
+1. Import `packages/n8n-nodes-rpa/templates/6-one-time-code.json` (**RPA: 6 One-time code**).
+2. In its **Settings**, set `source`.
+   - `email`: open **Read new mail**, pick your mail account and turn the node on. Set `sender` and `subjectHas` in
+     **Settings** to the code mail's sender and a word of its subject.
+   - `app`: copy `docs/samples/authenticator-code.steps.json` and change the window title and control names to your
+     app's. Upload it on your import form and approve it. Pick **RPA Desktop Runner** on **Read the code from the
+     app**. The runner's policy needs the app and `clipboardRead` ([Steps](../reference/steps.md#desktop-steps)).
+   - `typed`: nothing more.
+3. Click **Publish**.
+4. On your bot's RPA node, choose it in **Options → One-Time Code Workflow**. Pick it from the list: an expression is
+   refused.
+5. In the bot's sign-in step, `totp` needs `"source": "workflow"`. A recording imported with **One-Time Code
+   Workflow** set on **Import steps** gets it. In a step document you write it yourself.
+
+When the bot signs in, the workflow gets the account's user name as `account`. With `typed`, open the form's address,
+`/form/rpa-one-time-code` on your n8n, and type the code the site sent within 100 seconds. With many accounts, one
+code workflow serves them all. For `app`, `appEntry` is the account's user name: change it in **Settings** when the
+app names its entries differently. `source` may also differ per account, as an expression on `$json.account`
+([Templates](../reference/templates.md#rpa-6-one-time-code)).
+
 ## When one account fails
 
 The login breaker and the run lock are kept per account: the Site Login and the user name, without case or spaces.

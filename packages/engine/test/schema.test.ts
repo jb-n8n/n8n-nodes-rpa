@@ -9,7 +9,7 @@ import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { importSource } from '../src/import/index.js';
 import type { ImportOptions, ImportSource } from '../src/import/types.js';
-import { parseScript } from '../src/steps/parse.js';
+import { isDesktopDocument, parseDesktopScript, parseScript } from '../src/steps/parse.js';
 import { MAX_STEP_TIMEOUT_MS, STEP_VERBS } from '../src/types.js';
 import { baselineScript, erpScript, ERP_CHECK, fioriScript, reportScript, SAP_VARS, SECRETS, SIGN_IN_STEPS, webguiScript } from './helpers.js';
 
@@ -54,11 +54,13 @@ function templateDocuments(): { at: string; doc: unknown }[] {
   return out;
 }
 
-/** The sample step documents the guides tell a person to upload as they are (docs/samples). */
-function sampleDocuments(): { at: string; doc: unknown }[] {
+/** The sample step documents the guides tell a person to upload as they are (docs/samples), browser and desktop. */
+function allSampleDocuments(): { at: string; doc: unknown }[] {
   const dir = new URL('docs/samples/', ROOT);
   return readdirSync(dir).filter((f) => f.endsWith('.steps.json')).map((f) => ({ at: `docs/samples/${f}`, doc: JSON.parse(readFileSync(new URL(f, dir), 'utf8')) as unknown }));
 }
+/** The browser samples: the step schema covers browser steps; desktop samples are checked by parseDesktopScript below. */
+const sampleDocuments = () => allSampleDocuments().filter((d) => !isDesktopDocument(d.doc));
 
 /** The UiPath fixture project, zipped as Studio exports it. */
 function uipathZip(): Buffer {
@@ -158,6 +160,12 @@ const EVERY_FIELD = {
 };
 
 describe('the step-document JSON Schema', () => {
+  it('every desktop sample in docs/samples parses as desktop steps (the authenticator app one among them)', () => {
+    const desktop = allSampleDocuments().filter((d) => isDesktopDocument(d.doc));
+    expect(desktop.map((d) => d.at)).toContain('docs/samples/authenticator-code.steps.json');
+    for (const { at, doc } of desktop) expect(() => parseDesktopScript(doc), at).not.toThrow();
+  });
+
   it('is draft-07 (what ajv supports by default) and compiles in the default strict mode of ajv', () => {
     expect(schema.$schema).toBe('http://json-schema.org/draft-07/schema#');
     expect(validateDocument).toBeTypeOf('function');

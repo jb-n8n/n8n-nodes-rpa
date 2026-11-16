@@ -1,0 +1,1077 @@
+{
+  "name": "RPA: 6 One-time code",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000601",
+      "name": "Code requested",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "notes": "The RPA node starts this workflow with one item { requestedAt, account } once the site shows its code field. account is the Site Login's user name."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006a1",
+              "name": "source",
+              "value": "email",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006a2",
+              "name": "sender",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006a3",
+              "name": "subjectHas",
+              "value": "code",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006a4",
+              "name": "codePattern",
+              "value": "\\b(\\d{6})\\b",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006a5",
+              "name": "appSteps",
+              "value": "authenticator-code",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006a6",
+              "name": "appEntry",
+              "value": "={{ $json.account ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006a7",
+              "name": "lookBackSeconds",
+              "value": 30,
+              "type": "number"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006a8",
+              "name": "giveUpSeconds",
+              "value": 100,
+              "type": "number"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006a9",
+              "name": "requestedAt",
+              "value": "={{ $json.requestedAt ?? $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006aa",
+              "name": "account",
+              "value": "={{ $json.account ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006ab",
+              "name": "startedAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000602",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "notes": "source picks where the code comes from: email, app or typed. A value may depend on the account: make it an expression on $json.account."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006ac",
+                    "leftValue": "={{ $json.source }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "email"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "email"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006ad",
+                    "leftValue": "={{ $json.source }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "app"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "app"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006ae",
+                    "leftValue": "={{ $json.source }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "typed"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "typed"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000603",
+      "name": "Which source?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "In Settings, source must be email, app or typed."
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000604",
+      "name": "Unknown source",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        660,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 10,
+        "output": "fields",
+        "fields": [
+          "subject",
+          "bodyPreview",
+          "from",
+          "receivedDateTime"
+        ],
+        "filtersUI": {
+          "values": {
+            "filterBy": "filters",
+            "filters": {
+              "receivedAfter": "={{ new Date(Date.parse($('Settings').first().json.requestedAt) - $('Settings').first().json.lookBackSeconds * 1000).toISOString() }}",
+              "sender": "={{ $('Settings').first().json.sender }}"
+            }
+          }
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000605",
+      "name": "Read new mail",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -240
+      ],
+      "disabled": true,
+      "alwaysOutputData": true,
+      "notes": "Off until you use email: pick your mail account here, then turn the node on. Lists the newest mails since the request. On Gmail, use Gmail's Get Many messages instead."
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item { code }: the code from the newest mail since the request, or '' when none has come yet.\nconst s = $('Settings').first().json;\nconst mails = $input.all().map((item) => item.json);\nif (mails.some((m) => m.source !== undefined && m.requestedAt !== undefined)) {\n  throw new Error('Read new mail is off. Open it, pick your mail account and turn it on, or change source in Settings.');\n}\nconst since = Date.parse(s.requestedAt) - Number(s.lookBackSeconds) * 1000;\nconst asText = (v) => (typeof v === 'string' ? v : v && typeof v === 'object' ? JSON.stringify(v) : '');\nconst pattern = new RegExp(s.codePattern);\nconst code = mails\n  .map((m) => {\n    const when = m.receivedDateTime ?? m.date ?? m.internalDate ?? m.Created;\n    const at = /^\\d+$/.test(String(when)) ? Number(when) : Date.parse(when);\n    const subject = String(m.subject ?? m.Subject ?? '');\n    const from = asText(m.from ?? m.From ?? m.sender).toLowerCase();\n    const body = [m.bodyPreview, m.body?.content, m.snippet, m.Snippet, m.text, m.Text]\n      .filter((v) => typeof v === 'string').join('\\n').replace(/<[^>]*>/g, ' ');\n    return { at, subject, from, body };\n  })\n  .filter((m) => m.at >= since)\n  .filter((m) => !s.sender || m.from.includes(String(s.sender).toLowerCase()))\n  .filter((m) => !s.subjectHas || m.subject.toLowerCase().includes(String(s.subjectHas).toLowerCase()))\n  .sort((a, b) => b.at - a.at)\n  .map((m) => { const found = `${m.subject}\\n${m.body}`.match(pattern); return found ? (found[1] ?? found[0]) : ''; })\n  .find((c) => c !== '');\nreturn [{ json: { code: code ?? '' } }];\n"
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000606",
+      "name": "Find the code in the mail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -240
+      ],
+      "notes": "Keeps mails since the request (less lookBackSeconds) from sender, whose subject has subjectHas, and takes codePattern from the newest."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006af",
+              "leftValue": "={{ $json.code }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000607",
+      "name": "Mail code found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006b0",
+              "name": "code",
+              "value": "={{ $json.code }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000608",
+      "name": "Return the mail code",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1320,
+        -320
+      ],
+      "notes": "The one item the RPA node reads: code only."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Up to giveUpSeconds in all: waits 5 seconds, then the loop looks again. No Wait node: it would pause the bot's run.\nconst s = $('Settings').first().json;\nif (Date.now() - Date.parse(s.startedAt) > Number(s.giveUpSeconds) * 1000) {\n  throw new Error(`No mail with a code came within ${s.giveUpSeconds} seconds. Check sender, subjectHas and codePattern in Settings.`);\n}\nawait new Promise((resolve) => setTimeout(resolve, 5000));\nreturn [{ json: { tryAgain: true } }];\n"
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000609",
+      "name": "Wait, then read again",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "playwright_steps",
+        "columns": {
+          "column": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "number"
+            },
+            {
+              "name": "steps",
+              "type": "string"
+            },
+            {
+              "name": "hash",
+              "type": "string"
+            },
+            {
+              "name": "signature",
+              "type": "string"
+            },
+            {
+              "name": "approvedBy",
+              "type": "string"
+            },
+            {
+              "name": "approvedAt",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "expiresAt",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-00000000060a",
+      "name": "Create steps table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ],
+      "notes": "Makes the table when it is missing, as on a new n8n."
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "playwright_steps"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "name",
+              "condition": "eq",
+              "keyValue": "={{ $('Settings').first().json.appSteps }}"
+            },
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "active"
+            }
+          ]
+        },
+        "returnAll": false,
+        "limit": 1,
+        "orderBy": true,
+        "orderByColumn": "version",
+        "orderByDirection": "DESC"
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-00000000060b",
+      "name": "Get app steps",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        0
+      ],
+      "alwaysOutputData": true,
+      "notes": "The approved desktop steps named appSteps in Settings, newest version."
+    },
+    {
+      "parameters": {
+        "operation": "runSteps",
+        "runsOn": "desktop",
+        "steps": "={{ $json.steps ?? '' }}",
+        "requireSignedSteps": true,
+        "signature": "={{ $json.signature }}",
+        "approvedBy": "={{ $json.approvedBy }}",
+        "aiRepair": false,
+        "options": {
+          "name": "={{ $('Settings').first().json.appSteps }}",
+          "expectedVersion": "={{ $json.version }}",
+          "variables": {
+            "values": [
+              {
+                "name": "entryName",
+                "value": "={{ $('Settings').first().json.appEntry }}"
+              }
+            ]
+          },
+          "maxSeconds": 60
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-00000000060c",
+      "name": "Read the code from the app",
+      "type": "n8n-nodes-rpa.playwright",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ],
+      "notes": "Pick RPA Desktop Runner here. The steps open the authenticator app on the Windows machine, find the entry appEntry, copy its code and read it from the clipboard."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006b1",
+              "name": "code",
+              "value": "={{ $json.values?.code ?? '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-00000000060d",
+      "name": "Return the app code",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1320,
+        0
+      ],
+      "notes": "The one item the RPA node reads: code only."
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "rpa_typed_codes",
+        "columns": {
+          "column": [
+            {
+              "name": "code",
+              "type": "string"
+            },
+            {
+              "name": "account",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-00000000060e",
+      "name": "Create typed codes table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        240
+      ],
+      "notes": "Makes the table the Type a code form writes to, when it is missing."
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "rpa_typed_codes"
+        },
+        "returnAll": false,
+        "limit": 20,
+        "orderBy": true,
+        "orderByColumn": "createdAt",
+        "orderByDirection": "DESC"
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-00000000060f",
+      "name": "Get typed codes",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        240
+      ],
+      "alwaysOutputData": true,
+      "notes": "The newest codes typed on the Type a code form."
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item { code, id }: the newest code typed since the request for this account (or for any account), or code ''.\nconst s = $('Settings').first().json;\nconst since = Date.parse(s.requestedAt) - Number(s.lookBackSeconds) * 1000;\nconst account = String(s.account ?? '').trim().toLowerCase();\nconst row = $input.all().map((item) => item.json)\n  .filter((r) => r.id !== undefined && Date.parse(r.createdAt) >= since)\n  .filter((r) => !r.account || !account || String(r.account).trim().toLowerCase() === account)\n  .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];\nreturn [{ json: row ? { code: String(row.code ?? '').replace(/\\s/g, ''), id: row.id } : { code: '' } }];\n"
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000610",
+      "name": "Find the typed code",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006b2",
+              "leftValue": "={{ $json.code }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000611",
+      "name": "Typed code found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "rpa_typed_codes"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000612",
+      "name": "Remove the typed code",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        160
+      ],
+      "alwaysOutputData": true,
+      "notes": "A code is used once."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000006b3",
+              "name": "code",
+              "value": "={{ $('Find the typed code').last().json.code }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000613",
+      "name": "Return the typed code",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        160
+      ],
+      "executeOnce": true,
+      "notes": "The one item the RPA node reads: code only."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Up to giveUpSeconds in all: waits 5 seconds, then the loop looks again. No Wait node: it would pause the bot's run.\nconst s = $('Settings').first().json;\nif (Date.now() - Date.parse(s.startedAt) > Number(s.giveUpSeconds) * 1000) {\n  throw new Error(`No code was typed within ${s.giveUpSeconds} seconds. Open the Type a code form while the bot waits.`);\n}\nawait new Promise((resolve) => setTimeout(resolve, 5000));\nreturn [{ json: { tryAgain: true } }];\n"
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000614",
+      "name": "Wait, then look again",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "n8nUserAuth",
+        "requireExecuteAccess": true,
+        "path": "rpa-one-time-code",
+        "formTitle": "Type a one-time code",
+        "formDescription": "While a bot signs in, type the code the site sent you. The bot takes it within 5 seconds.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Code",
+              "fieldName": "code",
+              "fieldType": "text",
+              "placeholder": "123456",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Account (optional)",
+              "fieldName": "account",
+              "fieldType": "text",
+              "requiredField": false
+            }
+          ]
+        },
+        "options": {
+          "respondWithOptions": {
+            "values": {
+              "respondWith": "text",
+              "formSubmittedText": "Thank you. The bot uses the code once."
+            }
+          }
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000615",
+      "name": "Type a code",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        720
+      ],
+      "notes": "Opens with n8n sign-in: only people who may run this workflow can type a code. Account: the user name, when a bot signs in with more than one."
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "rpa_typed_codes",
+        "columns": {
+          "column": [
+            {
+              "name": "code",
+              "type": "string"
+            },
+            {
+              "name": "account",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000616",
+      "name": "Create typed codes table for the form",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "rpa_typed_codes"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "code": "={{ String($('Type a code').first().json.code ?? '').replace(/\\s/g, '') }}",
+            "account": "={{ String($('Type a code').first().json.account ?? '').trim() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "code",
+              "displayName": "code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "account",
+              "displayName": "account",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000617",
+      "name": "Keep the typed code",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        720
+      ],
+      "notes": "Kept until the bot uses it. This workflow saves no successful execution, so the code is not kept there."
+    },
+    {
+      "parameters": {
+        "content": "### Set once (green)\n1. In **Settings**, set `source`: `email`, `app` or `typed`.\n2. Email: open **Read new mail**, pick your mail account, turn the node on, and set `sender` and `subjectHas` in **Settings**.\n3. App: upload `docs/samples/authenticator-code.steps.json` on your import form and approve it. Pick **RPA Desktop Runner** on **Read the code from the app**.\n4. Typed: nothing to set. While the bot waits, open the **Type a code** form and type the code.\n5. Publish this workflow.\n6. On the bot's RPA node, choose this workflow in **Options → One-Time Code Workflow**.",
+        "height": 300,
+        "width": 520,
+        "color": 4
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000618",
+      "name": "Set once",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -620
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### How it works (grey)\nThe RPA node starts this workflow when the site asks for a code, with `requestedAt` and `account` (the user name). It must return one item with `code`, within **Code Timeout** on the RPA node (120 seconds). `giveUpSeconds` ends the search before that. Each source looks again every 5 seconds. A Wait node would pause the bot's run, so there is none. Successful executions are not saved, so codes do not stay in them.",
+        "height": 300,
+        "width": 520,
+        "color": 7
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000619",
+      "name": "How it works",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        520,
+        -620
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Per account (grey)\nFor the app, `appEntry` is the entry to copy in the authenticator app. It is the account's user name until you change it: make it an expression such as `({ 'user-a': 'Entry A' })[$json.account] ?? $json.account`. `source` may differ per account the same way.",
+        "height": 240,
+        "width": 520,
+        "color": 7
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-00000000061a",
+      "name": "Per account",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Code requested": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Which source?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Which source?": {
+      "main": [
+        [
+          {
+            "node": "Read new mail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create steps table",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create typed codes table",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unknown source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read new mail": {
+      "main": [
+        [
+          {
+            "node": "Find the code in the mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find the code in the mail": {
+      "main": [
+        [
+          {
+            "node": "Mail code found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mail code found?": {
+      "main": [
+        [
+          {
+            "node": "Return the mail code",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait, then read again",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait, then read again": {
+      "main": [
+        [
+          {
+            "node": "Read new mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create steps table": {
+      "main": [
+        [
+          {
+            "node": "Get app steps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get app steps": {
+      "main": [
+        [
+          {
+            "node": "Read the code from the app",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the code from the app": {
+      "main": [
+        [
+          {
+            "node": "Return the app code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create typed codes table": {
+      "main": [
+        [
+          {
+            "node": "Get typed codes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get typed codes": {
+      "main": [
+        [
+          {
+            "node": "Find the typed code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find the typed code": {
+      "main": [
+        [
+          {
+            "node": "Typed code found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Typed code found?": {
+      "main": [
+        [
+          {
+            "node": "Remove the typed code",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait, then look again",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove the typed code": {
+      "main": [
+        [
+          {
+            "node": "Return the typed code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait, then look again": {
+      "main": [
+        [
+          {
+            "node": "Get typed codes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Type a code": {
+      "main": [
+        [
+          {
+            "node": "Create typed codes table for the form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create typed codes table for the form": {
+      "main": [
+        [
+          {
+            "node": "Keep the typed code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {}
+}

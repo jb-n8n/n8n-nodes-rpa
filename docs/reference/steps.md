@@ -183,7 +183,9 @@ the code comes from somewhere else, such as an email or a desktop authenticator 
 `totp` and pick that workflow in **Options → One-Time Code Workflow**. Publish that workflow first: the node starts it
 by its ID, and n8n 2.x refuses one that is not published ("Workflow is not active and cannot be executed"). The run
 then fails `auth_blocked`. That workflow starts with an **Execute Workflow Trigger**, receives one item
-`{ requestedAt }` once the code field shows, and must return exactly one item whose `code` is 6 to 10 digits. The run
+`{ requestedAt, account }` once the code field shows (`account` is the Site Login's user name, never a secret), and
+must return exactly one item whose `code` is 6 to 10 digits. Template **RPA: 6 One-time code** is such a workflow
+([Templates](templates.md#rpa-6-one-time-code)). The run
 waits up to **Code Timeout (Seconds)** (120). The code is masked like every secret and never appears in the output,
 logs or errors. If the site rejects the code, the run runs the workflow once more. Steps with `"source": "workflow"`
 and no One-Time Code Workflow are a configuration error. The code is in that workflow's own output: in its settings,

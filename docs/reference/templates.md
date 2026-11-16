@@ -11,6 +11,7 @@ folder). Import one with **⋯ → Import → From File** in a new workflow. In 
 | `2-data-feed.json` | `RPA: 2 Data feed` | Runs every 6 hours: the newest approved steps, a run log, your destination, an alert. A chat model builds the first version from a Goal and repairs the steps when the site changes |
 | `3-approve-steps.json` | `RPA: 3 Approve steps` | Approval by email: emails the evidence, waits for a person's answer, signs the steps |
 | `5-import-a-bot.json` | `RPA: 5 Import a bot` | A form: upload a bot, review and approve it on the next page, download the workflow that runs it ([Move a bot](../guides/move-a-bot.md)) |
+| `6-one-time-code.json` | `RPA: 6 One-time code` | The workflow for **Options → One-Time Code Workflow**: returns a sign-in's one-time code from an email, an authenticator app on the Windows machine, or a person who types it ([When the site sends a one-time code](../guides/many-accounts.md#when-the-site-sends-a-one-time-code)) |
 
 Templates 2, 3 and 5, and the workflow the import form hands over, create the two Data Tables when they are missing,
 first, before anything reads or writes them.
@@ -236,6 +237,35 @@ after `approvalTimeoutHours` (72), then:
 - Approval links need a real desktop browser: n8n ignores clicks from link scanners. The compose stack's Mailpit keeps
   its mail in the `mailpit_data` volume, across a restart or an upgrade (`docker compose down -v` deletes it). If an
   approval email is lost, wait for `expiresAt`, or delete the `pending` row.
+
+## RPA: 6 One-time code
+
+The RPA node starts it when the site asks for a one-time code, with `{ requestedAt, account }` (`account` is the
+Site Login's user name). It returns one item with `code`. **Settings**:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `source` | `email` | `email`, `app` or `typed`. It may be an expression on `$json.account`, for a source per account |
+| `sender` | empty | Email: keep only mail from this address (empty: any) |
+| `subjectHas` | `code` | Email: keep only mail whose subject has this text (empty: any) |
+| `codePattern` | `\b(\d{6})\b` | Email: the code in the subject or text. With a group, the group is the code |
+| `appSteps` | `authenticator-code` | App: the name of the approved desktop steps |
+| `appEntry` | the account | App: the entry to copy in the authenticator app |
+| `lookBackSeconds` | 30 | Mail and typed codes count from this long before the request |
+| `giveUpSeconds` | 100 | It stops with a message after this long, before the RPA node's **Code Timeout** (120) |
+
+- **Email**: **Read new mail** is n8n's Microsoft Outlook node, **Get Many** messages since the request. It comes
+  turned off, so that the workflow publishes without a mail account. Pick yours and turn it on. On Gmail, put Gmail's
+  **Get Many** messages in its place: **Find the code in the mail** reads both. It reads again every 5 seconds.
+- **App**: **Read the code from the app** runs the approved desktop steps `appSteps` on the RPA Desktop Runner, with
+  `entryName` set to `appEntry`. The sample `docs/samples/authenticator-code.steps.json` waits for the app's window,
+  types the entry into Search, clicks its Copy button and reads the clipboard. Change the window title and the control
+  names to your app's, then upload it on your import form. The runner's policy needs the app and `clipboardRead`.
+- **Typed**: the **Type a code** form (n8n sign-in, for people who may run this workflow) keeps a code in the
+  `rpa_typed_codes` Data Table (`code`, `account`). The code request takes the newest code typed since the request,
+  for its account or for none, removes it, and returns it. It looks again every 5 seconds.
+- It has no Wait node: in a workflow the RPA node starts, a Wait would pause the bot's run, and the node would get no
+  code. Successful executions are not saved.
 
 ## Data Tables
 

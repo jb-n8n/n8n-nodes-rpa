@@ -360,7 +360,7 @@ describe('the steps reference', () => {
     }
     for (const text of ['INV-\\d{4}-\\d{5}', '[A-Z]{2}\\d{6}', '\\d+', '.+', 'regex101.com']) expect(flat('## ID Pattern'), text).toContain(text);
     for (const text of ['`signIn.next` is the button between them', 'only when the password field shows on a listed login page', 'a rejected username stops the run before the password is typed',
-      'an ordinary `click` step with `when`', '"next": { "role": "button", "name": "Next" }', '`"source": "workflow"`', '**Execute Workflow Trigger**', '`{ requestedAt }`',
+      'an ordinary `click` step with `when`', '"next": { "role": "button", "name": "Next" }', '`"source": "workflow"`', '**Execute Workflow Trigger**', '`{ requestedAt, account }`', 'RPA: 6 One-time code',
       'exactly one item whose `code` is 6 to 10 digits', 'Publish that workflow first', '"Workflow is not active and cannot be executed"', 'turn off saving successful executions',
       '`password_change_failed`', '`passwordChanged: true`']) expect(flat('## Sign-in'), text).toContain(text);
     for (const text of ['`packages/engine/schema/steps.schema.json`', 'draft-07', '`json.schemas`', '`$schema` key', 'refuses keys it does not know', 'seven rules', 'compiles',

@@ -1,15 +1,17 @@
 // Every template file: a well-formed workflow, and its Data Tables made before anything uses them. Each template's own
-// checks are in template-2, template-3, template-0-hello, template-5-import and template-5-change.
+// checks are in template-2, template-3, template-0-hello, template-5-import, template-5-change and template-6.
 import { describe, expect, it } from 'vitest';
 import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import { type INodeProperties } from 'n8n-workflow';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
 import { tablesNotMadeFirst, used } from './tables-made-first.js';
-import { COLOUR, DATA_TABLE, FILES, NODE_TYPE, SETTINGS_NAME, STICKY, type Template, byName, load, table } from './template-harness.js';
+import { COLOUR, DATA_TABLE, FILES, TYPED_CODES_COLUMNS, TYPED_CODES_TABLE, NODE_TYPE, SETTINGS_NAME, STICKY, type Template, byName, load, table } from './template-harness.js';
 
 const rowNodes = (t: Template) => t.nodes.filter((n) => n.type === DATA_TABLE && n.parameters.resource === 'row');
-const columnsOf: Record<string, string[]> = { [STEPS_TABLE]: STEPS_TABLE_COLUMNS.map((c) => c.name), [RUN_TABLE]: RUN_TABLE_COLUMNS.map((c) => c.name) };
+const columnsOf: Record<string, string[]> = {
+  [STEPS_TABLE]: STEPS_TABLE_COLUMNS.map((c) => c.name), [RUN_TABLE]: RUN_TABLE_COLUMNS.map((c) => c.name), [TYPED_CODES_TABLE]: TYPED_CODES_COLUMNS,
+};
 
 describe.each(Object.keys(FILES) as (keyof typeof FILES)[])('%s is a well-formed workflow', (file) => {
   const t = load(file);
