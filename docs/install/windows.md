@@ -290,7 +290,9 @@ this machine has towards n8n when `-AllowFrom` named one address, else the compu
 n8n reaches this machine by another name or address, add `-Address <that name or address>`.
 
 Paste the line into the setup command ([step 2 of the desktop bot guide](../guides/desktop-bot.md#2-set-up-n8n-with-one-command)),
-which makes the **RPA Desktop Runner** credential, or create that credential in n8n and paste it there. n8n tests the
+which makes the **RPA Desktop Runner** credential and tests the machine, or create that credential in n8n and paste it
+there. For a second machine, run the setup command again with that machine's line: it asks whether the line is another
+machine, which gets a credential of its own, or a new line for the one you have. n8n tests the
 credential when you open or save it: the window says `Connection tested successfully`. n8n checks the certificate's
 fingerprint before it sends the token. The test succeeds on a locked desktop too: only a run shows that.
 

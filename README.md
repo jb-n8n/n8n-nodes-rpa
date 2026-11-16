@@ -26,10 +26,10 @@ default a bot runs only steps that a person reviewed and approved.
 ### A browser bot
 
 1. Start n8n, a browser and a sample site with `docker compose up` from this repository.
-2. Add an **RPA Site Login** for the sample site.
-3. Set up the **Import a bot** form with one command, run in the n8n container. It gives the form that Site Login.
-4. Upload the sample bot on the form, review its steps and approve them.
-5. Import the workflow the form gives you and run it. It signs in and returns a report as a CSV file, with no AI model.
+2. Set up the **Import a bot** form with one command, run in the n8n container. It also makes the sample site's
+   **RPA Site Login** and gives it to the form.
+3. Upload the sample bot on the form, review its steps and approve them.
+4. Import the workflow the form gives you and run it. It signs in and returns a report as a CSV file, with no AI model.
 
 Then a chat model can let a bot repair itself when the site changes.
 Guide: [Your first browser bot](docs/guides/browser-bot.md).
@@ -37,7 +37,8 @@ Guide: [Your first browser bot](docs/guides/browser-bot.md).
 ### A Windows desktop bot
 
 1. On Windows Server, run `.\Get-Rpa.ps1 -AllowFrom <n8n address>` as administrator. It gives a **Connection Line**.
-2. Set up n8n with one command: the **Import a bot** form, and the Windows machine from the line you paste.
+2. Set up n8n with one command: the **Import a bot** form, and the Windows machine from the line you paste, which it
+   tests.
 3. Record the work with the **RPA Recorder**, allow the app with one button, and choose **Open the import form**.
 4. Upload the recording on the form, review the steps and approve them.
 5. Import the workflow the form gives you, add the password, and run it.

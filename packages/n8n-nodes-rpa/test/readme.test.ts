@@ -163,8 +163,8 @@ describe('the browser bot guide', () => {
   it('gets a person to a first bot through the import form: one-command start, the setup command, the sample, approve, run', () => {
     for (const text of [
       'openssl rand -hex 32', 'BROWSER_TOKEN', 'docker compose up --build -d', 'docker compose up -d browser', 'http://localhost:5678', 'http://localhost:8025',
-      SETUP_IN_STACK, 'Connect a Windows machine now?', 'The import form is ready.', "no API key", 'Update this form to this version? (y/N)',
-      '+ → New credential → RPA Site Login', '--site-login "RPA Site Login account" --allow-private-network', 'Private network: on.', 'docs/samples/sandbox-line-items.steps.json', '**Allow access**',
+      `${SETUP_IN_STACK} --sample-site`, 'The import form is ready.', "no API key", 'Update this form to this version? (y/N)',
+      '+ → New credential → RPA Site Login', '--new-workflow --site-login "RPA Site Login account"', 'Private network: on.', 'docs/samples/sandbox-line-items.steps.json', '**Allow access**',
       'Approved and signed: sandbox-line-items version 1 is now the version that runs under that name.', 'sandbox-line-items.workflow.json',
       'packages/n8n-nodes-rpa/templates/hello-world.json', 'docker-compose.dev.yml', 'SKU-1001', 'Private Network Endpoint', TOKEN_REFUSED, 'Mismatching encryption keys',
     ]) expect(doc.browserBot, text).toContain(text);
@@ -177,13 +177,21 @@ describe('the browser bot guide', () => {
     expect(read('README.md')).not.toContain('It asks for an n8n API key');
   });
 
-  it('makes the Site Login before the setup command, which picks it by the name n8n gives it: no step opens the import workflow', () => {
+  it('the setup command makes the sample site\'s Site Login (--sample-site): no step makes one by hand, asks about Windows, or opens the import workflow', () => {
     const headings = doc.browserBot.match(/^## \d+\. .+$/gm) ?? [];
     expect(headings.slice(0, 5)).toEqual([
-      '## 1. Start n8n and the browser', "## 2. Add the sample site's login", '## 3. Set up the import form with one command',
-      '## 4. Import the sample bot and approve it', '## 5. Run it',
+      '## 1. Start n8n and the browser', '## 2. Set up the import form with one command',
+      '## 3. Import the sample bot and approve it', '## 4. Run it', '## 5. Run it on a schedule',
     ]);
-    expect(section(doc.browserBot, "## 2. Add the sample site's login")).toContain('n8n names it **RPA Site Login account**');
+    const setup = section(doc.browserBot, '## 2. Set up the import form with one command');
+    for (const text of ['--sample-site', '**RPA Site Login (sample site)**', 'Made "RPA Step Signing", "RPA Browser", "RPA Site Login (sample site)" and the form "RPA: 5 Import a bot".']) expect(setup, text).toContain(text);
+    // The output block ends with the address, alone on its line.
+    const block = /```text\n([\s\S]*?)```/.exec(setup)?.[1] ?? '';
+    expect(block.trimEnd().split('\n').at(-1)).toBe('  Address:    http://localhost:5678/form/rpa-import');
+    expect(block.split('\n').filter(Boolean).length).toBeLessThanOrEqual(10);
+    expect(doc.browserBot).not.toContain('Connect a Windows machine');
+    // A real site's Site Login is made by a person, under Your own site.
+    expect(doc.browserBot).toContain('n8n names it **RPA Site Login account**');
     expect(doc.browserBot).not.toContain('## 4. Give the import form the Site Login');
     expect(doc.browserBot).not.toContain('Open the workflow **RPA: 5 Import a bot**');
   });
@@ -222,7 +230,9 @@ describe('the desktop bot guide and the Windows guide', () => {
   it('teaches the short path: one command, one line, record, approve on the form, run', () => {
     for (const text of ['.\\Get-Rpa.ps1 -AllowFrom <n8n address>', '& "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens', '**Connection Line**',
       'Which of these change from run to run?', '**Allow this app…**', 'packages/n8n-nodes-rpa/templates/5-import-a-bot.json', '**Approve and sign**',
-      'Approved and signed: erp-line-items version 1 is now the version that runs under that name.', '**RPA Secret Variables**', '**Not released yet.**']) {
+      'Approved and signed: erp-line-items version 1 is now the version that runs under that name.', '**RPA Secret Variables**', '**Not released yet.**',
+      // The setup command asks for the line only on a Windows setup, tests the machine, and asks about a second machine.
+      'n8n-nodes-rpa setup --windows', 'Paste the Connection Line, which starts', 'The Windows machine is connected.', 'another Windows machine (a)', '`RPA Desktop Runner (<address>)`']) {
       expect(doc.desktopBot, text).toContain(text);
     }
   });

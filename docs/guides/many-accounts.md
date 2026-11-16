@@ -39,7 +39,7 @@ signed in as. An empty TOTP Secret means that account gets no code.
 
 One approval covers every account: a signature binds the Site Login's credential ID, not the values it holds. Give this
 Site Login an import form of its own, beside the one you have, with one command (here for a Site Login named
-**Sample accounts**, in the compose stack, as in step 3 of the [browser bot guide](browser-bot.md), with no API key):
+**Sample accounts**, in the compose stack, as in step 2 of the [browser bot guide](browser-bot.md), with no API key):
 
 ```bash
 docker compose exec n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --new-workflow --site-login "Sample accounts" --allow-private-network
@@ -47,7 +47,7 @@ docker compose exec n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --new
 
 It makes and publishes **RPA: 5 Import a bot (Sample accounts)**, with this Site Login on **Import steps** and **Sign
 steps**, and prints its address: `/form/rpa-import-sample-accounts`. It does not ask about a Windows machine: a Site
-Login's own form uses your project's RPA Desktop Runner when the project has exactly one, and says so in one line. Run again, also after the Site Login was renamed,
+Login's own form uses your project's RPA Desktop Runner when the project has exactly one. Run again, also after the Site Login was renamed,
 it finds that form by the Site Login it holds and makes no second one. It signs with the same **RPA Step Signing** key
 and leaves your first form as it is. Leave out `--allow-private-network` for a site on the internet. Use this form for
 the bots of this Site Login: the workflow it hands over has the Site Login on its RPA node, and its note names this form
@@ -68,7 +68,7 @@ on its **Sign steps** signs for that one, and the bot then does not run with thi
 The sample site of [Your first browser bot](browser-bot.md) has three accounts: `summit-ops`, the one of that guide,
 `lakeside-ops`, which always asks for a one-time code, and `harbor-ops`, which never does.
 
-1. Make the Site Login above, with the other fields as in step 2 of the browser bot guide, and name it
+1. Make the Site Login above, with the other fields as the sample's Site Login in step 2 of the browser bot guide, and name it
    **Sample accounts**. Give it its own form with the command above.
 2. On that form, upload `docs/samples/sandbox-rows.steps.json` with the name `sandbox-rows-accounts`, and choose
    **Approve and sign**. Import the workflow it hands over (**⋯ → Import → From File**).
