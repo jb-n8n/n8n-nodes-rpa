@@ -135,7 +135,7 @@ is checked, because the click may lead to another page or open a menu. For examp
 ```
 Choose 1000 in Company: No element found for Form Label "Company" on http://sandbox:8080/sap(…)/bc/gui/sap/its/webgui
 after 30 s. The page shows these fields and lists: "Company Code", "From", "To". To go on, change the step's control
-name to one the page shows: with Change the steps as JSON on the import form, or in the file. Steps 6, 7 and 8 were checked on this page too, without acting. Step 6 (Type into Date from) cannot
+name to one the page shows: with Change values or Change the steps as JSON on the import form, or in the file. Steps 6, 7 and 8 were checked on this page too, without acting. Step 6 (Type into Date from) cannot
 find Form Label "Date from" here either. The page shows these fields and lists: "From", "To", "Company Code". Step 8
 (Click Execute) cannot find Role and Name button "Execute" here either. The page shows these links and buttons: "Run",
 "Back". Step 9 was not checked: it comes after a step that can change the page.

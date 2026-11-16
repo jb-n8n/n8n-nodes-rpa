@@ -168,10 +168,10 @@ export const signedStepMessage = (message: string): string =>
   message.replace(/Check the spelling or try Find by: (?:Visible Text|Role and Name)\./, SIGNED_CONTROL_GONE);
 /**
  * For the import form's replay (runDraft), in place of locatorSuggestion: the person on the form changes the step
- * itself, as JSON or in the file, not a Find by field, using the names the message lists.
+ * itself, on the values page, as JSON or in the file, not a Find by field, using the names the message lists.
  */
 export const IMPORT_CONTROL_GONE =
-  "To go on, change the step's control name to one the page shows: with Change the steps as JSON on the import form, or in the file.";
+  "To go on, change the step's control name to one the page shows: with Change values or Change the steps as JSON on the import form, or in the file.";
 /** A failure of the import's replay: the Find-by advice of locatorNotFound replaced by IMPORT_CONTROL_GONE; anything else unchanged. */
 export const importStepMessage = (message: string): string =>
   message.replace(/Check the spelling or try Find by: (?:Visible Text|Role and Name)\./, IMPORT_CONTROL_GONE);

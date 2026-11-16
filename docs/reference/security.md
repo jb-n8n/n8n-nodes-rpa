@@ -151,9 +151,9 @@ a file only its user can read, which is removed right after, never in a command'
   approved on another import form ends there, and only "I changed the signing key or the row was changed" shows the
   steps.
   With its box left empty, the steps signed again are the row's own, read in n8n: they do not pass through the browser.
-  **Change values** sends only the values back, from a page of fields: n8n puts each one into the row's steps, as
-  text, in place of the old value at the place it was read from, and into the step's own description where that
-  quotes the old value. A value with `{{` is refused, because steps read `{{` as a variable. n8n fills the values
+  **Change values** sends only the values and control names back, from a page of fields: n8n puts each one into the
+  row's steps, as text, in place of the old one at the place it was read from, and into the step's own description
+  where that quotes the old one. A value with `{{` is refused, because steps read `{{` as a variable. n8n fills the values
   page's fields from an address only through the form's first page, which refuses an address with values.
   What comes back from those pages is a new import: the same review page, the same checks by Sign Steps, the approver on
   the allowlist, and a new row that supersedes the old one only when it is approved. Nothing is signed again without a

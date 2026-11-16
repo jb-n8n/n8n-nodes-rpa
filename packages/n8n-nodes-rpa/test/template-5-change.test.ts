@@ -321,19 +321,54 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // A run variable says where it IS changed: on the bot's workflow, not on this form (W6-5).
     const VARIABLE = "a run variable, so it is not changed here: change it on the bot's workflow, in the RPA node's Options → Variables (a secret one in the RPA Secret Variables credential that node uses)";
     const CANNOT = 'a field cannot hold it as it is';
+    // A browser step's control, by a plain name (a role's name, a field's label, a visible text) in the comparison's
+    // words, before the step's value; a control found otherwise is listed without a field, with the reason (entry 6).
+    const c = (step: number, at: string, inner: string, key: string, word: string, value: string, why = '') => ({ step, name: `name_${step}`, at, inner, key, label: `${step}. ${word}`, value, offered: why === '', why });
+    const AS_JSON = ', so it is changed with Change the steps as JSON';
     expect(bot.values).toEqual([
       v(1, 'goto', 'goto', '1. Open: address', `${SITE.url}/list?x=1`),
+      c(2, 'fill', 'field', 'name', 'Type into: control name', 'User name'),
       v(2, 'fill', 'value', '2. Type into User name: typed value', 'clerk'),
+      c(3, 'fill', 'field', 'label', 'Type into: field label', 'Password'),
       v(3, 'fill', 'value', '3. Type into Password: typed value', '{{var.pin}}', VARIABLE),
+      c(4, 'fill', 'field', '', 'Type into: control', '#note <b>', `found by a selector, not by a name${AS_JSON}`),
       v(4, 'fill', 'value', '4. Type into the element matching #note ‹b›: typed value', 'Dear {{ var.name }}', VARIABLE),
+      c(5, 'select', 'field', '', 'Choose in: control', 'region', `found by a test id, not by a name${AS_JSON}`),
       v(5, 'select', 'value', '5. Choose in region: chosen option', 'EMEA'),
+      c(6, 'select', 'field', 'text', 'Choose in: visible text', 'Tags'),
       v(6, 'select', 'value', '6. Choose in Tags: chosen option', 'a, b', 'several options'),
+      c(7, 'fill', 'field', '', 'Type into: control', 'textbox', `found by its role alone, not by a name${AS_JSON}`),
       v(7, 'fill', 'value', '7. Type into the textbox: typed value', '<b>bold</b>', CANNOT),
+      c(8, 'fill', 'field', 'label', 'Type into: field label', 'Comment'),
       v(8, 'fill', 'value', '8. Type into Comment: typed value', 'one\ntwo', CANNOT),
+      c(9, 'fill', 'field', 'label', 'Type into: field label', 'Code'),
       v(9, 'fill', 'value', '9. Type into Code: typed value', ' A1', CANNOT),
+      c(10, 'click', '', 'name', 'Click: control name', 'Save'),
+      c(11, 'fill', 'field', 'label', 'Type into: field label', 'Empty'),
       v(11, 'fill', 'value', '11. Type into Empty: typed value', ''),
+      c(12, 'fill', 'field', 'label', 'Type into: field label', 'X'),
       v(13, 'goto', 'goto', '13. Open: address', '/next'),
+      c(14, 'fill', 'field', 'label', 'Type into: field label', 'L'.repeat(100)),
       v(14, 'fill', 'value', `14. Type into ${'L'.repeat(79)}…: typed value`, 'x'),
+    ]);
+    // Names a field cannot hold, a name that is a variable, and a control found by its position are listed without a field.
+    const named = (steps: unknown[]) => changePath('n', [{ id: 1, name: 'n', version: 1, steps: JSON.stringify({ startUrl: `${SITE.url}/a`, steps }), status: 'active' }]).bot.values;
+    expect(named([
+      { intent: 'Click', click: { role: 'link', name: 'A <b>' } },
+      { intent: 'Click', click: { text: ' Lead' } },
+      { intent: 'Click', click: { role: 'button', name: '{{var.b}}' } },
+      { intent: 'Click', click: { role: 'button', name: 'Go', within: { css: 'tr:nth-child(2)' } } },
+      { intent: 'Wait', waitFor: { target: { role: 'heading', name: 'Report' } } },
+      { intent: 'Wait', waitFor: { response: { urlContains: '/x' } } },
+      { intent: 'Download', download: { trigger: { role: 'button', name: 'Export' } } },
+      { intent: 'Sign in', signIn: { username: { label: 'User' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } },
+    ])).toEqual([
+      c(1, 'click', '', 'name', 'Click: control name', 'A <b>', CANNOT),
+      c(2, 'click', '', 'text', 'Click: visible text', ' Lead', CANNOT),
+      c(3, 'click', '', 'name', 'Click: control name', '{{var.b}}', 'not a fixed name: it is filled in when the bot runs'),
+      c(4, 'click', '', '', 'Click: control', 'Go', `found by its position, not by a name alone${AS_JSON}`),
+      c(5, 'waitFor', 'target', 'name', 'Wait for: control name', 'Report'),
+      c(7, 'download', 'trigger', 'name', 'Download with: control name', 'Export'),
     ]);
     // Desktop steps: the control's own name (or automation id) from its UI Automation path, the option a step chooses; a
     // file the runner saves into its export folder is not a fixed value.
@@ -369,15 +404,23 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     });
     // jsonFormFields checks that the expression holds no "{{" or "}}" and that no "$" reaches n8n's String.replace.
     const fields = valuesFields(rows, 'line-items <b>');
-    expect(fields[0]).toEqual({ fieldType: 'html', html: '<p>Each field holds a value that <b>line-items &lt;b&gt;</b> (version 3) types, chooses or opens, as approved, in step order. Change the ones you need, then click Review: the review page shows each change, old → new. Where a step\'s description quotes the old value, it gets the new one too.</p>'
-      + '<p>Everything else (steps to add or remove, how a step finds its control, waits, write marks, file names) is changed with Change the steps as JSON.</p>'
+    expect(fields[0]).toEqual({ fieldType: 'html', html: '<p>Each field holds a value that <b>line-items &lt;b&gt;</b> (version 3) types, chooses or opens, or the name of a control a browser step uses, as approved, in step order. Change the ones you need, then click Review: the review page shows each change, old → new. Where a step\'s description quotes the old value or name, it gets the new one too.</p>'
+      + '<p>Everything else (steps to add or remove, a control found by a selector or its position, a desktop control, waits, write marks, file names) is changed with Change the steps as JSON.</p>'
       + '<p><em>Any signed-in n8n user who has the address of this page can read these values, so do not share it.</em></p>' });
     expect(fields.slice(1)).toEqual([
       { fieldLabel: '1. Open: address', fieldName: 'value_1', fieldType: 'text', defaultValue: `${SITE.url}/acme/reports`, requiredField: false },
+      // A control's name is required: a step cannot find a control by an empty name.
+      { fieldLabel: '2. Click: control name', fieldName: 'name_2', fieldType: 'text', defaultValue: 'Line Item Report', requiredField: true },
+      { fieldLabel: '3. Type into: field label', fieldName: 'name_3', fieldType: 'text', defaultValue: 'From', requiredField: true },
       { fieldLabel: '3. Type into From: typed value', fieldName: 'value_3', fieldType: 'text', defaultValue: '2026-09-01', requiredField: false },
+      { fieldLabel: '4. Type into: field label', fieldName: 'name_4', fieldType: 'text', defaultValue: 'To', requiredField: true },
       { fieldLabel: '4. Type into To: typed value', fieldName: 'value_4', fieldType: 'text', defaultValue: '2026-09-15', requiredField: false },
+      { fieldLabel: '5. Choose in: control name', fieldName: 'name_5', fieldType: 'text', defaultValue: 'Status', requiredField: true },
       { fieldLabel: '5. Choose in Status: chosen option', fieldName: 'value_5', fieldType: 'text', defaultValue: 'Posted', requiredField: false },
+      { fieldLabel: '6. Download with: control name', fieldName: 'name_6', fieldType: 'text', defaultValue: 'Export', requiredField: true },
+      { fieldLabel: '7. Type into: field label', fieldName: 'name_7', fieldType: 'text', defaultValue: 'PIN', requiredField: true },
       { fieldType: 'html', html: '<p><em>7. Type into PIN: typed value &quot;{{var.pin}}&quot;: a run variable, so it is not changed here: change it on the bot&#39;s workflow, in the RPA node&#39;s Options → Variables (a secret one in the RPA Secret Variables credential that node uses).</em></p>' },
+      { fieldLabel: '8. Type into: field label', fieldName: 'name_8', fieldType: 'text', defaultValue: 'Note', requiredField: true },
       // "$" comes back as written (the page writes it as $, so n8n's String.replace leaves it alone).
       { fieldLabel: '8. Type into Note: typed value', fieldName: 'value_8', fieldType: 'text', defaultValue: 'a $& b $1 & "c"', requiredField: false },
       { fieldType: 'hiddenField', fieldName: 'valuesPage', fieldValue: 'answered' },
@@ -385,7 +428,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // No default value holds < or >: n8n would escape them (type-validation.ts tryToParseJsonToFormFields) and the field
     // would show and send back &lt; and &gt;. Such a value is shown as text instead (the list above).
     const withMarkup = valuesFields([{ id: 1, name: 'm', version: 1, steps: JSON.stringify({ ...LINE_ITEMS, steps: [{ intent: 'x', fill: { field: { label: 'A<b>' }, value: '<i>x</i>' } }] }), status: 'active' }], 'm');
-    expect(withMarkup.slice(1, -1)).toEqual([{ fieldType: 'html', html: '<p><em>1. Type into A‹b›: typed value &quot;&lt;i&gt;x&lt;/i&gt;&quot;: a field cannot hold it as it is.</em></p>' }]);
+    expect(withMarkup.slice(1, -1)).toEqual([
+      { fieldType: 'html', html: '<p><em>1. Type into: field label &quot;A&lt;b&gt;&quot;: a field cannot hold it as it is.</em></p>' },
+      { fieldType: 'html', html: '<p><em>1. Type into A‹b›: typed value &quot;&lt;i&gt;x&lt;/i&gt;&quot;: a field cannot hold it as it is.</em></p>' },
+    ]);
+    // A control found by a selector: no field, the reason said.
+    const bySelector = valuesFields([{ id: 1, name: 'm', version: 1, steps: JSON.stringify({ ...LINE_ITEMS, steps: [{ intent: 'x', click: { css: 'tr:nth-child(1) button' } }] }), status: 'active' }], 'm');
+    expect(bySelector.slice(1, -1)).toEqual([{ fieldType: 'html', html: '<p><em>1. Click: control &quot;tr:nth-child(1) button&quot;: found by a selector, not by a name, so it is changed with Change the steps as JSON.</em></p>' }]);
     // With Basic Auth (or none), anyone who has the page's address.
     expect(String(valuesFields(rows, 'line-items <b>', 'basicAuth')[0].html)).toContain('<p><em>Anyone who has the address of this page can read these values, so do not share it.</em></p>');
     expect(render(String((page.parameters.options as IDataObject).formTitle), { $: changePath('line-items <b>', rows).$ })).toBe('Change values: line-items <b>');
@@ -429,6 +478,20 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const more = valuesAnswered(ran, { value_1: `${SITE.url}/acme/reports?year=2026`, value_5: 'Open' });
     expect(more.applied.changed).toEqual([1, 5]);
     expect(more.line?.compared).toBe(`line-items: changed from the approved version 1: step 1: description "Open ${SITE.url}/acme/reports" → "Open ${SITE.url}/acme/reports?year=2026", address "${SITE.url}/acme/reports" → "${SITE.url}/acme/reports?year=2026"; step 5: description "Choose "Posted" in Status" → "Choose "Open" in Status", chosen option "Posted" → "Open".`);
+    // A renamed control (entry 6): the name is put in where the step finds its control, the description follows, and
+    // the review page's line names it in the comparison's own words, old → new. Role and exact match stay as they were.
+    const renamed = valuesAnswered(ran, { name_2: 'G/L Line Items', name_4: 'Date to', value_4: '2026-09-30', name_6: 'Export' });
+    expect(renamed.applied.changed).toEqual([2, 4]);
+    const after = JSON.parse(renamed.applied.steps) as typeof LINE_ITEMS;
+    expect(after.steps[1]).toEqual({ intent: 'Click G/L Line Items', click: { role: 'link', name: 'G/L Line Items' } });
+    expect(after.steps[3]).toEqual({ intent: 'Type into Date to: "2026-09-30"', fill: { field: { label: 'Date to' }, value: '2026-09-30' } });
+    expect(after.steps.filter((_, i) => i !== 1 && i !== 3)).toEqual(LINE_ITEMS.steps.filter((_, i) => i !== 1 && i !== 3));
+    expect(renamed.line?.compared).toBe('line-items: changed from the approved version 1: step 2: description "Click Line Item Report" → "Click G/L Line Items", control name "Line Item Report" → "G/L Line Items"; step 4: description "Type into To: "2026-09-15"" → "Type into Date to: "2026-09-30"", field label "To" → "Date to", typed value "2026-09-15" → "2026-09-30".');
+    // An empty name (a forged answer: the page requires one) changes nothing; "{{" in a name is refused as in a value.
+    expect(valuesAnswered(ran, { name_2: '   ' }).applied).toEqual(same.applied);
+    const varName = valuesAnswered(ran, { name_2: '{{var.x}}', value_4: '{{var.y}}' }).applied;
+    expect(varName).toMatchObject({ answered: true, changed: [], steps: '' });
+    expect(varName.refused).toMatch(/^The new values of steps 2 and 4 hold/);
   });
 
   it('a value is taken as text: it cannot add a key, leave its string or become a variable; "{{" is refused with a sentence and nothing is imported', () => {
@@ -442,11 +505,18 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       expect(keys(doc), typed).toEqual(keys(LINE_ITEMS));
       expect(doc.steps[3].fill?.value, typed).toBe(typed);
       expect(doc.steps.filter((_, i) => i !== 3), typed).toEqual(LINE_ITEMS.steps.filter((_, i) => i !== 3));
+      // A control's name the same way: text at the one key it was found at.
+      const n = valuesAnswered(ran, { name_2: typed });
+      expect(n.ok, typed).toBe(true);
+      const named = JSON.parse(n.applied.steps) as typeof LINE_ITEMS;
+      expect(keys(named), typed).toEqual(keys(LINE_ITEMS));
+      expect(named.steps[1].click?.name, typed).toBe(typed);
+      expect(named.steps.filter((_, i) => i !== 1), typed).toEqual(LINE_ITEMS.steps.filter((_, i) => i !== 1));
     }
     // Keys that are not fields of this page change nothing: another step's number, a value without a field, the page's
     // own names.
     const odd = valuesAnswered(lineItems({ ...LINE_ITEMS, steps: [...LINE_ITEMS.steps, { intent: 'PIN', fill: { field: { label: 'PIN' }, value: '{{var.pin}}', secret: true } }] }).ran,
-      { value_2: 'x', value_6: 'x', value_7: 'typed', value_99: 'x', steps: '[]', choice: SIGN_AGAIN, ...(JSON.parse('{"__proto__": {"polluted": true}}') as IDataObject) });
+      { value_2: 'x', value_6: 'x', value_7: 'typed', value_99: 'x', name_1: 'x', name_99: 'x', steps: '[]', choice: SIGN_AGAIN, ...(JSON.parse('{"__proto__": {"polluted": true}}') as IDataObject) });
     expect(odd.applied).toEqual({ answered: true, refused: '', changed: [], steps: '' });
     expect(({} as IDataObject).polluted).toBeUndefined();
     // "{{" would make the value a template the run renders (renderVars: any "{{…}}"); the steps have no way to say "this
@@ -694,7 +764,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       expect(JSON.parse(unescaped)).toEqual(doc);
       // Short sentences: what runs, how to choose (and why Change values is not offered), and two notes.
       expect(html.replace(/<pre>[\s\S]*<\/pre>/, '<pre/>')).toBe('<p>These are the steps that run now as <b>feed &lt;b&gt;</b> (version 1).</p><pre/>'
-        + '<p>Choose what to do below. To change the steps, choose Change the steps as JSON and paste the changed steps in the box. This bot has no value that a page of fields can offer, so Change values is not offered.</p>'
+        + '<p>Choose what to do below. To change the steps, choose Change the steps as JSON and paste the changed steps in the box. This bot has no value or control name that a page of fields can offer, so Change values is not offered.</p>'
         + '<p><em>This form cannot tell steps signed with an older key from steps changed in the table, so read every step on the next page.</em></p>'
         + `<p><em>${who}</em></p>`);
       expect(render(String((page.parameters.options as IDataObject).formTitle), { $ })).toBe('Change or sign again: feed <b>');
@@ -713,12 +783,16 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const offered = (n: number) => jsonFormFields(String(page.parameters.jsonOutput), { $: changePath('feed', [{ id: 1, name: 'feed', version: 1, steps: JSON.stringify(dated(n)), status: 'active' }]).$ });
     const three = offered(1);
     expect(three[1].fieldOptions).toEqual({ values: [{ option: SIGN_AGAIN }, { option: VALUES }, { option: CHANGE }] });
-    expect(String(three[0].html)).toContain('<p>Choose what to do below. To change a date, a text the bot types, an option it chooses or an address it opens, choose Change values: the next page offers each value as a field. To add or remove steps, choose Change the steps as JSON and paste the changed steps in the box.</p>');
-    // At most 40 fields on one page: more, and the page says so and offers the JSON way only.
+    expect(String(three[0].html)).toContain('<p>Choose what to do below. To change a date, a text the bot types, an option it chooses, an address it opens or the name of a control it uses, choose Change values: the next page offers each value as a field. To add or remove steps, choose Change the steps as JSON and paste the changed steps in the box.</p>');
+    // At most 80 fields on one page (here a field's label and its value per step): more, and the page says so and
+    // offers the JSON way only.
     expect(offered(40)[1].fieldOptions).toEqual({ values: [{ option: SIGN_AGAIN }, { option: VALUES }, { option: CHANGE }] });
     const many = offered(41);
     expect(many[1].fieldOptions).toEqual({ values: [{ option: SIGN_AGAIN }, { option: CHANGE }] });
-    expect(String(many[0].html)).toContain('This bot has 41 values, more than one page of fields shows well, so Change values is not offered.');
+    expect(String(many[0].html)).toContain('This bot has 82 values and control names, more than one page of fields shows well, so Change values is not offered.');
+    // Only clicks: their control names are offered.
+    const clicks = jsonFormFields(String(page.parameters.jsonOutput), { $: changePath('feed', [{ id: 1, name: 'feed', version: 1, steps: JSON.stringify({ startUrl: `${SITE.url}/a`, steps: [{ intent: 'Click Go', click: { role: 'button', name: 'Go' } }] }), status: 'active' }]).$ });
+    expect(clicks[1].fieldOptions).toEqual({ values: [{ option: SIGN_AGAIN }, { option: VALUES }, { option: CHANGE }] });
   });
 
   it('an empty box signs the table\'s own steps byte for byte; a pasted text is the change; text that does not parse changes nothing', async () => {
