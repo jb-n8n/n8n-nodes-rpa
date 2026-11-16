@@ -38,7 +38,7 @@ The image is `ghcr.io/jb-n8n/rpa-browser:<version>`, built from `images/browser/
 **Publishing it (owner, once).** `.github/workflows/browser-image.yml` publishes only from a `browser-v<major>.<minor>.<patch>` tag on `main`, or from `main` by hand, after the image's tests pass. Before the first publish:
 
 1. Create the GitHub environment `ghcr` (**Settings → Environments**). Add required reviewers, and a deployment branch and tag policy that allows only `main` and `browser-v*`. Without it, GitHub creates the environment on the first run with no approval gate.
-2. Push a tag, for example `git tag browser-v0.1.0 && git push origin browser-v0.1.0`, and approve the run.
+2. Push a tag, for example `git tag browser-v0.2.0 && git push origin browser-v0.2.0`, and approve the run.
 3. Make the package public (**Packages → rpa-browser → Package settings → Change visibility**).
 4. Check the provenance: `gh attestation verify oci://ghcr.io/jb-n8n/rpa-browser:<version> --owner jb-n8n`.
 

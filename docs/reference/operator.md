@@ -18,7 +18,7 @@ and the n8n settings that matter.
   attestation and its SHA-256. Check it and install it into n8n's nodes folder as the user n8n runs as, then restart n8n:
 
   ```sh
-  v=0.1.0
+  v=0.2.0
   gh release download "v$v" --repo jb-n8n/n8n-nodes-rpa --pattern "n8n-nodes-rpa-$v.tgz*"
   gh attestation verify "n8n-nodes-rpa-$v.tgz" --repo jb-n8n/n8n-nodes-rpa
   sha256sum -c "n8n-nodes-rpa-$v.tgz.sha256"   # macOS: shasum -a 256 -c
