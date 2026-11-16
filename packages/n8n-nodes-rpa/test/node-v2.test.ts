@@ -259,7 +259,7 @@ describe('the templates\' RPA nodes are version 2, and that changes nothing they
   });
 
   it('every RPA node of every template is version 2; Import steps keeps Browser and desktop apps, typed', () => {
-    expect(rpaNodes.length).toBe(8);
+    expect(rpaNodes.length).toBe(9);
     for (const { file, node } of rpaNodes) expect(node.typeVersion, `${file} ${node.name}`).toBe(2);
     const imp = rpaNodes.find(({ node }) => node.parameters.operation === 'importSteps')!.node;
     expect(imp.parameters.runsOn).toBe('browserAndDesktop');
@@ -278,7 +278,8 @@ describe('the templates\' RPA nodes are version 2, and that changes nothing they
       const then = fields(node.parameters, 1);
       const moved = op === 'runSteps' ? ['signature', 'approvedBy'] : [];
       expect(names(now.params).filter((n) => n !== SHARE_ACROSS_WORKERS), what).toEqual(names(then.params).filter((n) => !moved.includes(n)));
-      expect(names(now.params).includes(SHARE_ACROSS_WORKERS), what).toBe(op === 'runSteps' || op === 'importSteps');
+      // A Windows desktop app hides the switch, as it hides RPA Redis (template 6's Read the code from the app).
+      expect(names(now.params).includes(SHARE_ACROSS_WORKERS), what).toBe((op === 'runSteps' || op === 'importSteps') && node.parameters.runsOn !== 'desktop');
       expect(names(now.settings), what).toEqual(moved);
       // Every credential the template's node could be given is kept as at version 1, except RPA Redis behind the switch.
       const all = { ...node, credentials: Object.fromEntries(TYPES.map((t) => [t, { id: t, name: t }])) };

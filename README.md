@@ -103,7 +103,7 @@ run `rpa status` there. Every option, the token gate, TLS and version matching:
 ## Project status
 
 What exists:
-- The node with nine operations and six credentials, and four workflow templates plus a hello-world.
+- The node with nine operations and six credentials, and five workflow templates plus a hello-world.
 - The Windows package: the desktop runner, the browser, the RPA Recorder, the policy tool and a one-command installer.
 - End-to-end runs on a real n8n and a real Windows Server 2022: a recorded desktop bot from install to a scheduled run,
   a browser bot through the import form, and the self-healing data feed against the sample site.

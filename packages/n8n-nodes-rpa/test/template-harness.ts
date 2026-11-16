@@ -40,8 +40,12 @@ export const FILES = {
   '2-data-feed.json': 'RPA: 2 Data feed',
   '3-approve-steps.json': 'RPA: 3 Approve steps',
   '5-import-a-bot.json': 'RPA: 5 Import a bot',
+  '6-one-time-code.json': 'RPA: 6 One-time code',
   'hello-world.json': 'RPA: Hello world',
 } as const;
+/** Template 6's own Data Table: the codes a person types on its Type a code form, until a code request uses one. */
+export const TYPED_CODES_TABLE = 'rpa_typed_codes';
+export const TYPED_CODES_COLUMNS = ['code', 'account'];
 export const load = (file: string): Template => JSON.parse(readFileSync(new URL(`../templates/${file}`, import.meta.url), 'utf8')) as Template;
 export const NODE_TYPE = 'n8n-nodes-rpa.playwright';
 export const STICKY = 'n8n-nodes-base.stickyNote';

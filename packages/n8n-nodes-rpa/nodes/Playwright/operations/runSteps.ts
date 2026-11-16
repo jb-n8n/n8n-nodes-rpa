@@ -135,7 +135,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     trust,
     policy,
     ...(siteLogin ? { secrets: siteLogin.secrets } : {}),
-    ...codeSettingsFor(ctx, p),
+    ...codeSettingsFor(ctx, p, account),
     endpoint,
     ...(p.output ? { output: p.output } : {}),
     vars: p.vars,

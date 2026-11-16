@@ -40,18 +40,20 @@ const notPublished = (n8nWords: string) =>
   `it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (${n8nWords.slice(0, 90)})`;
 
 /**
- * The engine's codeProvider for Options → One-Time Code Workflow: runs that workflow with one item { requestedAt } and
- * takes json.code from its single output item. Everything else it returns is dropped. Its errors never carry the code:
+ * The engine's codeProvider for Options → One-Time Code Workflow: runs that workflow with one item { requestedAt, account }
+ * and takes json.code from its single output item. Everything else it returns is dropped. Its errors never carry the code:
  * a returned value is never repeated, and a failing workflow's message keeps only its first line, with numbers of four or
  * more digits removed, spaces between the digits included ("123 456"); a workflow n8n refuses as "not active" is named as
  * not published, with n8n's words in brackets. The engine shows these errors after "the one-time code workflow failed: ".
+ * `account` is the Site Login's user name, the value the run's output shows as `account`, so that one code workflow can
+ * answer for many accounts. It is left out without a Site Login. Never the password, the TOTP Secret or any other secret.
  */
-export function codeProviderFor(ctx: Pick<NodeContext, 'executeWorkflow'>, workflowId: string): CodeProvider {
+export function codeProviderFor(ctx: Pick<NodeContext, 'executeWorkflow'>, workflowId: string, account?: string): CodeProvider {
   return async ({ requestedAt }) => {
     let result: Awaited<ReturnType<NodeContext['executeWorkflow']>> | undefined;
     let failed: unknown;
     try {
-      result = await ctx.executeWorkflow({ id: workflowId }, [{ json: { requestedAt } }]);
+      result = await ctx.executeWorkflow({ id: workflowId }, [{ json: { requestedAt, ...(account ? { account } : {}) } }]);
     } catch (error) {
       failed = error;
     }
@@ -69,9 +71,12 @@ export function codeProviderFor(ctx: Pick<NodeContext, 'executeWorkflow'>, workf
   };
 }
 
-/** The engine's code settings for a run: the code provider and its timeout when a One-Time Code Workflow is set, else none. */
+/**
+ * The engine's code settings for a run: the code provider and its timeout when a One-Time Code Workflow is set, else none.
+ * `account` is the Site Login's user name (codeProviderFor).
+ */
 export function codeSettingsFor(
-  ctx: Pick<NodeContext, 'executeWorkflow'>, o: { codeWorkflowId: string; codeTimeoutMs: number },
+  ctx: Pick<NodeContext, 'executeWorkflow'>, o: { codeWorkflowId: string; codeTimeoutMs: number }, account?: string,
 ): { codeProvider?: CodeProvider; codeTimeoutMs?: number } {
-  return o.codeWorkflowId ? { codeProvider: codeProviderFor(ctx, o.codeWorkflowId), codeTimeoutMs: o.codeTimeoutMs } : {};
+  return o.codeWorkflowId ? { codeProvider: codeProviderFor(ctx, o.codeWorkflowId, account), codeTimeoutMs: o.codeTimeoutMs } : {};
 }

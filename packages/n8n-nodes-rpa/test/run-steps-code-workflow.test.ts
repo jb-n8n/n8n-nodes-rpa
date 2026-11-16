@@ -111,6 +111,31 @@ describe('One-Time Code Workflow options', () => {
     expect(data[0].json).toMatchObject({ error: message, details: { configError: true, code: null } });
   });
 
+  it('the code workflow gets the account\'s user name as account, and nothing secret from the Site Login', async () => {
+    const { h, calls } = ctx(returning([{ json: { code: CODE } }]));
+    const engine = fakeEngine(async (input) => { await input.codeProvider!({ requestedAt: '2026-10-30T10:00:00.000Z' }); return scriptOk(); });
+    await executeRunSteps(h, engine);
+    expect(calls.map((c) => c.items)).toEqual([[{ json: { requestedAt: '2026-10-30T10:00:00.000Z', account: 'user-1' } }]]);
+    const sent = JSON.stringify(calls);
+    for (const secret of ['pass-1', 'tok-1', 'JBSWY3DPEHPK3PXP']) expect(sent).not.toContain(secret);
+  });
+
+  it('with a TOTP Secret on the Site Login, the code workflow still gets only requestedAt and account', async () => {
+    const creds = { ...CREDS, playwrightSiteLoginApi: { ...CREDS.playwrightSiteLoginApi, totpSecret: 'JBSWY3DPEHPK3PXP' } };
+    const { h, calls } = ctx(returning([{ json: { code: CODE } }]), { credentials: creds });
+    const engine = fakeEngine(async (input) => { await input.codeProvider!({ requestedAt: '2026-10-30T10:00:00.000Z' }); return scriptOk(); });
+    await executeRunSteps(h, engine);
+    expect(Object.keys(calls[0].items![0].json).sort()).toEqual(['account', 'requestedAt']);
+    expect(JSON.stringify(calls)).not.toMatch(/JBSWY3DPEHPK3PXP|pass-1/);
+  });
+
+  it('without a Site Login, the code workflow gets requestedAt only', async () => {
+    const got: unknown[] = [];
+    const provider = codeProviderFor({ executeWorkflow: async (_info, items) => { got.push(items); return { executionId: 'sub-1', data: [[{ json: { code: CODE } }]] }; } }, 'wf-code-1');
+    await provider({ requestedAt: '2026-10-30T10:00:00.000Z' });
+    expect(got).toEqual([[{ json: { requestedAt: '2026-10-30T10:00:00.000Z' } }]]);
+  });
+
   it('with a workflow the engine gets a codeProvider that runs it with { requestedAt } and returns its code', async () => {
     const { h, calls } = ctx(returning([{ json: { code: CODE, extra: 'dropped' } }]));
     let got = '';
@@ -121,7 +146,7 @@ describe('One-Time Code Workflow options', () => {
     await executeRunSteps(h, engine);
     expect(engine.calls[0].codeTimeoutMs).toBe(120_000);
     expect(got).toBe(CODE);
-    expect(calls).toEqual([{ info: { id: 'wf-code-1' }, items: [{ json: { requestedAt: '2026-10-30T10:00:00.000Z' } }] }]);
+    expect(calls).toEqual([{ info: { id: 'wf-code-1' }, items: [{ json: { requestedAt: '2026-10-30T10:00:00.000Z', account: 'user-1' } }] }]);
   });
 
   it('Code Timeout (Seconds) reaches the engine in ms', async () => {

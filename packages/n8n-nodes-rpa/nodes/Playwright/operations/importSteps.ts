@@ -595,8 +595,9 @@ async function adoptAll(
       draft: draft.script,
       policy,
       ...(siteLogin ? { secrets: siteLogin.secrets } : {}),
-      // The run and its replay ask the One-Time Code Workflow, as Run Steps does; the engine masks each code it gets.
-      ...codeSettingsFor(ctx, p),
+      // The run and its replay ask the One-Time Code Workflow, as Run Steps does, with the Site Login's user name as account;
+      // the engine masks each code it gets.
+      ...codeSettingsFor(ctx, p, siteLogin?.secrets.username || undefined),
       endpoint,
       ...(output ? { output } : {}),
       vars: p.vars,
