@@ -122,6 +122,17 @@ export async function useFound(found: { kind: string; name: string; id: string }
 
 export interface Ref { id: string; name: string }
 
+/**
+ * The order of every list of credentials this command shows or numbers: by name, then by id, compared character by
+ * character (no locale). n8n's API and its command line list credentials in different orders, so a numbered answer
+ * means the same credential on both ways in only when the command sorts them itself.
+ */
+export function byNameThenId(a: any, b: any): number {
+  const [an, bn, ai, bi] = [String(a?.name ?? ''), String(b?.name ?? ''), String(a?.id ?? ''), String(b?.id ?? '')];
+  if (an !== bn) return an < bn ? -1 : 1;
+  return ai < bi ? -1 : ai > bi ? 1 : 0;
+}
+
 /** What this run made and changed, by name, for the one line that says so at the end. */
 export const record = { made: [] as string[], changed: [] as string[] };
 
@@ -156,7 +167,8 @@ export async function byType(items: any[], spec: { name: string; type: string },
   const conflict = items.find((c) => c?.name === spec.name && c?.type !== spec.type && owned(c));
   if (conflict) throw new Stop(`A credential named "${spec.name}" (id ${clean(conflict.id)}) has the type ${clean(conflict.type)}, not ${spec.type}. Rename it in n8n, then run this again.`);
   const sharedIn = (c: any) => home !== undefined && Array.isArray(c?.shared) && c.shared.some((s: any) => s?.id === home);
-  const ours = items.filter((c) => c?.type === spec.type && owned(c));
+  // Sorted (byNameThenId): the numbered question below picks the same credential on both ways in.
+  const ours = items.filter((c) => c?.type === spec.type && owned(c)).sort(byNameThenId);
   const others = items.filter((c) => !ours.includes(c) && (c?.name === spec.name || (c?.type === spec.type && sharedIn(c))));
   for (const o of others) leftAlone('credential', o, clean(o.type), home);
   if (opts.named !== undefined) {
@@ -193,8 +205,8 @@ export function noSiteLogin(name: string, items: any[], home: string | undefined
 }
 
 /** This run's project's credentials of a type (the owner n8n names is that project), by id and name only. */
-export const projectCredentials = (items: any[], type: string, home: string | undefined) => (home === undefined ? [] : items.filter((c) => c?.type === type && ownerProject(c, 'credential') === home));
-export const byNameAndId = (items: any[]) => items.map((c) => `"${clean(c.name, c.id)}" (id ${clean(c.id)})`).join(', ');
+export const projectCredentials = (items: any[], type: string, home: string | undefined) => (home === undefined ? [] : items.filter((c) => c?.type === type && ownerProject(c, 'credential') === home).sort(byNameThenId));
+export const byNameAndId = (items: any[]) => [...items].sort(byNameThenId).map((c) => `"${clean(c.name, c.id)}" (id ${clean(c.id)})`).join(', ');
 
 /** Why --desktop-runner found nothing to pick, with the RPA Desktop Runners this run's project has, by name and id. */
 export function noDesktopRunner(name: string, items: any[], home: string | undefined): string {

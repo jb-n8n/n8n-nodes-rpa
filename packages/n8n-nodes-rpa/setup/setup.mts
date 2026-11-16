@@ -537,6 +537,9 @@ function closingLines(inputs: Inputs, closing: Closing) {
     detail(`The workflow the form gives you already uses the RPA Desktop Runner ${nameAndId(handed)}.`);
   } else if (runnerRef) {
     say(`The workflow the form gives you does not use "${clean(runnerRef.name, runnerRef.id)}" yet: pick it on "${NODE.importSteps}" in n8n.`);
+  } else if (runners.length > 1 && !runnerRef) {
+    // Several, none named: the slot stays empty, never a guess, and no question.
+    say(`Your project has ${runners.length} RPA Desktop Runners, so none is set on "${NODE.importSteps}": run this again with --desktop-runner "<its name>" to set one.`);
   } else if (!runners.length && !browserRef && !options.sampleSite && options.browserUrl === undefined) {
     // Not said on a browser setup: a browser bot's workflow has no runner slot.
     say('No Windows machine is connected. To connect one, run this again with --windows.');
@@ -872,7 +875,7 @@ async function run(inputs: Inputs): Promise<number> {
       // Found in a shared project whose set this run does not use.
       say(`not used credential "${clean(DESKTOP ? DESKTOP.name : runners[0].name)}": this run does not use what it found in the shared project, so no RPA Desktop Runner is set. Pick one on "${NODE.importSteps}" in n8n.`);
     } else if (runners.length > 1) {
-      say(`not picked: your project has ${runners.length} RPA Desktop Runners, ${byNameAndId(runners)}, and this run picks one only by --desktop-runner <name>. Pick one on "${NODE.importSteps}" in n8n, so the workflow the form hands over uses it.`);
+      detail(`not picked: your project has ${runners.length} RPA Desktop Runners, ${byNameAndId(runners)}, and this run picks one only by --desktop-runner <name>. Pick one on "${NODE.importSteps}" in n8n, so the workflow the form hands over uses it.`);
     }
   }
   let browserRef: Ref | undefined;

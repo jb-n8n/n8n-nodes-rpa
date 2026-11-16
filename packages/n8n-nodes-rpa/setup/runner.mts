@@ -7,7 +7,7 @@ import { parseConnectionLine } from '../nodes/Playwright/config.js';
 import { clean, type Client } from './n8n-api.mjs';
 import { ask, askHidden, detail, interactive, redactor, say, warn } from './io.mjs';
 import { type Inputs, RUNNER } from './options.mjs';
-import { record, type Ref, replaceData } from './ownership.mjs';
+import { byNameThenId, record, type Ref, replaceData } from './ownership.mjs';
 
 /** A message from n8n fit for one printed line: control characters removed, spaces collapsed, cut at 300 characters. */
 const oneLine = (text: unknown, most = 300) => String(text ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, most);
@@ -172,7 +172,9 @@ export function machineName(line: string): string {
  * changed)? Asked at a terminal only, default nothing. Another machine gets a credential of its own, so the bots of the
  * first one stay on it; a new line goes through offerLine, which tests it before it replaces the old one.
  */
-export async function askMachine(candidates: Ref[], line: string): Promise<'new' | Ref | undefined> {
+export async function askMachine(found: Ref[], line: string): Promise<'new' | Ref | undefined> {
+  // Numbered by name, then id: the same number picks the same credential on both ways in.
+  const candidates = [...found].sort(byNameThenId);
   const to = lineHost(line);
   const named = (r: Ref) => `"${clean(r.name, r.id)}" (id ${clean(r.id)})`;
   if (candidates.length === 1) {

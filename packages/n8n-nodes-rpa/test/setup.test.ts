@@ -559,7 +559,8 @@ describe('npx n8n-nodes-rpa setup', () => {
       const none = await run(setup(fake.url), ENV);
       expect(none.code, none.out).toBe(0);
       expect(onImport(fake).rpaDesktopRunnerApi).toBeUndefined();
-      expect(none.out).toContain('not picked: your project has 2 RPA Desktop Runners, "RPA Desktop Runner account" (id c-hand), "Night shift" (id c-second), and this run picks one only by --desktop-runner <name>. Pick one on "Import steps" in n8n, so the workflow the form hands over uses it.');
+      expect(none.out).toContain('not picked: your project has 2 RPA Desktop Runners, "Night shift" (id c-second), "RPA Desktop Runner account" (id c-hand), and this run picks one only by --desktop-runner <name>. Pick one on "Import steps" in n8n, so the workflow the form hands over uses it.');
+      expect(none.out).toContain('Your project has 2 RPA Desktop Runners, so none is set on "Import steps": run this again with --desktop-runner "<its name>" to set one.');
       expect(fake.state.requests.some((r) => r.path.endsWith('/test'))).toBe(false);
 
       const named = await n8n({ credentials: [HAND, SECOND] });
@@ -573,7 +574,7 @@ describe('npx n8n-nodes-rpa setup', () => {
       const wrong = await n8n({ credentials: [HAND, SECOND, ELSEWHERE] });
       const w = await run(setup(wrong.url, '--desktop-runner', 'RPA Desktop Runner'), ENV);
       expect(w.code).toBe(2);
-      expect(w.out).toContain('No RPA Desktop Runner named "RPA Desktop Runner" in your project. Your project\'s RPA Desktop Runners: "RPA Desktop Runner account" (id c-hand), "Night shift" (id c-second).');
+      expect(w.out).toContain('No RPA Desktop Runner named "RPA Desktop Runner" in your project. Your project\'s RPA Desktop Runners: "Night shift" (id c-second), "RPA Desktop Runner account" (id c-hand).');
       // The workflow made to learn the project is removed again; no credential is made.
       expect(wrong.state.workflows).toEqual([]);
       expect(wrong.state.credentials.map((c) => c.id)).toEqual(['c-hand', 'c-second', 'c-else']);
@@ -1837,15 +1838,16 @@ describe('the RPA Step Signing and the RPA Browser are found by their type, what
     const fake = await n8n({ credentials: [KEY_010, BROWSER_010, BROWSER_2] });
     const stop = await run(withBrowser(fake.url), BROWSER_ENV);
     expect(stop.code, stop.out).toBe(2);
-    expect(stop.out).toContain('Your project has several RPA Browser credentials, "RPA Browser account" (id c-b010), "Lab browser" (id c-b2), and this command does not pick one by guess. Run this at a terminal to pick one, or delete the ones you do not use in n8n. Nothing was changed.');
+    expect(stop.out).toContain('Your project has several RPA Browser credentials, "Lab browser" (id c-b2), "RPA Browser account" (id c-b010), and this command does not pick one by guess. Run this at a terminal to pick one, or delete the ones you do not use in n8n. Nothing was changed.');
     expect(fake.state.workflows).toEqual([]);
     expect(fake.state.credentials).toHaveLength(3);
     const none = await run(setup(fake.url), ENV);
     expect(none.code, none.out).toBe(0);
-    expect(none.stdout).toContain('not picked: your project has several RPA Browser credentials, "RPA Browser account" (id c-b010), "Lab browser" (id c-b2), and without a terminal this run picks none. Pick one on "Import steps" in n8n.');
+    expect(none.stdout).toContain('not picked: your project has several RPA Browser credentials, "Lab browser" (id c-b2), "RPA Browser account" (id c-b010), and without a terminal this run picks none. Pick one on "Import steps" in n8n.');
     expect(browserOn(fake.state.workflows[0])).toBeUndefined();
     const asked = await n8n({ credentials: [KEY_010, BROWSER_010, BROWSER_2] });
-    const t = await runAtTerminal(withBrowser(asked.url), BROWSER_ENV, [[QUESTION, '2']]);
+    // Sorted by name: "Lab browser" is 1 on both ways in.
+    const t = await runAtTerminal(withBrowser(asked.url), BROWSER_ENV, [[QUESTION, '1']]);
     expect(t.code, t.out).toBe(0);
     expect(browserOn(asked.state.workflows[0])).toEqual({ id: 'c-b2', name: 'Lab browser' });
     // Run again without a terminal: the form uses "Lab browser", which this run keeps; nothing asked, nothing made.
@@ -2319,7 +2321,7 @@ describe('a second Windows machine (entry 11)', () => {
     const off = await n8n({ credentials: [MADE, NIGHT] });
     const o = await run(plain(off.url), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE });
     expect(o.code, o.out).toBe(0);
-    expect(o.out).toContain('The line for rpa.example.com:8765 was not used: your project has the RPA Desktop Runners "RPA Desktop Runner" (id c-made), "Night shift" (id c-night), and without a terminal this run does not ask whether the line is another Windows machine or a new line for one of them. Run this again at a terminal.');
+    expect(o.out).toContain('The line for rpa.example.com:8765 was not used: your project has the RPA Desktop Runners "Night shift" (id c-night), "RPA Desktop Runner" (id c-made), and without a terminal this run does not ask whether the line is another Windows machine or a new line for one of them. Run this again at a terminal.');
     expect(off.state.requests.filter((q) => q.method === 'PATCH' || (q.method === 'POST' && q.path === '/api/v1/credentials' && /rpaDesktopRunnerApi/.test(q.body)))).toEqual([]);
     expectNoSecrets(s.out + o.out, [NEW_LINE, NEW_TOKEN]);
   });
@@ -2355,11 +2357,11 @@ describe('a second Windows machine (entry 11)', () => {
     expect(machineName(NEW_LINE.replace(':8765/', ':8766/'))).toBe('RPA Desktop Runner (rpa.example.com:8766)');
   });
 
-  it('several: numbered; its number is a new line for that one', async () => {
+  it('several: numbered by name, then id; its number is a new line for that one', async () => {
     const fake = await n8n({ credentials: [MADE, NIGHT] });
-    const r = await runAtTerminal(plain(fake.url), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE }, [[/another Windows machine \(a\), or a new line for one of these \(its number\)\? Enter changes nothing: /, '2']]);
+    const r = await runAtTerminal(plain(fake.url), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE }, [[/another Windows machine \(a\), or a new line for one of these \(its number\)\? Enter changes nothing: /, '1']]);
     expect(r.code, r.out).toBe(0);
-    expect(r.out).toContain('  2. "Night shift" (id c-night)');
+    expect(r.out).toContain('  1. "Night shift" (id c-night)\n  2. "RPA Desktop Runner" (id c-made)\n');
     expect(lineOf(fake, 'c-night')).toBe(NEW_LINE);
     expect(lineOf(fake, 'c-made')).toBe(LINE);
   });
@@ -2422,5 +2424,72 @@ describe('an existing form: an empty RPA Desktop Runner slot on Import steps is 
     expect(wf.nodes.find((n: any) => n.name === 'Import steps').credentials.rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
     expect(wf.activeVersionId).toBe(wf.versionId);
     expect(r.stdout).toContain('The import form is ready.');
+  });
+});
+
+describe('a numbered list picks the same credential on both ways in (sorted by name, then id)', () => {
+  const KEYS: Cred[] = [
+    { id: 'c-k2', name: 'Second key', type: 'playwrightScriptSigningApi', data: { secretKey: 'b2'.repeat(32) } },
+    { id: 'c-k1', name: 'RPA Step Signing account', type: 'playwrightScriptSigningApi', data: { secretKey: 'a1'.repeat(32) } },
+  ];
+  // The same name twice: the id decides.
+  const TWINS: Cred[] = [
+    { id: 'c-tb', name: 'Key', type: 'playwrightScriptSigningApi', data: { secretKey: 'c3'.repeat(32) } },
+    { id: 'c-ta', name: 'Key', type: 'playwrightScriptSigningApi', data: { secretKey: 'd4'.repeat(32) } },
+  ];
+  const ASK = /Which one should this run use\? Type its number \(1 to 2\), or press Enter to stop: /;
+  const signOnApi = (fake: Fake) => fake.state.workflows[0].nodes.find((n) => n.name === 'Sign steps').credentials.playwrightScriptSigningApi.id;
+  const signOnCli = (f: CliFake) => f.state().workflows[0].nodes.find((n: any) => n.name === 'Sign steps').credentials.playwrightScriptSigningApi.id;
+
+  it('signing keys: n8n lists them in one order to the API key way and another to the command line; "1" is the same key', async () => {
+    for (const [set, first, second] of [[KEYS, 'c-k1', 'c-k2'], [TWINS, 'c-ta', 'c-tb']] as const) {
+      for (const [answer, want] of [['1', first], ['2', second]] as const) {
+        const api = await n8n({ credentials: [...set] });
+        const a = await runAtTerminal(plain(api.url), ENV, [[ASK, answer]]);
+        expect(a.code, a.out).toBe(0);
+        const cli = await cliN8n({ credentials: [...set].reverse() });
+        const c = await runAtTerminal(['setup', '--url', cli.url, '--approver', 'ops@example.com'], cli.env, [[ASK, answer]]);
+        expect(c.code, c.out).toBe(0);
+        expect(signOnApi(api), `API key way, answer ${answer}`).toBe(want);
+        expect(signOnCli(cli), `command line, answer ${answer}`).toBe(want);
+        // Each line keeps its name and id, in the same order on both ways.
+        const listOf = (out: string) => out.split('\n').filter((l) => /^ {2}\d\. "/.test(l));
+        expect(listOf(a.out)).toEqual(listOf(c.out));
+        expect(listOf(a.out)[0]).toContain(`(id ${first})`);
+      }
+    }
+  });
+
+  it('runners: the second-machine question numbers them the same on both ways; "1" is the same credential', async () => {
+    const MADE: Cred = { id: 'c-made', name: 'RPA Desktop Runner', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
+    const NIGHT: Cred = { id: 'c-night', name: 'Night shift', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
+    const Q = /another Windows machine \(a\), or a new line for one of these \(its number\)\? Enter changes nothing: /;
+    const api = await n8n({ credentials: [MADE, NIGHT] });
+    const a = await runAtTerminal(plain(api.url), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE }, [[Q, '1']]);
+    expect(a.code, a.out).toBe(0);
+    const cli = await cliN8n({ credentials: [NIGHT, MADE] });
+    const c = await runAtTerminal(['setup', '--url', cli.url, '--approver', 'ops@example.com'], { ...cli.env, RPA_CONNECTION_LINE: NEW_LINE }, [[Q, '1']]);
+    expect(c.code, c.out).toBe(0);
+    expect(api.state.credentials.find((x) => x.id === 'c-night')!.data.connectionLine).toBe(NEW_LINE);
+    expect(cli.state().credentials.find((x) => x.id === 'c-night')!.data.connectionLine).toBe(NEW_LINE);
+    expect(api.state.credentials.find((x) => x.id === 'c-made')!.data.connectionLine).toBe(LINE);
+    expect(cli.state().credentials.find((x) => x.id === 'c-made')!.data.connectionLine).toBe(LINE);
+    expectNoSecrets(a.out + c.out, [NEW_LINE, NEW_TOKEN]);
+  });
+
+  it('several runners and no --desktop-runner: the empty slot stays empty, and one closing sentence names the flag; nothing is asked', async () => {
+    const HAND: Cred = { id: 'c-hand', name: 'RPA Desktop Runner account', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
+    const SECOND: Cred = { id: 'c-second', name: 'Night shift', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
+    const fake = await n8n();
+    expect((await run(plain(fake.url), ENV)).code).toBe(0);
+    fake.state.credentials.push({ ...HAND, projectId: HOME }, { ...SECOND, projectId: HOME });
+    const before = fake.posts().length;
+    const r = await runAtTerminal(plain(fake.url), ENV, []);
+    expect(r.code, r.out).toBe(0);
+    expect(fake.posts().length, 'nothing written').toBe(before);
+    expect(fake.state.workflows[0].nodes.find((n) => n.name === 'Import steps').credentials.rpaDesktopRunnerApi).toBeUndefined();
+    expect(lines(r.out)).toContain('Your project has 2 RPA Desktop Runners, so none is set on "Import steps": run this again with --desktop-runner "<its name>" to set one.');
+    expect(r.out).not.toMatch(/\? .*: $|Which one|another Windows machine/m);
+    expect(lines(r.out).at(-1)).toBe(`  Address:    ${fake.url}/form/rpa-import`);
   });
 });
