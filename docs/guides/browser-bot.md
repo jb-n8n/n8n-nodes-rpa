@@ -32,6 +32,9 @@ The stack runs:
 - the sandbox site at http://localhost:8080
 - Mailpit, an inbox for approval emails, at http://localhost:8025 (Part 2 uses it)
 
+If port 5678 is taken, set `RPA_N8N_PORT` in `.env` (see `.env.example`): n8n and the addresses in its forms and
+approval links then use that port.
+
 Open http://localhost:5678 and create the owner account. If the page does not show the setup form yet, n8n is still
 starting: reload after a minute. When n8n offers its own Assistant, choose **Set up later in Settings**.
 
