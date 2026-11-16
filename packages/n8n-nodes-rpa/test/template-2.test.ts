@@ -4,7 +4,8 @@ import { type IDataObject } from 'n8n-workflow';
 import { type TaskResult } from 'n8n-rpa-engine';
 import { nodeOutputs } from '../nodes/Playwright/description/io.js';
 import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
-import { RUN_TABLE, RUN_TABLE_FIRST_COLUMNS, STEPS_TABLE } from '../nodes/Playwright/rows.js';
+import { RUN_TABLE, RUN_TABLE_COLUMNS, RUN_TABLE_FIRST_COLUMNS, STEPS_TABLE } from '../nodes/Playwright/rows.js';
+import { STOP_MESSAGE } from '../nodes/Playwright/import/workflow.js';
 import { agentOk, fakeEngine, scriptOk, taskFail } from './fake-engine.js';
 import { harness } from './harness.js';
 import { COLOUR, DATA_TABLE, FILES, NODE_TYPE, SETTINGS_NAME, STICKY, byName, evaluate, load, loadInN8n, render, sticky, table, targets } from './template-harness.js';
@@ -105,12 +106,22 @@ describe('2-data-feed.json', () => {
     expect(at([{ hash: 'h1', expiresAt: '2026-10-05T12:00:00.000Z' }])).toBe(true);
     expect(at([{ hash: 'h1', expiresAt: '2026-10-05T12:00:00.000Z' }, { hash: 'h2', expiresAt: '2026-10-09T00:00:00.000Z' }])).toBe(false);
   });
-  it('Data → Log run → destination; Repaired Steps → Approve steps; the error output, index 2, → Alert on failure → Log failed run', () => {
+  it('Data → Log run → destination; Repaired Steps → Approve steps; the error output, index 2, → Alert on failure → Log failed run → Write failed run row → Stop and Error', () => {
     expect(nodeOutputs('runSteps', run.parameters.aiRepair)).toHaveLength(2); // so n8n appends the error output at index 2
     expect(targets(t, 'Run steps')).toEqual([['Log run'], ['Approve steps'], ['Alert on failure']]);
     expect(t.connections['Run steps'].main[2][0]).toEqual({ node: 'Alert on failure', type: 'main', index: 0 });
     expect(targets(t, 'Log run')).toEqual([['Send data to destination']]);
     expect(targets(t, 'Alert on failure')).toEqual([['Log failed run']]);
+    expect(targets(t, 'Log failed run')).toEqual([['Write failed run row']]);
+    expect(targets(t, 'Write failed run row')).toEqual([['Stop and Error']]);
+    expect(targets(t, 'Stop and Error')).toEqual([]);
+    // As in the workflow the import form hands over: the row is written column by column, and a row that cannot be
+    // written still ends the run at Stop and Error.
+    expect(byName(t, 'Log failed run')).toMatchObject({ type: 'n8n-nodes-base.set', parameters: { mode: 'raw' } });
+    expect(byName(t, 'Write failed run row')).toMatchObject({ type: DATA_TABLE, onError: 'continueRegularOutput' });
+    expect(table(byName(t, 'Write failed run row'))).toMatchObject({ operation: 'insert', dataTableId: { value: RUN_TABLE }, columns: { mappingMode: 'autoMapInputData' } });
+    expect(table(byName(t, 'Write failed run row')).columns?.schema?.map((c) => c.id)).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
+    expect(byName(t, 'Stop and Error')).toMatchObject({ type: 'n8n-nodes-base.stopAndError', parameters: { errorType: 'errorMessage' } });
     expect(byName(t, 'Send data to destination').type).toBe('n8n-nodes-base.noOp');
     expect(byName(t, 'Approve steps')).toMatchObject({
       type: 'n8n-nodes-base.executeWorkflow',
@@ -124,18 +135,22 @@ describe('2-data-feed.json', () => {
     expect(loaded.outputs).toEqual(['Data', 'Repaired Steps', 'Error']);
   });
   it('Log run and Log failed run write one run row each, from a real Data item and a real error item (duration and tokens included)', async () => {
-    for (const name of ['Log run', 'Log failed run']) {
-      expect(table(byName(t, name))).toMatchObject({ operation: 'insert', dataTableId: { value: RUN_TABLE }, columns: { mappingMode: 'defineBelow' } });
-      // Only the first ten columns: a table made by an earlier version has them, so the data feed never fails on one.
-      expect(Object.keys(table(byName(t, name)).columns?.value ?? {})).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
-    }
+    expect(table(byName(t, 'Log run'))).toMatchObject({ operation: 'insert', dataTableId: { value: RUN_TABLE }, columns: { mappingMode: 'defineBelow' } });
+    // Only the first ten columns: a table made by an earlier version has them, so the data feed never fails on one.
+    expect(Object.keys(table(byName(t, 'Log run')).columns?.value ?? {})).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
     const settings = { name: 'example-feed' };
-    const row = (name: string, json: IDataObject, runItem: IDataObject = json) => Object.fromEntries(
-      Object.entries(table(byName(t, name)).columns?.value ?? {}).map(([col, v]) => [col, typeof v === 'string' && v.startsWith('=') ? evaluate(v, {
+    /** The columns Create run log table reports: every column of a new table, unless another list is given. */
+    const row = (name: string, json: IDataObject, runItem: IDataObject = json, columns: unknown = RUN_TABLE_COLUMNS) => {
+      const scope = {
         $json: json, $execution: { id: 'exec-9' },
-        $: (node: string) => ({ item: { json: node === 'Settings' ? settings : node === 'Run steps' ? runItem : {} } }),
-      }) : v]),
-    );
+        $: (node: string) => ({
+          item: { json: node === 'Settings' ? settings : node === 'Run steps' ? runItem : {} },
+          first: () => ({ json: node === 'Create run log table' ? { name: RUN_TABLE, columns } : {} }),
+        }),
+      };
+      if (name === 'Log failed run') return evaluate(String(byName(t, name).parameters.jsonOutput), scope) as IDataObject;
+      return Object.fromEntries(Object.entries(table(byName(t, name)).columns?.value ?? {}).map(([col, v]) => [col, typeof v === 'string' && v.startsWith('=') ? evaluate(v, scope) : v]));
+    };
     // What Run steps really emits for an engine result (Data item or error item), with AI Repair on and a model connected.
     const steps = {
       name: 'example-feed', version: 2, startUrl: 'https://example.com/list',
@@ -162,9 +177,22 @@ describe('2-data-feed.json', () => {
     expect(row('Log run', agent)).toMatchObject({ lane: 'agent', version: 2, confirmed: true, rowCount: 2, durationMs: 21_000, llmTokens: 5400, code: '' });
 
     const failure = await emitted(taskFail('drift_detected', 'Open the list: no match', { lane: 'agent', version: 3, hash: 'h3', llmCalls: 2, tokens: 3100, durationMs: 4200 }));
+    const guidance = String((failure.details as IDataObject).guidance);
+    expect(guidance).not.toBe('');
     expect(row('Log failed run', { success: true }, failure)).toEqual({
+      name: 'example-feed', code: 'drift_detected', message: 'Open the list: no match', guidance, file: '', account: '',
+      lane: 'agent', version: 3, hash: 'h3', confirmed: false, rowCount: 0, durationMs: 4200, llmTokens: 3100, executionId: 'exec-9',
+    });
+    // A table made by an earlier version: only the columns it has, so the row is written and the run still stops.
+    const older = RUN_TABLE_FIRST_COLUMNS.map((c) => ({ name: c.name, type: c.type }));
+    expect(row('Log failed run', { success: true }, failure, older)).toEqual({
       name: 'example-feed', lane: 'agent', version: 3, hash: 'h3', confirmed: false, rowCount: 0, durationMs: 4200, llmTokens: 3100, code: 'drift_detected', executionId: 'exec-9',
     });
+    // No list of columns at all: the ten every table has.
+    for (const none of [null, []]) expect(Object.keys(row('Log failed run', { success: true }, failure, none)).sort()).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name).sort());
+    // A long message is cut to 1,000 characters.
+    const long = { ...failure, message: 'x'.repeat(1500) };
+    expect(String(row('Log failed run', {}, long).message)).toBe(`${'x'.repeat(999)}…`);
     const config = await emitted(scriptOk(), { ...runParams, steps: '{' });
     expect((config.details as IDataObject).configError).toBe(true);
     expect(row('Log failed run', { success: true }, config)).toMatchObject({ code: 'config_error', version: 0, hash: '', lane: '', durationMs: 0, llmTokens: 0 });
@@ -179,13 +207,65 @@ describe('2-data-feed.json', () => {
     expect(render(p.subject, scope(config))).toBe('RPA config_error on example-feed');
     expect(p.options.fileAttachments).toContain('$binary.trace');
   });
-  it('needs at most 9 working nodes: stickies, the chat model, the two table creations and the destination placeholder not counted', () => {
+  describe('a failure ends at Stop and Error, and names steps that wait for approval', () => {
+    const NOW = new Date('2026-10-06T12:00:00.000Z');
+    const drift = {
+      error: 'drift_detected: detect afterLogin: none of logged_in, login_failed appeared', message: 'detect afterLogin: none of logged_in, login_failed appeared',
+      details: { code: 'drift_detected', version: 2, lane: 'script', guidance: 'The site changed. Turn on AI Repair, or fix the steps.' },
+    };
+    const PENDING = [{ hash: 'h3', version: 3, expiresAt: '2026-10-07T12:00:00.000Z' }, { hash: 'h0', version: 9, expiresAt: '2026-10-01T12:00:00.000Z' }, {}];
+    const PENDING_FOR_BRACKETS = [{ hash: 'h3', version: 3, expiresAt: '2026-10-07T12:00:00.000Z' }];
+    const WAITING = 'Steps version 3 for example-feed are waiting for approval, so AI Repair is off until they are approved, rejected or expire. To approve them, open the approval email that RPA: 3 Approve steps sent and click Approve; the next run uses them.';
+    const scope = (json: IDataObject, pending: IDataObject[]) => ({
+      $json: json, $execution: { id: 'exec-9' }, $binary: {}, $now: NOW, DateTime: { fromISO: (v: unknown) => new Date(String(v)) },
+      $: (node: string) => ({
+        isExecuted: true,
+        item: { json: node === 'Settings' ? { name: 'example-feed' } : json },
+        first: (branch?: number) => {
+          if (node === 'Run steps') expect(branch).toBe(2);
+          return { json: node === 'Settings' ? { name: 'example-feed' } : json };
+        },
+        all: () => (node === 'Get pending' ? pending : []).map((p) => ({ json: p })),
+      }),
+    });
+    const stop = String(byName(t, 'Stop and Error').parameters.errorMessage);
+    const alert = String((byName(t, 'Alert on failure').parameters as { text: string }).text);
+
+    it('Stop and Error words a failure as the workflow the import form hands over does', () => {
+      const sentence = STOP_MESSAGE.slice('={{ ('.length, STOP_MESSAGE.lastIndexOf(")($('"));
+      expect(stop).toContain(`(${sentence})(`);
+      expect(evaluate(stop, scope(drift, []))).toBe('The run failed: drift_detected on example-feed. Detect afterLogin: none of logged_in, login_failed appeared. What to do: The site changed. Turn on AI Repair, or fix the steps.');
+      const config = { error: 'Steps is not valid JSON', message: 'Steps is not valid JSON', details: { configError: true, code: null, guidance: '' } };
+      expect(evaluate(stop, scope(config, []))).toBe('The run failed: config_error on example-feed. Steps is not valid JSON.');
+      // What reaches n8n's error view holds no angle brackets of its own.
+      expect(String(evaluate(stop, scope(drift, PENDING_FOR_BRACKETS)))).not.toMatch(/[<>]/);
+    });
+    it('while steps wait for approval, Stop and Error and the alert name the newest version waiting and how to approve it', () => {
+      expect(evaluate(stop, scope(drift, PENDING))).toBe(`The run failed: drift_detected on example-feed. Detect afterLogin: none of logged_in, login_failed appeared. ${WAITING} What to do: The site changed. Turn on AI Repair, or fix the steps.`);
+      expect(render(alert, scope(drift, PENDING))).toBe('drift_detected on example-feed (steps v2, script lane)\n\n'
+        + `detect afterLogin: none of logged_in, login_failed appeared\n${WAITING}\nWhat to do: The site changed. Turn on AI Repair, or fix the steps.\nExecution: exec-9\n\n`
+        + 'The error codes are explained in docs/reference/errors.md in the n8n-nodes-rpa repository.');
+      // Expired rows and the bootstrap item do not count.
+      for (const pending of [[], [PENDING[1], PENDING[2]]]) {
+        expect(render(alert, scope(drift, pending))).not.toContain('waiting for approval');
+        expect(evaluate(stop, scope(drift, pending))).not.toContain('waiting for approval');
+      }
+    });
+    it('the alert says what to do, and points to errors.md when the message itself says it', () => {
+      expect(render(alert, scope(drift, []))).toContain('\nWhat to do: The site changed. Turn on AI Repair, or fix the steps.\n');
+      const plain = { ...drift, details: { ...drift.details, guidance: '' } };
+      expect(render(alert, scope(plain, []))).toContain('\nWhat to do: see docs/reference/errors.md in the n8n-nodes-rpa repository.\n');
+    });
+  });
+  it('needs at most 11 working nodes: stickies, the chat model, the two table creations and the destination placeholder not counted', () => {
     const working = t.nodes
       .filter((n) => ![STICKY, '@n8n/n8n-nodes-langchain.lmChatAnthropic', 'n8n-nodes-base.noOp'].includes(n.type) && (n.parameters as { operation?: string }).operation !== 'create')
       .map((n) => n.name);
-    expect(working.sort()).toEqual(['Alert on failure', 'Approve steps', 'Every 6 hours', 'Get active steps', 'Get pending', 'Log failed run', 'Log run', 'Run steps', 'Settings']);
-    // 18 nodes in total: 5 stickies, the chat model, the 9 working nodes, the two table creations and the destination placeholder.
-    expect(t.nodes).toHaveLength(18);
+    expect(working.sort()).toEqual([
+      'Alert on failure', 'Approve steps', 'Every 6 hours', 'Get active steps', 'Get pending', 'Log failed run', 'Log run', 'Run steps', 'Settings', 'Stop and Error', 'Write failed run row',
+    ]);
+    // 20 nodes in total: 5 stickies, the chat model, the 11 working nodes, the two table creations and the destination placeholder.
+    expect(t.nodes).toHaveLength(20);
     expect(t.nodes.filter((n) => n.type === STICKY)).toHaveLength(5);
     expect(t.nodes.filter((n) => n.type === 'n8n-nodes-base.noOp').map((n) => n.name)).toEqual(['Send data to destination']);
   });

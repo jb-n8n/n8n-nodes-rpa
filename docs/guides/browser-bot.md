@@ -219,8 +219,8 @@ Create these credentials:
 ## 7. Import the two workflows
 
 1. Import `packages/n8n-nodes-rpa/templates/3-approve-steps.json` (**RPA: 3 Approve steps**). Follow its green
-   **Set once** note: the SMTP credential on the four email nodes, RPA Step Signing and RPA Site Login on **Sign steps**,
-   and one approver address, such as `approver@example.com`, in **Settings → approver** and in **Sign steps → Approver
+   **Set once** note: the SMTP credential on the four email nodes, RPA Step Signing and RPA Site Login on **Sign steps**
+   and **Check the approved version**, and one approver address, such as `approver@example.com`, in **Settings → approver** and in **Sign steps → Approver
    Allowlist**. Click **Publish**.
 2. Import `packages/n8n-nodes-rpa/templates/2-data-feed.json` (**RPA: 2 Data feed**). Follow its **Set once** note:
    RPA Browser, RPA Site Login and RPA Step Signing on **Run steps**, your model credential on **Chat model**, the SMTP
@@ -238,7 +238,10 @@ Create these credentials:
 3. Execute the data feed again. The output shows `lane: "script"`, `version: 1` and `llmCalls: 0`: the bot ran the
    approved steps without the model. Every scheduled run takes this path.
 4. Change the site: open http://localhost:8080/admin (user `admin`, password `change-me`) and click **Shuffle**. Execute
-   the feed again. The run repairs itself, sends version 2 for approval, and after you approve it, the next run uses it.
+   the feed again. The run repairs itself and sends version 2 for approval. The review email lists every step of
+   version 2 (a description the model wrote reads "the AI describes it as") and what changed from version 1, in the
+   words of the import's review page. After you approve it, the next run uses it. A run while version 2 waits fails,
+   and its message names version 2 and says to approve it from the approval email.
 
 To run the feed every 6 hours, **Publish** it. Replace **Send data to destination** with where the data should go, such
 as a spreadsheet or a database node. To let the first bot repair itself too, its RPA node's note lists the three

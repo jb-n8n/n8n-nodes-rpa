@@ -665,3 +665,29 @@ const CHANGE_BY_AI =
         )
     )
   )(Array.isArray(j.reviewSteps) && typeof x.step === 'number' ? j.reviewSteps[x.step - 1] ?? null : null);
+
+// The sentence Stop and Error ends a failed run with, from a run log row r (code, name, message, guidance), exactly as
+// the workflow the import form hands over words it (import/workflow.ts STOP_MESSAGE). Template 2, Stop and Error.
+const STOP_SENTENCE =
+  (r) => 'The run failed: ' + (r.code || 'config_error') + ' on ' + (r.name || 'the steps') + '.' + (r.message ? ' ' + String(r.message).charAt(0).toUpperCase() + String(r.message).slice(1) + (/[.!?…]$/.test(String(r.message)) ? '' : '.') : '') + (r.guidance ? ' What to do: ' + r.guidance : '') + (r.message || r.guidance ? '' : ' Run steps in this execution has the message.');
+
+// The steps of this feed's name that wait for approval (an unexpired pending row, the rows Get pending found, as Run
+// steps' AI Repair reads them), as one sentence: the newest version, why AI Repair is off and how to approve it; ''
+// when none waits. Template 2, Alert on failure and Stop and Error.
+const REPAIR_WAITING =
+  (
+    (rows) => (
+      rows.length
+        ? 'Steps version '
+          + Math.max(...rows.map((r) => Number(r.version) || 0))
+          + ' for '
+          + $('Settings').first().json.name
+          + ' are waiting for approval, so AI Repair is off until they are approved, rejected or expire.'
+          + ' To approve them, open the approval email that RPA: 3 Approve steps sent and click Approve; the next run uses them.'
+        : ''
+    )
+  )(
+    $('Get pending').isExecuted
+      ? $('Get pending').all().map((i) => i.json).filter((r) => r.hash && DateTime.fromISO(r.expiresAt) > $now)
+      : []
+  );

@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "### Self-healing data feed (grey: leave as is)\nEvery 6 hours **Run steps** runs the newest signed step list in `playwright_steps` for the `name` in **Settings**. When the site changes, the chat model repairs the run, a fresh browser proves the repaired steps, and the Repaired steps item goes to **RPA: 3 Approve steps**. Nothing new runs until a person approves it; the next run after approval uses the new version with no model call.",
+        "content": "### Self-healing data feed (grey: leave as is)\nEvery 6 hours **Run steps** runs the newest signed step list in `playwright_steps` for the `name` in **Settings**. When the site changes, the chat model repairs the run, a fresh browser proves the repaired steps, and the Repaired steps item goes to **RPA: 3 Approve steps**. Nothing new runs until a person approves it; the next run after approval uses the new version with no model call. A failed run sends **Alert on failure**, writes its run row and ends at **Stop and Error**, so it shows as failed; while steps wait for approval, both say which version waits.",
         "height": 300,
         "width": 440,
         "color": 7
@@ -273,7 +273,7 @@
         "toEmail": "ops@example.com",
         "subject": "=RPA {{ $json.details?.code || 'config_error' }} on {{ $('Settings').item.json.name }}",
         "emailFormat": "text",
-        "text": "={{ $json.details?.code || 'config_error' }} on {{ $('Settings').item.json.name }} (steps v{{ $json.details?.version ?? 'none' }}, {{ $json.details?.lane ?? 'n/a' }} lane)\n\n{{ $json.message ?? $json.error }}\nExecution: {{ $execution.id }}\n\nWhat to do: see docs/reference/errors.md in the n8n-nodes-rpa repository.",
+        "text": "={{ $json.details?.code || 'config_error' }} on {{ $('Settings').item.json.name }} (steps v{{ $json.details?.version ?? 'none' }}, {{ $json.details?.lane ?? 'n/a' }} lane)\n\n{{ $json.message ?? $json.error }}{{ ((w) => (w ? '\\n' + w : ''))(((rows) => (rows.length ? 'Steps version ' + Math.max(...rows.map((r) => Number(r.version) || 0)) + ' for ' + $('Settings').first().json.name + ' are waiting for approval, so AI Repair is off until they are approved, rejected or expire.' + ' To approve them, open the approval email that RPA: 3 Approve steps sent and click Approve; the next run uses them.' : ''))($('Get pending').isExecuted ? $('Get pending').all().map((i) => i.json).filter((r) => r.hash && DateTime.fromISO(r.expiresAt) > $now) : [])) }}\nWhat to do: {{ $json.details?.guidance || 'see docs/reference/errors.md in the n8n-nodes-rpa repository.' }}\nExecution: {{ $execution.id }}\n\nThe error codes are explained in docs/reference/errors.md in the n8n-nodes-rpa repository.",
         "options": { "fileAttachments": "={{ [$binary.trace ? 'trace' : '', $binary.screenshot ? 'screenshot' : ''].filter(Boolean).join(',') }}" }
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000215",
@@ -283,27 +283,30 @@
       "position": [1180, 160]
     },
     {
+      "parameters": { "mode": "raw", "jsonOutput": "={{ ((row, have) => Object.fromEntries(Object.entries(row).filter(([k]) => have.includes(k))))(((j) => ({ name: $('Settings').item.json.name, code: j.details?.code || 'config_error', message: ((m) => (m.length > 1000 ? m.slice(0, 999).join('') + '…' : m.join('')))(Array.from(String(j.message ?? ''))), guidance: j.details?.guidance ?? '', file: '', account: j.details?.account ?? '', lane: j.details?.lane ?? '', version: j.details?.version ?? 0, hash: j.details?.hash ?? '', confirmed: false, rowCount: 0, durationMs: j.details?.durationMs ?? 0, llmTokens: j.details?.llmTokens ?? 0, executionId: $execution.id }))($('Run steps').item.json), ((have) => (have.length ? have : ['name', 'lane', 'version', 'hash', 'confirmed', 'rowCount', 'durationMs', 'llmTokens', 'code', 'executionId']))([].concat($('Create run log table').first().json.columns ?? []).map((c) => c?.name))) }}", "options": {} },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000216",
+      "name": "Log failed run",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1400, 160],
+      "notes": "The run row of a failure: the code (config_error for a configuration error), the message, what to do and the run facts Run steps keeps under details. Only the columns playwright_runs has: a table made by an earlier version lacks message, guidance, file and account, and gets the rest."
+    },
+    {
       "parameters": {
         "resource": "row",
         "operation": "insert",
         "dataTableId": { "__rl": true, "mode": "name", "value": "playwright_runs" },
         "columns": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "name": "={{ $('Settings').item.json.name }}",
-            "lane": "={{ $('Run steps').item.json.details?.lane ?? '' }}",
-            "version": "={{ $('Run steps').item.json.details?.version ?? 0 }}",
-            "hash": "={{ $('Run steps').item.json.details?.hash ?? '' }}",
-            "confirmed": "={{ false }}",
-            "rowCount": "={{ 0 }}",
-            "durationMs": "={{ $('Run steps').item.json.details?.durationMs ?? 0 }}",
-            "llmTokens": "={{ $('Run steps').item.json.details?.llmTokens ?? 0 }}",
-            "code": "={{ $('Run steps').item.json.details?.code || 'config_error' }}",
-            "executionId": "={{ $execution.id }}"
-          },
+          "mappingMode": "autoMapInputData",
+          "value": null,
           "matchingColumns": [],
           "schema": [
             { "id": "name", "displayName": "name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "code", "displayName": "code", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "message", "displayName": "message", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "guidance", "displayName": "guidance", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "file", "displayName": "file", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "account", "displayName": "account", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
             { "id": "lane", "displayName": "lane", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
             { "id": "version", "displayName": "version", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
             { "id": "hash", "displayName": "hash", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
@@ -311,18 +314,27 @@
             { "id": "rowCount", "displayName": "rowCount", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
             { "id": "durationMs", "displayName": "durationMs", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
             { "id": "llmTokens", "displayName": "llmTokens", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
-            { "id": "code", "displayName": "code", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
             { "id": "executionId", "displayName": "executionId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
           ]
         },
         "options": {}
       },
-      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000216",
-      "name": "Log failed run",
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000219",
+      "name": "Write failed run row",
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
-      "position": [1400, 160],
-      "notes": "One run row per failure. Error items keep the run facts under details; configuration errors log as config_error."
+      "position": [1620, 160],
+      "onError": "continueRegularOutput",
+      "notes": "If the row cannot be written, the run still stops as failed."
+    },
+    {
+      "parameters": { "errorType": "errorMessage", "errorMessage": "={{ ((r) => 'The run failed: ' + (r.code || 'config_error') + ' on ' + (r.name || 'the steps') + '.' + (r.message ? ' ' + String(r.message).charAt(0).toUpperCase() + String(r.message).slice(1) + (/[.!?…]$/.test(String(r.message)) ? '' : '.') : '') + (r.guidance ? ' What to do: ' + r.guidance : '') + (r.message || r.guidance ? '' : ' Run steps in this execution has the message.'))(((j, w) => ({ code: j.details?.code || 'config_error', name: $('Settings').first().json.name, message: ((m) => (w === '' ? m : m === '' ? w : m + (/[.!?…]$/.test(m) ? '' : '.') + ' ' + w))(String(j.message ?? '')), guidance: j.details?.guidance ?? '' }))($('Run steps').first(2).json, ((rows) => (rows.length ? 'Steps version ' + Math.max(...rows.map((r) => Number(r.version) || 0)) + ' for ' + $('Settings').first().json.name + ' are waiting for approval, so AI Repair is off until they are approved, rejected or expire.' + ' To approve them, open the approval email that RPA: 3 Approve steps sent and click Approve; the next run uses them.' : ''))($('Get pending').isExecuted ? $('Get pending').all().map((i) => i.json).filter((r) => r.hash && DateTime.fromISO(r.expiresAt) > $now) : []))) }}" },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-00000000021a",
+      "name": "Stop and Error",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [1840, 160],
+      "notes": "Ends a failed run as failed, so it shows in Executions and an Error Workflow set in the workflow settings runs. The message names a version waiting for approval, if there is one."
     }
   ],
   "connections": {
@@ -340,7 +352,9 @@
       ]
     },
     "Log run": { "main": [[{ "node": "Send data to destination", "type": "main", "index": 0 }]] },
-    "Alert on failure": { "main": [[{ "node": "Log failed run", "type": "main", "index": 0 }]] }
+    "Alert on failure": { "main": [[{ "node": "Log failed run", "type": "main", "index": 0 }]] },
+    "Log failed run": { "main": [[{ "node": "Write failed run row", "type": "main", "index": 0 }]] },
+    "Write failed run row": { "main": [[{ "node": "Stop and Error", "type": "main", "index": 0 }]] }
   },
   "settings": { "executionOrder": "v1" },
   "pinData": {}
