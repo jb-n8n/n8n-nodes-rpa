@@ -5,13 +5,11 @@ signed in, the `rpa` command, allowing apps, upgrades, changing tokens and certi
 fails. For the short path from nothing to a running bot, follow [Your first Windows desktop bot](../guides/desktop-bot.md).
 
 What the package puts on the machine:
-- **The desktop runner** (`RpaRunner.exe`): n8n sends it desktop steps, and it drives Windows apps through UI
-  Automation. It listens on `wss://<machine>:8765/rpa/v1`.
+- **The desktop runner** (`RpaRunner.exe`): it runs n8n's desktop steps in Windows apps, on `wss://<machine>:8765/rpa/v1`.
 - **The browser**, only when you add it with `-WithBrowser`: Chromium behind a token check with its own certificate,
   on `wss://<machine>:3000`. It comes in a second zip, `rpa-browser-windows-x64.zip`.
 - **The policy tool** (`RpaPolicy.exe`): with it an administrator decides which apps the runner may start.
-- **The RPA Recorder** (`RpaRecorder.exe`, in the Start menu as **RPA Recorder**): records a flow in a Windows app
-  ([Record a bot](../guides/record-a-bot.md)).
+- **The RPA Recorder** (`RpaRecorder.exe`, Start menu **RPA Recorder**): records a flow ([Record a bot](../guides/record-a-bot.md)).
 - **ERP Demo**, a small sample app.
 
 The runner (and the browser, when installed) runs in the Windows session of one user, the **bot user** (`rpa-runner`
@@ -36,12 +34,10 @@ provided as is: try it on a machine you can rebuild first.
   a person who signs in, not unattended).
 - **Disk**: about 3.5 GB free on drive C.
 - **An administrator account**, for the install and for every change to the policy.
-- **The network path**: n8n must reach TCP port **8765** (the runner) on this machine, and **3000** too when you add the
-  browser. Note n8n's address as this machine sees it, and open the port in any firewall between them, such as a cloud
-  security group.
+- **The network path**: n8n must reach TCP port **8765** (the runner) on this machine, and **3000** with the browser.
+  Note n8n's address as this machine sees it, and open the port in any firewall between them (a cloud security group).
 - **n8n** self-hosted, with the RPA node 0.2.0 or later.
-- **Licences**: read [the licensing note](licensing.md) and settle with your licensing contact what this use of
-  Windows needs.
+- **Licences**: read [the licensing note](licensing.md) and settle with your licensing contact what Windows needs.
 
 Run every command on this page in **Windows PowerShell 5.1 opened with "Run as administrator"** in your own
 administrator session. Not PowerShell 7 (`pwsh`) and not "Windows PowerShell (x86)": the installer refuses both.
@@ -58,20 +54,18 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 `Get-Rpa.ps1` prints its own SHA-256 first, to compare with the file you checked. It then downloads
 `rpa-windows-x64.zip` and its `.sha256` from the release, compares the zip's SHA-256 with that file and with the one
 the script names, and checks the build attestation with the GitHub CLI when `gh` is installed and signed in (without
-it, one line says the attestation was not checked and gives the command to check it elsewhere). It unpacks into
-`C:\Program Files\RPA package\<version>`, checks that only administrators can change that folder, and starts
-`Install-Rpa.ps1` with the parameters you gave. A failed check stops it before anything is unpacked. Add
-`-RequireAttestation` to make the attestation check mandatory, or `-Zip <path>` for a zip you downloaded already (with
-its `.sha256` beside it).
+it, one line says so and gives the command to check it elsewhere). It unpacks into `C:\Program Files\RPA package\<version>`,
+checks that only administrators can change that folder, and starts `Install-Rpa.ps1` with the parameters you gave. A
+failed check stops it before anything is unpacked. `-RequireAttestation` makes the attestation check mandatory, and
+`-Zip <path>` takes a zip you downloaded already (with its `.sha256` beside it).
 
 The install has no browser unless you add `-WithBrowser`. With it, `Get-Rpa.ps1` also downloads
-`rpa-browser-windows-x64.zip` from the same release, checks it the same way, and unpacks it into the package folder.
-With `-Zip`, give the browser zip with `-BrowserZip <path>`. To add the browser later, run the same `Get-Rpa.ps1` again
-with `-WithBrowser`: when `C:\Program Files\RPA package\<version>` is there already, it gets and checks only the browser
-zip, unpacks it into that folder's `rpa-windows-x64` and starts the installer. It does so only when that folder holds
-the package of the same version, only administrators can change it, and it has no browser yet; otherwise it stops and
-says why. Without `Get-Rpa.ps1`, unpack `rpa-browser-windows-x64.zip` into the `rpa-windows-x64` folder
-(`Expand-Archive <path of the zip> -DestinationPath "<that folder>"`) and run `Install-Rpa.ps1 -WithBrowser`.
+`rpa-browser-windows-x64.zip` from the same release, checks it the same way, and unpacks it into the package folder
+(with `-Zip`, give it with `-BrowserZip <path>`). To add the browser later, run the same `Get-Rpa.ps1` again with
+`-WithBrowser`: it then gets and checks only the browser zip, unpacks it into the package folder's `rpa-windows-x64`
+and starts the installer, when that folder holds the package of the same version, only administrators can change it,
+and it has no browser yet. Otherwise it stops and says why. Without `Get-Rpa.ps1`, unpack the browser zip into the
+`rpa-windows-x64` folder (`Expand-Archive <zip> -DestinationPath "<that folder>"`) and run `Install-Rpa.ps1 -WithBrowser`.
 
 Each zip carries the licences of the software by others in it: `THIRD-PARTY-NOTICES.md` and the folder `licenses` in
 the package, `browser\THIRD-PARTY-NOTICES.md` and `browser\licenses` in the browser zip. The installer copies them to
@@ -80,6 +74,7 @@ the package, `browser\THIRD-PARTY-NOTICES.md` and `browser\licenses` in the brow
 The installer lists what it will change and asks you to type `YES`. On Windows Server, a first install for a new bot
 user with no sign-in mode is **unattended** (section 4), and the list starts with
 `No sign-in mode was given, so this install is unattended (-Unattended): the default on Windows Server for a new bot user.`
+Behind a NAT it then asks once for the name or address n8n can reach this machine at (`-Address` below).
 
 The parameters (all of them work with `Get-Rpa.ps1` and `Install-Rpa.ps1`):
 
@@ -88,6 +83,7 @@ The parameters (all of them work with `Get-Rpa.ps1` and `Install-Rpa.ps1`):
 | `-AllowFrom <address>[,<address>...]` | The firewall rules let in only these addresses (or ranges such as `10.0.0.0/24`), normally the n8n host. List every address of n8n's workers in queue mode. |
 | `-AllowFromAnyAddress` | The rules let in any address, on Domain and Private networks. On a Public network (most cloud machines) add `-IncludePublicNetwork`. |
 | `-NoFirewall` | Leave Windows Firewall alone. A first install needs one of these three. |
+| `-Address <name or address>` | The name or address n8n reaches this machine at, for the Connection Lines. `rpa connection` and upgrades keep it. Without it, behind a NAT (this machine's address towards the one `-AllowFrom` address is private, and that address is not), the installer asks for it once after `YES`, and Enter keeps the private one. Not with `-Force` or `-Unattended`. |
 | `-User <name>` | The bot user. Default `rpa-runner`, created as a standard user. An existing administrator is refused. |
 | `-UserPassword <SecureString>` | A password for the bot user, for example `-UserPassword (Read-Host 'Password' -AsSecureString)`. Give one you keep if a person will ever sign in as the bot user. |
 | `-Unattended`, `-IdleSeconds <n>` | Nobody signed in: a service signs the bot user in for each run and out `-IdleSeconds` (15) after it. Windows Server only. |
@@ -110,11 +106,9 @@ Connection Lines with their tokens hidden, then `For how the supervisor is doing
 - **Data** in `C:\ProgramData\RPA Runner`: `policy.json` (allows no app yet), the runner's token `token`, the
   certificate the runner makes at its first start, `logs\`, `policy-backups\` and `policy-changes\`.
 - **The bot user**, when it did not exist: a local standard user.
-- **A scheduled task**, `\RPA\RPA Runner`, which starts the runner when the bot user signs in, and again within 10
-  seconds when it exits.
+- **A scheduled task**, `\RPA\RPA Runner`: it starts the runner at the bot user's sign-in, and again within 10 s after it exits.
 - **A firewall rule**, `RPA-Runner-In` (not with `-NoFirewall`). Nothing else in the firewall changes.
-- **A Start menu entry** for all users, **RPA Recorder**.
-- With `-Unattended` or `-AutoSignIn`: the changes section 4 lists.
+- **A Start menu entry** for all users, **RPA Recorder**. With `-Unattended` or `-AutoSignIn`: what section 4 lists.
 - With `-WithBrowser`, also: `browser\` in the programs, the token `browser-token` and the browser's certificate in the
   data, the task `\RPA\RPA Browser` and the firewall rule `RPA-Browser-In` for port 3000.
 
@@ -123,17 +117,15 @@ Connection Lines with their tokens hidden, then `For how the supervisor is doing
 The runner and the browser accept anyone who can reach their port and has their token. With the runner's token, a
 caller drives the apps the policy allows. With the browser's token, a caller acts as the bot user through the browser:
 it can open any address this machine reaches and read any file the bot user can read, the runner's token included.
-The runner's policy does not limit that. So add the browser only when your bots need a browser on this machine, for
-example for a site only this machine can reach. Otherwise keep the default and run the browser elsewhere. Either way,
-use `-AllowFrom` with n8n's address.
+The runner's policy does not limit that. So add the browser only when your bots need a browser on this machine (a site
+only this machine reaches). Otherwise keep the default and run the browser elsewhere. Either way, use `-AllowFrom`.
 
 n8n opens the connection to this machine, and the machine never dials out to n8n. So n8n must be able to reach the
-runner's port: a firewall rule for n8n's address, and `-Address` on `rpa connection` when n8n reaches the machine by
-another name or address.
+runner's port: a firewall rule for n8n's address, and the address n8n reaches it at in the Connection Line (the
+installer's `-Address` or its question, or `rpa connection -Address`).
 
-In the mode where nobody is signed in, any connection that reaches the runner's port makes the supervisor sign the bot
-user in, before the token is checked. Without the token nothing runs. Give `-AllowFrom` only n8n's address, so that
-nothing else can cause a sign-in.
+With nobody signed in, any connection that reaches the runner's port makes the supervisor sign the bot user in, before
+the token is checked. Without the token nothing runs. Give `-AllowFrom` only n8n's address, so nothing else causes a sign-in.
 
 ### When n8n cannot reach this machine
 
@@ -143,7 +135,8 @@ that both machines join. The product does not run one. Any tunnel or private net
 
 - **This machine listens, n8n connects.** The listening end on n8n's side is an address n8n can open, on the runner's
   port (8765, and 3000 for the browser), because the Connection Line carries the port. It leads to that port here.
-- **The line names that address**: `rpa connection -ShowTokens -Address <that address>` (section 6).
+- **The line names that address**: install with `-Address <that address>`, which `rpa connection` keeps using, or
+  print the line with `rpa connection -ShowTokens -Address <that address>` (section 6).
 - **Only n8n reaches the listening end.** Any connection there makes the supervisor sign the bot user in.
 - **It stays up.** Runs fail `runner_unavailable` while it is down.
 
@@ -151,14 +144,14 @@ On a private network (a WireGuard network, a VPN, two cloud networks joined), in
 `-AllowFrom <n8n's address on it>`. The line then carries this machine's address on it, which `-Address` can change.
 
 The connection inside stays encrypted (TLS) from n8n to the runner: n8n checks the runner's certificate fingerprint
-before it sends the token, and refuses any other certificate. Whoever runs the tunnel or the network sees that the two machines talk,
-when and how much, but not the token, the steps or the values. They can stop or delay the connection.
+before it sends the token. Whoever runs the tunnel or the network sees that the two machines talk, when and how much,
+but not the token, the steps or the values. They can stop or delay the connection.
 
 **A widely used way: an SSH tunnel from this machine to n8n's host.** This machine opens an SSH connection to the
 machine n8n runs on and has it listen on `127.0.0.1:8765` there, for the runner here. You need an OpenSSH server on
 n8n's host and the OpenSSH client on Windows (`ssh.exe`, an optional feature of Windows Server 2019 and later). For n8n
-in a container, use the host's address on the Docker bridge (often `172.17.0.1`) in place of `127.0.0.1` below, and add
-`GatewayPorts clientspecified` to the `Match` block.
+in a container, use the host's Docker bridge address (often `172.17.0.1`) for `127.0.0.1` below, and add `GatewayPorts
+clientspecified` to the `Match` block.
 
 1. Install RPA with `-NoFirewall`: the tunnel's connections arrive from this machine itself, so no port opens.
 2. On n8n's host, add the user (`sudo useradd -m -s /usr/sbin/nologin rpa-tunnel`), append this to
@@ -213,9 +206,9 @@ a run fails `runner_unavailable` and says which. There are three ways:
 The **RPA Supervisor** service (`runner\RpaSupervisor.exe`, as SYSTEM) listens on the runner's port, and on the
 browser's when the browser is installed. When n8n connects, it signs the bot user in through a Remote Desktop
 connection from the machine to itself, waits until the runner listens, and passes the connection through unchanged:
-TLS, the token and the n8n credentials stay as they are. A run after a
-quiet time waits about 5 to 20 seconds for the sign-in. The node waits up to 60 seconds, and tries once more when the
-connection drops during the TLS handshake. The bot user must be a local user.
+TLS, the token and the n8n credentials stay as they are. A run after a quiet time waits about 5 to 20 seconds for the
+sign-in. The node waits up to 60 seconds, and tries once more when the connection drops during the TLS handshake. The
+bot user must be a local user.
 
 What it changes:
 - the bot user joins **Remote Desktop Users**,
@@ -224,15 +217,14 @@ What it changes:
 - the runner (and the browser) listen on `127.0.0.1` at their port + 10000.
 
 A bot user the installer creates gets a random password nobody knows. `Uninstall-Rpa.ps1`, or an install with
-`-Unattended:$false`, undoes these changes.
+`-Unattended:$false`, undoes these changes. After `Uninstall-Rpa.ps1` without `-RemoveData` the stored password is
+gone: [section 9](#9-upgrade-and-uninstall) says how to install again.
 
-- **While someone is signed in as the bot user, runs are refused.** Record and inspect as an administrator, and sign
-  the bot user out when you are done.
+- **While someone is signed in as the bot user, runs are refused.** Record and inspect as an administrator.
 - **A new password set by an administrator** makes the runner unable to read its certificate. Store the new password
   with `-Unattended -UserPassword (...)`, remove the runner's certificate (section 10), and put the new fingerprint into
   n8n. Data the bot user's programs protect with the old password (an authenticator app's codes) is lost.
-- **Anything that connects to the ports**, a health check or a port scanner too, makes the supervisor sign the bot user
-  in. Limit who can reach the ports.
+- **Anything that connects to the ports**, a health check or a port scanner too, makes the supervisor sign the bot user in.
 - Windows Server allows two remote sessions without the Remote Desktop Session Host role, so one administrator can
   connect during a run. Whether the bot user's session needs client access licences: [the licensing note](licensing.md#remote-desktop-to-windows-server).
 
@@ -244,8 +236,7 @@ the machine afterwards. Anyone who can reach the machine's screen or console get
 between `-AutoSignIn` and `-Unattended` keeps the password.
 
 By hand: sign in as the bot user at the console and leave the session open. Disconnecting a Remote Desktop session
-locks it: hand it back to the console with `tscon <ID> /dest:console` (the ID from `query session`) before you close
-the window.
+locks it: hand it back with `tscon <ID> /dest:console` (the ID from `query session`) before you close the window.
 
 ## 5. The rpa command
 
@@ -253,14 +244,13 @@ the window.
 
 | Command | What it does |
 |---|---|
-| `& "C:\Program Files\RPA Runner\rpa.cmd" connection -ShowTokens` | Prints the Connection Lines for n8n, with the tokens. Without `-ShowTokens` the tokens are hidden. Add `-Address <name or address>` when n8n reaches this machine by another name. |
+| `& "C:\Program Files\RPA Runner\rpa.cmd" connection -ShowTokens` | Prints the Connection Lines for n8n, with the tokens. Without `-ShowTokens` the tokens are hidden. Add `-Address <name or address>` for another address than the one section 6 describes. |
 | `& "C:\Program Files\RPA Runner\rpa.cmd" status` | Whether the runner (and the browser) listen, the mode, the bot user's sessions, and in unattended mode the supervisor and its last failure. No secrets. |
 | `& "C:\Program Files\RPA Runner\rpa.cmd" policy apply <file>` | Applies a policy change file. The tool copies the file into `policy-changes\`, shows what it changes, and asks `Apply these changes? [y/N]`. |
 
 Do administrator work from an administrator's own session (a second Remote Desktop session on Windows Server, or a
-remote shell), not with "Run as administrator" on the bot user's desktop, where you would type an administrator's
-password in a session the bots' programs share. Where your shell cannot answer the policy tool's question, it writes
-nothing: run it in an administrator's desktop session.
+remote shell), not with "Run as administrator" on the bot user's desktop, which the bots' programs share. Where your
+shell cannot answer the policy tool's question, it writes nothing: run it in an administrator's desktop session.
 
 ## 6. Connect n8n
 
@@ -268,19 +258,19 @@ Run `rpa connection -ShowTokens` (section 5). It prints a line for the credentia
 
 - `rpa-runner://<address>:8765/rpa/v1#token=<token>&fingerprint=<64 hex digits>`
 
-Its address is the one this machine has towards n8n when `-AllowFrom` named one address, else the computer's name. The
-command says which. If n8n reaches this machine by another name or address, add `-Address <that name or address>`.
+Its address is the one the installer was given (`-Address`, or your answer to its question behind a NAT), else the one
+this machine has towards n8n when `-AllowFrom` named one address, else the computer's name. The command says which. If
+n8n reaches this machine by another name or address, add `-Address <that name or address>`.
 
-In n8n, create an **RPA Desktop Runner** credential and paste the line. Save it: the window says
-`Connection tested successfully`.
-n8n checks the certificate's fingerprint before it sends the token. The test succeeds on a locked desktop too: only a
-run shows that.
+Paste the line into the setup command ([step 2 of the desktop bot guide](../guides/desktop-bot.md#2-set-up-n8n-with-one-command)),
+which makes the **RPA Desktop Runner** credential, or create that credential in n8n and paste it there. n8n tests the
+credential when you open or save it: the window says `Connection tested successfully`. n8n checks the certificate's
+fingerprint before it sends the token. The test succeeds on a locked desktop too: only a run shows that.
 
 Each line holds a token. Paste it straight into n8n, then close the window or run `Clear-Host`. A PowerShell
-transcript, or a run-command tool's history, keeps what the window shows: if a token went there, change it
-(section 10). Below the lines the command also prints the URL and the fingerprint separately, for the credentials'
-older fields. The fingerprints come from files the bot user can write, so copy them while you trust what has run as
-the bot user, best right after the install.
+transcript, or a run-command tool's history, keeps what the window shows: if a token went there, change it (section
+10). Below the lines the command also prints the URL and the fingerprint separately, for older fields. The fingerprints
+come from files the bot user can write, so copy them while you trust what ran as the bot user, best right after the install.
 
 **With the browser** (`-WithBrowser`) it prints a second line,
 `rpa-browser://<address>:3000/#token=<token>&fingerprint=<64 hex digits>`. Paste it into an **RPA Browser** credential
@@ -317,14 +307,13 @@ the lines the tool prints, type `y` and Enter. It answers
 **Run it.** Download [`erp-demo.workflow.json`](samples/erp-demo.workflow.json) and import it in n8n
 (**⋯ → Import → From File**). On **Export ERP Demo line items**, pick your RPA Desktop Runner credential and click
 **Execute workflow**. The sample runs its steps unsigned (**Require Signed Steps** off), and its variables hold ERP
-Demo's documented sign-in (`clerk` / `demo1234`). For your own bots keep signing on, and give passwords from an
-RPA Secret Variables credential. The output has `values` (`out_ResultCount`: `12 line items`) and `line-items.csv` in
-the **Binary** tab.
+Demo's documented sign-in (`clerk` / `demo1234`). For your own bots keep signing on, and give passwords from an RPA
+Secret Variables credential. The output has `values` (`out_ResultCount`: `12 line items`) and `line-items.csv` (**Binary**).
 
 ## 8. Allow your own app
 
 Install the app for all users under `C:\Program Files` (the runner refuses an app at a path the bot user could change).
-The recorder's **Allow this app…** button allows the app it recorded. By hand:
+The recorder's **Allow this app…** allows the app it recorded, and protects the buttons it clicked that save or send (below). By hand:
 
 ```powershell
 & "C:\Program Files\RPA Runner\runner\RpaPolicy.exe" allow-app "C:\Program Files\Your App\YourApp.exe" --pin-hash
@@ -333,9 +322,14 @@ The recorder's **Allow this app…** button allows the app it recorded. By hand:
 `--pin-hash` pins the file's SHA-256: after an app update, run it again. Give the app's real path on a local drive.
 
 **Protect the writes.** Until an app's write controls and keys are in the policy, the runner gates no write in it.
-List the buttons that save, post or submit (`writeControls`, by `automationId`) and the keys that do (`gatedKeys`) in a
-change file like the sample's, and apply it with `rpa policy apply`. A step may then press them only when it was
-marked as a write on approval.
+**Allow this app…** proposes, in the same question, the buttons the recording clicked that have an automation id and
+that the review page ticks as writes to start with (those that save, post or submit). It leaves out a dialog's standard
+buttons (ids 1 to 11, and `CommandButton_1` to `CommandButton_11` in a task dialog such as Confirm Save As) and
+proposes no keys. By hand, list such buttons (`writeControls`, by `automationId`) and the keys that save (`gatedKeys`)
+in a change file like the sample's, and apply it with `rpa policy apply`. A step may then press them, or any key but
+Tab, arrows, Home, End, PageUp, PageDown and Escape while a window that holds such a button is open, only when it was
+marked as a write on approval. For an app the policy allowed already, the question says that its bots approved earlier
+stop there unless that step was ticked: sign each such bot again on the import form with the step ticked.
 
 **A web view app with a Copy button** (such as an authenticator app) also needs its web view runtime as a helper
 process and clipboard reads:
@@ -350,17 +344,19 @@ process and clipboard reads:
 ```
 
 A change only adds. To remove an entry, edit `C:\ProgramData\RPA Runner\policy.json` as an administrator, then end
-`RpaRunner.exe` (`Stop-Process -Name RpaRunner -Force`, it restarts within 10 seconds) and check with
-`RpaPolicy.exe show`. [`desktop/README.md`](../../desktop/README.md#changing-the-policy) describes every field.
+`RpaRunner.exe` if it runs (`Stop-Process -Name RpaRunner -Force -ErrorAction SilentlyContinue`: it starts again within
+10 seconds; in unattended mode with nobody signed in it does not run, and the next sign-in reads the new policy) and
+check with `RpaPolicy.exe show`. [`desktop/README.md`](../../desktop/README.md#changing-the-policy) describes every field.
 
 ## 9. Upgrade and uninstall
 
 **Upgrade.** Run the new release's `Get-Rpa.ps1` with the same `-User` and ports as the first install, and `-Force`
 when a run may be going on. An upgrade keeps the bot user, the policy, the tokens, the certificates, the firewall
-addresses, the sign-in mode and the browser or its absence, so the n8n credentials stay as they are. For an install
-with the browser, `Get-Rpa.ps1` gets the browser zip too (with `-Zip`, give `-BrowserZip`). `-WithBrowser` adds the
-browser to an install without it, also with the `Get-Rpa.ps1` of the installed version, whose package folder is there
-already (see [Install](#2-install)). `-NoBrowser` removes it: its task, firewall rule, token, certificate and files.
+addresses, the sign-in mode, the address given to the installer (it asks nothing about it again) and the browser or its
+absence, so the n8n credentials stay as they are. For an install with the browser, `Get-Rpa.ps1` gets the browser zip
+too (with `-Zip`, give `-BrowserZip`). `-WithBrowser` adds the browser to an install without it, also with the
+`Get-Rpa.ps1` of the installed version (see [Install](#2-install)). `-NoBrowser` removes it with its task, firewall
+rule, token, certificate and files.
 
 **Another bot user.** Uninstall with `-RemoveData`, then install for the new user. That is a first install: a new
 policy, new tokens and certificates, and new Connection Lines in n8n.
@@ -372,11 +368,12 @@ powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\RPA Runner\Uninst
 ```
 
 It ends the programs and removes the tasks, the firewall rules, the Start menu entry, the programs, and what
-`-AutoSignIn` or `-Unattended` changed. It keeps `C:\ProgramData\RPA Runner` and the Windows user. To remove the data
-too, sign the bot user out (`quser`, then `logoff <ID>`), and run it again from the unpacked package:
+`-AutoSignIn` or `-Unattended` changed. It keeps `C:\ProgramData\RPA Runner` and the Windows user. To install again
+for that user, run `Install-Rpa.ps1` from `C:\Program Files\RPA package\<version>\rpa-windows-x64` (`Get-Rpa.ps1` of
+that version stops, because the folder is there). After an unattended install it stops and says the ways out (section
+11). To remove the data too, sign the bot user out (`quser`, then `logoff <ID>`), and run it again from the package:
 `powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\RPA package\<version>\rpa-windows-x64\Uninstall-Rpa.ps1" -RemoveData`.
-Remove the user with
-`Remove-LocalUser rpa-runner` when you no longer need it.
+Remove the user with `Remove-LocalUser rpa-runner` when you no longer need it.
 
 ## 10. Changing the tokens and the certificates
 
@@ -417,12 +414,15 @@ Start with `& "C:\Program Files\RPA Runner\rpa.cmd" status`. Logs are in `C:\Pro
 | `... presented a certificate with fingerprint ..., which is not the fingerprint in the RPA Desktop Runner credential.` or `The browser server's certificate does not match ...` | The certificate changed, or something else answers at that address. | If you did not change the certificate on purpose, find out what did before you accept the new fingerprint. |
 | A run is done, but the app was on an unexpected window at the end | Nothing checked the last window, so the run counted as done. | Record a last step that reads a value with F9, or only works in the expected window. The runner then asks the app to close and stops it after 3 seconds, so unsaved work is lost. |
 | `policy_violation: the desktop runner is not allowed to start ErpDemo.exe. On the Windows machine, allow it: ...` | The policy does not allow the app. | Allow it (sections 7 and 8). `RpaPolicy.exe show` prints the policy. |
+| `policy_violation: Step <n> (...): the target is a declared write control and needs write: true`, or `the key ... could reach a declared write control` | A step pressed a button or key the policy protects, and it was not ticked as a write when the bot was approved. | On the import form, leave **Bot file** empty, type the bot's name, choose **Sign the approved steps again, unchanged**, and tick that step. |
 | `runner_unavailable: the desktop runner could not start ErpDemo.exe: it is not installed at the path the runner's policy names ...` | The app is not where the policy says. | Install the app there, or allow it at its real path. |
 | `busy: the desktop runner is busy with another run` | One run at a time: another one held the runner longer than this run waited (45 s). | Run less often, or at other times. |
 | `The browser service at wss://...:3000/ had no free browser session for 60 s.` | The browser here serves one session at a time. | Start fewer browser runs at once. |
 | `Save as PDF needs headless Chromium` | The browser here shows a window. | Run Save as PDF on another browser ([Operator guide](../reference/operator.md#where-the-browser-runs)). |
 | `Port 3000 is in use by <process>. Choose another with -RunnerPort or -BrowserPort.` | Another program holds the port. | Stop it, or install with another port. |
 | `The browser files are not in ...` or `This install has the browser, and its files are not in ...` | The browser zip was not unpacked into the package folder. | Run `Get-Rpa.ps1 -WithBrowser`, or unpack `rpa-browser-windows-x64.zip` there with the `Expand-Archive` command the message gives, and run `Install-Rpa.ps1` again. To remove the browser instead, add `-NoBrowser`. |
+| `... exists already. To install from it, run ...\Install-Rpa.ps1 with the same parameters` | `Get-Rpa.ps1` found the package folder of its version, for example after an uninstall. | Run that `Install-Rpa.ps1` with the same parameters. |
+| `rpa-runner was the bot user of an install with -Unattended. Uninstall-Rpa.ps1 removed the password stored for it ...` | An install with no sign-in mode, for the bot user an unattended install had, after `Uninstall-Rpa.ps1` without `-RemoveData`. Nobody knows the password the installer made. | Set a new password and add `-Unattended -UserPassword <it>`, then change the runner's certificate (section 10). Or uninstall with `-RemoveData`, remove the user and install again (new tokens and Connection Lines). Or add `-Unattended:$false` to have a person sign the user in. |
 | `... can be changed by <account>. Unpack the package in a folder only you or administrators can change, and run it from there.` | The package folder is not protected. | Use `Get-Rpa.ps1`, which unpacks under `C:\Program Files`. |
 | The script `cannot be loaded because running scripts is disabled on this system` | The execution policy. | Run `Set-ExecutionPolicy -Scope Process Bypass -Force` in that window first. |
 
