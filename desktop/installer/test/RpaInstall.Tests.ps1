@@ -5118,18 +5118,17 @@ public static class Program {
       }
       $env:RPA_FAKE_LOG = $script:GhLog
       $script:Command = 'gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa --signer-workflow jb-n8n/n8n-nodes-rpa/.github/workflows/desktop-release.yml --source-ref refs/tags/desktop-v0.3.0'
-      $script:Why = "It shows that this project's release workflow built the zip; the hash only shows that the zip is the file published beside this script."
       function Set-FakeGh([int]$Auth, [int]$Verify) { $env:RPA_FAKE_AUTH = "$Auth"; $env:RPA_FAKE_VERIFY = "$Verify"; Remove-Item -LiteralPath $script:GhLog -ErrorAction SilentlyContinue }
       function Get-GhCalls { if (Test-Path -LiteralPath $script:GhLog) { @(Get-Content -LiteralPath $script:GhLog) } else { @() } }
     }
     AfterAll { Remove-Item -LiteralPath env:RPA_FAKE_LOG, env:RPA_FAKE_AUTH, env:RPA_FAKE_VERIFY -ErrorAction SilentlyContinue }
 
-    It 'without the GitHub CLI goes on, and says in one line that the attestation was NOT checked, why it matters and how to check it' {
+    It 'without the GitHub CLI goes on, and says in two lines that the attestation was NOT checked, and how to check it' {
       $missing = Join-Path $script:GetRoot 'no-gh.exe'
       Get-RpaGhState $missing | Should -BeExactly 'missing'
       $result = Test-RpaAttestation $missing 'missing' 'C:\x\rpa-windows-x64.zip' '0.3.0' $false
       $result.Refusal | Should -BeNullOrEmpty
-      $result.Line | Should -BeExactly ("The build attestation was NOT checked: the GitHub CLI is not installed here ($missing). $($script:Why) To check it on a machine with gh: $($script:Command)")
+      $result.Line | Should -BeExactly @("The build attestation of rpa-windows-x64.zip was NOT checked: the GitHub CLI is not installed here ($missing). To check it on a machine with gh:", "  $($script:Command)")
     }
 
     It 'with a GitHub CLI that is not signed in goes on the same way, and does not ask it to verify' {
@@ -5137,7 +5136,7 @@ public static class Program {
       Get-RpaGhState $script:FakeGh | Should -BeExactly 'signed out'
       $result = Test-RpaAttestation $script:FakeGh 'signed out' 'C:\x\rpa-windows-x64.zip' '0.3.0' $false
       $result.Refusal | Should -BeNullOrEmpty
-      $result.Line | Should -BeExactly ("The build attestation was NOT checked: the GitHub CLI here is not signed in (gh auth status). $($script:Why) To check it on a machine with gh: $($script:Command)")
+      $result.Line | Should -BeExactly @('The build attestation of rpa-windows-x64.zip was NOT checked: the GitHub CLI here is not signed in (gh auth status). To check it on a machine with gh:', "  $($script:Command)")
       Get-GhCalls | Should -BeExactly @('auth status')
     }
 
@@ -5195,7 +5194,8 @@ public static class Program {
 
     It 'names the browser zip in the command that checks its attestation elsewhere' {
       $result = Test-RpaAttestation 'C:\no-gh.exe' 'missing' 'C:\x\rpa-browser-windows-x64.zip' '0.3.0' $false $true 'rpa-browser-windows-x64.zip'
-      $result.Line | Should -Match ([regex]::Escape('To check it on a machine with gh: gh attestation verify rpa-browser-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa'))
+      $result.Line[0] | Should -Match ([regex]::Escape('The build attestation of rpa-browser-windows-x64.zip was NOT checked: '))
+      $result.Line[1] | Should -Match ([regex]::Escape('  gh attestation verify rpa-browser-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa'))
     }
 
     It 'stops before the download when -RequireAttestation cannot be met, and otherwise checks before the unpack' {
