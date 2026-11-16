@@ -2,9 +2,11 @@
 // Node: Ask for approval
 // Parameter: message
 //
-// The approval email (send and wait): the version and name, what the import left out, the numbered steps, what changed,
-// the evidence and safety flags, what Approve and Reject do, the hash and the review digest. Every value from the run
-// goes through LOOKALIKE (snippets.js), so a mail program shows it as text and makes no link of it.
+// The approval email (send and wait): the version and name, what the import left out, the numbered steps (the whole
+// bot; "the AI describes it as" on a description the chat model wrote), what changed (for a repair, compared with the
+// version it repairs: COMPARED_WITH_BASE), the evidence and safety flags, what Approve and Reject do, the hash and the
+// review digest. Every value from the run goes through LOOKALIKE (snippets.js), so a mail program shows it as text and
+// makes no link of it.
 
 =Steps version {{ (LOOKALIKE)($('Repaired steps received').item.json.version) }} for {{ (LOOKALIKE)($('Repaired steps received').item.json.name) }}{{
   String($('Repaired steps received').item.json.leftOutList ?? '')
@@ -24,7 +26,7 @@
                 typeof x.describedAs === 'string'
                   ? (
                     x.quiet === true
-                      ? ' (the author calls it: ' + e(x.describedAs) + ')'
+                      ? ' (' + (x.byAi === true ? 'the AI describes it as: ' : 'the author calls it: ') + e(x.describedAs) + ')'
                       : ' ⚠ (described differently as: ' + e(x.describedAs) + ')'
                   )
                   : ''
@@ -45,7 +47,7 @@
                         typeof y.describedAs === 'string'
                           ? (
                             y.quiet === true
-                              ? ' (the author calls it: ' + e(y.describedAs) + ')'
+                              ? ' (' + (y.byAi === true ? 'the AI describes it as: ' : 'the author calls it: ') + e(y.describedAs) + ')'
                               : ' ⚠ (described differently as: ' + e(y.describedAs) + ')'
                           )
                           : ''
@@ -72,15 +74,14 @@ Evidence{{
 }}: {{ (LOOKALIKE)($('Repaired steps received').item.json.evidenceLine) }}
 Safety flags: {{ (LOOKALIKE)($('Repaired steps received').item.json.safetyLine) }}{{
   (
-    (j, e, el) => (
-      Array.isArray(j.reviewSteps)
-        && j.reviewSteps.length > 0
-        && Array.isArray(j.steps?.steps)
-        && j.reviewSteps.length === j.steps.steps.length
+    (j, e, el, fits, c) => (
+      fits
         && Array.isArray(j.changes)
         && j.changes.length > 0
         && j.changes.every((c) => c && c.was === null)
         ? ''
+        : fits && c !== ''
+        ? '\nWhat changed: ' + e(c)
         : '\nWhat changed'
           + (
             String(j.evidenceLine ?? '').startsWith('Not replayed:')
@@ -104,7 +105,10 @@ Safety flags: {{ (LOOKALIKE)($('Repaired steps received').item.json.safetyLine) 
                           typeof x.describedAs === 'string'
                             ? (
                               x.quiet === true
-                                ? ' (the author calls it: ' + e(x.describedAs) + ')'
+                                ? ' ('
+                                  + ((CHANGE_BY_AI)(j, x) ? 'the AI describes it as: ' : 'the author calls it: ')
+                                  + e(x.describedAs)
+                                  + ')'
                                 : ' ⚠ (described differently as: ' + e(x.describedAs) + ')'
                             )
                             : ''
@@ -115,7 +119,16 @@ Safety flags: {{ (LOOKALIKE)($('Repaired steps received').item.json.safetyLine) 
               : el(j.changeList)
           )
     )
-  )($('Repaired steps received').item.json, (LOOKALIKE), ((s) => (LOOKALIKE)(s, true)))
+  )(
+    $('Repaired steps received').item.json,
+    (LOOKALIKE),
+    ((s) => (LOOKALIKE)(s, true)),
+    Array.isArray($('Repaired steps received').item.json.reviewSteps)
+      && $('Repaired steps received').item.json.reviewSteps.length > 0
+      && Array.isArray($('Repaired steps received').item.json.steps?.steps)
+      && $('Repaired steps received').item.json.reviewSteps.length === $('Repaired steps received').item.json.steps.steps.length,
+    (COMPARED_WITH_BASE)($('Repaired steps received').item.json)
+  )
 }}
 
 Approve: these exact steps are signed and n8n runs them with the stored login, without asking again, until the site changes. Reject: nothing is signed; the version in use, if any, stays in use. The two values below identify what you are approving; you do not need to compare them by hand. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.

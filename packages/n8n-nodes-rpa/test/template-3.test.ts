@@ -43,14 +43,15 @@ describe('3-approve-steps.json', () => {
     for (const field of ['evidenceLine', 'changeList', 'safetyLine', 'hash']) expect(String(email.html)).toMatch(new RegExp(`(\\$json|\\bj)\\.${field}\\b`));
     expect(String(email.html)).toContain('color:#b00020');
   });
-  it('trigger → Settings → (first) the tables and Mark pending, (then) Desktop steps? → one desktop email, or the review email and Ask for approval → Timed out? → Sign steps', () => {
+  it('trigger → Settings → (first) the tables, Mark pending and The approved version, (then) Desktop steps? → one desktop email, or the review email and Ask for approval → Timed out? → Sign steps', () => {
     expect(targets(t, 'Repaired steps received')).toEqual([['Settings']]);
     // v1 order runs the topmost child's branch first: the tables exist and the row is pending before an email goes out.
     expect(targets(t, 'Settings')).toEqual([['Create steps table', 'Desktop steps?']]);
     expect(byName(t, 'Create steps table').position[1]).toBeLessThan(byName(t, 'Desktop steps?').position[1]);
     expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
     expect(targets(t, 'Create run log table')).toEqual([['Mark pending']]);
-    expect(targets(t, 'Mark pending')).toEqual([]);
+    expect(targets(t, 'Mark pending')).toEqual([['The approved version']]);
+    expect(targets(t, 'The approved version')).toEqual([]);
     // Desktop steps: one email (its form asks for the writes). Browser steps: the review email with the screenshots, then Approve / Reject.
     expect(targets(t, 'Desktop steps?')).toEqual([['Ask for approval (desktop steps)'], ['Email repaired steps']]);
     expect(targets(t, 'Email repaired steps')).toEqual([['Ask for approval']]);
@@ -579,7 +580,9 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
       { change: 'Changed', step: 2, text: 'Click Delete', describedAs: 'Read the total', was: 'Click Export (click role "button" name "Export")' },
       { change: 'Added', step: 3, text: 'Open a.example/list', describedAs: 'Open the list', quiet: true },
     ]);
-    expect(render(html, { $json: repair })).toContain('<b>What changed (as reported by the run):</b><br>'
+    // Without the version it repairs in playwright_steps (The approved version found no signed row), the run's change list.
+    const noBase = { $json: repair, $: () => ({ isExecuted: true, all: () => [{ json: {} }] }) };
+    expect(render(html, noBase)).toContain('<b>What changed (as reported by the run):</b><br>'
       + 'Changed: step 2, Click Delete <b style="color:#b00020">(described differently as: Read the total)</b> <i style="color:#7e8186">(was: Click Export (click role "button" name "Export"))</i><br>'
       + `Added: step 3, Open ${unlinked('a.example/list')} <i style="color:#7e8186">(the author calls it: Open the list)</i></p>`);
     expect(ask(repair)).toContain('\nWhat changed (as reported by the run):\n'
@@ -632,5 +635,102 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
 
   it('Sign Steps checks the sentences the emails showed: the item goes to Sign steps whole, reviewSteps included', () => {
     expect(byName(t3, 'Repaired steps to sign').parameters.jsonOutput).toBe("={{ $('Repaired steps received').item.json }}");
+  });
+});
+
+describe('template 3 emails of a repair: the whole repaired bot, and what changed in the import review page\'s words', () => {
+  const t3 = load('3-approve-steps.json');
+  const html = String(byName(t3, 'Email repaired steps').parameters.html);
+  const message = String(byName(t3, 'Ask for approval').parameters.message);
+  const engine = fakeEngine(() => {
+    throw new Error('no run');
+  });
+  // Version 1 as approved, and the model's repair: a pop-up dismissed first, then the section under its new name.
+  const base: Script = {
+    name: 'notices', version: 1, startUrl: 'https://a.example/',
+    steps: [
+      { intent: 'Open the portal', goto: 'https://a.example/' },
+      { intent: 'Open Service', click: { role: 'link', name: 'Service' } },
+      { intent: 'Read the notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}' } },
+    ],
+  };
+  const now: Script = {
+    ...base, version: 2,
+    steps: [base.steps[0], { intent: 'Dismiss Remind me later', click: { role: 'button', name: 'Remind me later' } }, { intent: 'Open Resources', click: { role: 'link', name: 'Resources' } }, base.steps[2]],
+  };
+  const proposal: Proposal = {
+    name: 'notices', baseVersion: 1, version: 2, steps: now, hash: scriptHash(now), evidence: { count: 7, total: 7, diff: { missing: [], extra: [] } },
+    changes: stepChanges(parseScript(base), parseScript(now)), safetyFlags: [], screenshots: {},
+  };
+  const item = repairedStepsJson(engine, proposal, 'before,after', { byModel: true });
+  const row = { name: 'notices', version: 1, steps: JSON.stringify(base), status: 'active', signature: 's1' };
+  /** The scope both emails get: the item, and the rows The approved version found. */
+  const scope = (json: IDataObject, rows: IDataObject[]) => ({
+    $json: json,
+    $: (name: string) => (name === 'The approved version'
+      ? { isExecuted: true, all: () => rows.map((r) => ({ json: r })) }
+      : { item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : json } }),
+  });
+  const COMPARED = 'notices: changed from the approved version 1: added: step 3; step 2: description "Open Service" → "Dismiss Remind me later", role "link" → "button", control name "Service" → "Remind me later". 4 steps now, 3 in the approved version.';
+
+  it('The approved version reads the row of the version the repair started from (one empty item for a first version)', () => {
+    const n = byName(t3, 'The approved version');
+    expect(n).toMatchObject({ type: 'n8n-nodes-base.dataTable', alwaysOutputData: true });
+    expect(table(n)).toMatchObject({ resource: 'row', operation: 'get', dataTableId: { value: STEPS_TABLE }, matchType: 'allConditions', returnAll: true });
+    expect(table(n).filters?.conditions).toEqual([
+      { keyName: 'name', condition: 'eq', keyValue: `={{ ${SETTINGS_NAME} }}` },
+      { keyName: 'version', condition: 'eq', keyValue: "={{ $('Repaired steps received').item.json.baseVersion ?? 0 }}" },
+    ]);
+  });
+
+  it('the review email lists every step of the repaired bot, labels the model\'s descriptions as the AI\'s, and says what changed as the review page does', () => {
+    const out = render(html, scope(item, [row]));
+    expect(out).toContain('<ol><li>Open a.\u200bexample <i style="color:#7e8186">(the author calls it: Open the portal)</i></li>'
+      + '<li>Click Remind me later <i style="color:#7e8186">(the AI describes it as: Dismiss Remind me later)</i></li>'
+      + '<li>Click Resources <i style="color:#7e8186">(the AI describes it as: Open Resources)</i></li>'
+      + '<li>Read the notices</li></ol>');
+    expect(out).toContain(`<p><b>What changed:</b> ${COMPARED}</p>`);
+    expect(out).not.toContain('as reported by the run):</b><br>Changed');
+  });
+
+  it('the approval email: the same list and the same words', () => {
+    const out = render(message, scope(item, [row]));
+    expect(out).toContain('\nThe steps (what each one does, built from the step):\n'
+      + '1. Open a.\u200bexample (the author calls it: Open the portal)\n'
+      + '2. Click Remind me later (the AI describes it as: Dismiss Remind me later)\n'
+      + '3. Click Resources (the AI describes it as: Open Resources)\n'
+      + '4. Read the notices\nEvidence (as reported by the run): Proven in a fresh browser: 7 of 7 rows\n');
+    expect(out).toContain(`\nWhat changed: ${COMPARED}\n\nApprove: `);
+  });
+
+  it('a step that moved and changed is named with both numbers', () => {
+    const moved: Script = { ...base, version: 2, steps: [base.steps[0], base.steps[2], { ...base.steps[1], click: { role: 'link', name: 'Services' } }] };
+    const json = repairedStepsJson(engine, { ...proposal, steps: moved, hash: scriptHash(moved), changes: stepChanges(parseScript(base), parseScript(moved)) }, '', { byModel: true });
+    const out = render(message, scope(json, [row]));
+    expect(out).toMatch(/\nWhat changed: notices: changed from the approved version 1: .*step 2 \(now step 3\): control name "Service" → "Services"/);
+  });
+
+  it('text from the steps and the stored row goes through the email\'s one function: look-alikes, no links', () => {
+    const odd: Script = { ...now, steps: [now.steps[0], { intent: 'Open <b>x</b> & http://evil.example/', click: { role: 'button', name: 'Go <i>' } }, now.steps[3]] };
+    const json = repairedStepsJson(engine, { ...proposal, steps: odd, hash: scriptHash(odd), changes: stepChanges(parseScript(base), parseScript(odd)) }, '', { byModel: true });
+    for (const out of [render(html, scope(json, [row])), render(message, scope(json, [row]))]) {
+      const compared = out.split('What changed:')[1] ?? '';
+      expect(compared).toContain('\u2039i\u203a');
+      expect(compared).not.toMatch(/<i>|<b>x|evil\.example|:\/\//);
+    }
+  });
+
+  it('without the approved row (deleted, or another name), or for an item made before reviewSteps, the run\'s change list as before', () => {
+    for (const rows of [[], [{}], [{ ...row, version: 3 }], [{ ...row, steps: '' }], [{ ...row, name: 'other' }]]) {
+      expect(render(html, scope(item, rows))).toContain('<b>What changed (as reported by the run):</b><br>');
+      expect(render(message, scope(item, rows))).toContain('\nWhat changed (as reported by the run):\n');
+    }
+    const { reviewSteps: _r, ...older } = item;
+    expect(render(html, scope(older, [row]))).toContain('<b>What changed (as reported by the run):</b><br>');
+    expect(render(html, scope(older, [row]))).not.toContain('The steps');
+    // The fallback list labels the AI's descriptions too.
+    expect(render(message, scope(item, []))).toContain('(the AI describes it as: Dismiss Remind me later)');
+    // A superseded row of that version counts when no active one is there; an active one is taken first.
+    expect(render(message, scope(item, [{ ...row, status: 'superseded' }]))).toContain(`\nWhat changed: ${COMPARED}`);
   });
 });

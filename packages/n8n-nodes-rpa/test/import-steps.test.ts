@@ -673,6 +673,11 @@ describe('Import Steps: execution', () => {
     const [first, second] = engine.adoptions;
     expect(first.repair).toMatchObject({ goal: 'Do what the imported steps do, on the page as it is now.', name: 'sap-report-1', deliverUnconfirmed: false, alreadyRan: false });
     expect(second.repair).toMatchObject({ name: 'sap-report-2', alreadyRan: true });
+    // The draft the model repaired: a description on a step it wrote is labelled as the AI's; a replay alone labels none.
+    const shown = (k: number) => (repaired[k].json.reviewSteps as IDataObject[]).filter((r) => r.describedAs !== undefined);
+    expect(shown(0).length).toBeGreaterThan(0);
+    expect(shown(0).every((r) => r.byAi === true)).toBe(true);
+    expect(shown(1).some((r) => r.byAi !== undefined)).toBe(false);
     // A Goal you type is used as is.
     const typed = importEngine((input) => proved(input));
     await run(typed, { params: params({ aiRepair: true, goal: 'Download the September line items' }), model });

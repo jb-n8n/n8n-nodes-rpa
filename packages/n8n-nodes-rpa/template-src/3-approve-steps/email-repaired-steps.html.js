@@ -3,8 +3,9 @@
 // Parameter: html
 //
 // The HTML email that says a step list is ready for review: its safety flags, what the import left out, the numbered
-// steps, what changed, the evidence, the hash and which screenshots are attached. Every value from the run is shown as
-// text (LOOKALIKE in snippets.js).
+// steps (the whole bot), what changed (for a repair, compared with the version it repairs: COMPARED_WITH_BASE), the
+// evidence, the hash and which screenshots are attached. A description the chat model wrote reads "the AI describes it
+// as" (byAi). Every value from the run is shown as text (LOOKALIKE in snippets.js).
 
 =<!-- Every value below comes from the run (page text, model output): each is shown as text, with look-alikes for <, > and & and a zero-width space in each address, so it cannot restyle or hide parts of this email and mail programs do not make a link of it. -->
 <h2>Steps version {{ (LOOKALIKE)($json.version) }} for {{ (LOOKALIKE)($json.name) }} are ready for review</h2>
@@ -28,7 +29,10 @@
                 typeof x.describedAs === 'string'
                   ? (
                     x.quiet === true
-                      ? ' <i style="color:#7e8186">(the author calls it: ' + e(x.describedAs) + ')</i>'
+                      ? ' <i style="color:#7e8186">('
+                        + (x.byAi === true ? 'the AI describes it as: ' : 'the author calls it: ')
+                        + e(x.describedAs)
+                        + ')</i>'
                       : ' <b style="color:#b00020">(described differently as: ' + e(x.describedAs) + ')</b>'
                   )
                   : ''
@@ -50,7 +54,8 @@
                           typeof y.describedAs === 'string'
                             ? (
                               y.quiet === true
-                                ? ' <i style="color:#7e8186">(the author calls it: '
+                                ? ' <i style="color:#7e8186">('
+                                  + (y.byAi === true ? 'the AI describes it as: ' : 'the author calls it: ')
                                   + e(y.describedAs)
                                   + ')</i>'
                                 : ' <b style="color:#b00020">(described differently as: '
@@ -81,15 +86,14 @@
 }}:</b> {{ (LOOKALIKE)($json.evidenceLine) }}</p>
 {{
   (
-    (j, e) => (
-      Array.isArray(j.reviewSteps)
-        && j.reviewSteps.length > 0
-        && Array.isArray(j.steps?.steps)
-        && j.reviewSteps.length === j.steps.steps.length
+    (j, e, fits, c) => (
+      fits
         && Array.isArray(j.changes)
         && j.changes.length > 0
         && j.changes.every((c) => c && c.was === null)
         ? ''
+        : fits && c !== ''
+        ? '<p><b>What changed:</b> ' + e(c) + '</p>'
         : '<p><b>What changed'
           + (
             String(j.evidenceLine ?? '').startsWith('Not replayed:')
@@ -113,7 +117,8 @@
                           typeof x.describedAs === 'string'
                             ? (
                               x.quiet === true
-                                ? ' <i style="color:#7e8186">(the author calls it: '
+                                ? ' <i style="color:#7e8186">('
+                                  + ((CHANGE_BY_AI)(j, x) ? 'the AI describes it as: ' : 'the author calls it: ')
                                   + e(x.describedAs)
                                   + ')</i>'
                                 : ' <b style="color:#b00020">(described differently as: '
@@ -133,7 +138,15 @@
           )
           + '</p>'
     )
-  )($json, (LOOKALIKE))
+  )(
+    $json,
+    (LOOKALIKE),
+    Array.isArray($json.reviewSteps)
+      && $json.reviewSteps.length > 0
+      && Array.isArray($json.steps?.steps)
+      && $json.reviewSteps.length === $json.steps.steps.length,
+    (COMPARED_WITH_BASE)($json)
+  )
 }}
 <p>Steps hash: <code>{{ (LOOKALIKE)($json.hash) }}</code>. {{
   ({

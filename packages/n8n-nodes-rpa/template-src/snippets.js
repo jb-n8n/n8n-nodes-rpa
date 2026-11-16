@@ -616,3 +616,35 @@ const LOOKALIKE =
       /\b[a-z][a-z0-9+.-]*:\/\/[^\s\u2039\u203a]*|\b(?:[a-z0-9-]+\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\b)[a-z]{2,}\b[^\s\u2039\u203a]*/gi,
       (u) => u.split('://').join(':\u200b//').split('.').join('.\u200b')
     );
+
+// A Repaired steps item j compared with the version it repairs (COMPARE_STEPS, the import review page's words), or ''
+// for a first version, or when The approved version found no signed row of that name and version (an active one
+// first). Template 3, Email repaired steps and Ask for approval.
+const COMPARED_WITH_BASE =
+  (j) => (
+    (row) => (
+      row
+        ? (COMPARE_STEPS)({ found: true, name: j.name, version: row.version, steps: row.steps }, JSON.stringify(j.steps)).compared
+        : ''
+    )
+  )(
+    typeof j.baseVersion !== 'number'
+      ? undefined
+      : ($('The approved version').isExecuted ? $('The approved version').all().map((x) => x.json) : []).filter(
+        (r) => r.name === j.name && r.version === j.baseVersion && typeof r.steps === 'string' && r.steps !== ''
+      ).sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1))[0]
+  );
+
+// Whether the description of a change-list entry x of the item j (reviewChanges) is the AI's: the step it names is
+// labelled so in j's reviewSteps (byAi). Template 3, Email repaired steps and Ask for approval.
+const CHANGE_BY_AI =
+  (j, x) => (
+    (r) => (
+      r !== null && typeof r === 'object'
+        && (
+          x.onEachPage
+            ? (Array.isArray(r.each) ? r.each : []).some((y) => y.byAi === true && y.text === x.text)
+            : r.byAi === true
+        )
+    )
+  )(Array.isArray(j.reviewSteps) && typeof x.step === 'number' ? j.reviewSteps[x.step - 1] ?? null : null);

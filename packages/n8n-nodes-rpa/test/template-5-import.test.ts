@@ -1017,6 +1017,16 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       + '<li>Download with Export <em>· returns a file</em></li></ol>');
     expect(html).toContain('Returns a file to n8n: step 3.');
     expect(String(review.parameters.options && (review.parameters.options as IDataObject).customCss)).toContain('div.html strong { color: #b00020; font-weight: 600; }');
+    // A step the chat model wrote (an import's draft the model repaired): its description is the AI's, in the emails' words.
+    const byAi = reviewSteps(steps, { desktop: false, shownUrl, byAi: new Set(['1', '2.3']) });
+    expect([byAi[0].byAi, byAi[1].byAi, byAi[1].each?.[2].byAi, byAi[2].byAi]).toEqual([true, undefined, true, undefined]);
+    const ranByAi = { ...ran, 'Import steps': [ran['Import steps'][0], [{ json: { ...item, reviewSteps: byAi } }]] } as Record<string, INodeExecutionData[][]>;
+    const aiHtml = String(reviewFields({ $: nodesRan(ranByAi) })[0].html);
+    expect(aiHtml).toContain('<ol><li>Open a.example/list <em>(the AI describes it as: Open the list)</em></li>'
+      + '<li>Page through with Next, at most 3 pages, 3 steps on each <em>(the author calls it: Go through the pages)</em><ul>');
+    expect(aiHtml).toContain('<li>On each page: Click Delete &lt;all&gt; <em>(the AI describes it as: Close the banner)</em></li></ul></li>');
+    // The red mark is the same whoever wrote the description.
+    expect(aiHtml).toContain('<strong>(described differently as: Read the note)</strong>');
   });
 
   it('a recording\'s marks name its secret variables from the import, never a value', async () => {
