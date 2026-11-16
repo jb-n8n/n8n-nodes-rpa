@@ -66,7 +66,7 @@ module "rpa_browser" {
   vpc_id      = "vpc-0123456789abcdef0"
   subnet_ids  = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0aaaaaaaaaaaaaaa2"]
   cluster_arn = "arn:aws:ecs:eu-west-1:123456789012:cluster/n8n"
-  image       = "ghcr.io/jb-n8n/rpa-browser:0.1.0"
+  image       = "ghcr.io/jb-n8n/rpa-browser:0.2.0"
 
   # Only n8n's workers may open sessions.
   n8n_security_group_ids = ["sg-0123456789abcdef0"]

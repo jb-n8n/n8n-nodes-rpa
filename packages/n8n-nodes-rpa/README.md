@@ -10,11 +10,13 @@ A personal open-source project (MIT), not an official n8n product. Documentation
 
 ## Install
 
-In a self-hosted n8n 2.41 or later: **Settings → Community nodes → Install**, package `n8n-nodes-rpa`. n8n must allow
+In a self-hosted n8n (tried on 2.45.3): **Settings → Community nodes → Install**, package `n8n-nodes-rpa`. n8n must allow
 the install of unverified community packages. n8n Cloud runs only verified community nodes, and a node that drives a
 browser cannot be verified, so this package is for self-hosted n8n only. To install from the GitHub Release tarball,
 or in queue mode, see the
-[Operator guide](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/reference/operator.md#install-the-node).
+[Operator guide](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/reference/operator.md#install-the-node). What
+was not tried (other n8n versions, Windows 10 and 11, queue mode with several workers) is in the
+[known limits](https://github.com/jb-n8n/n8n-nodes-rpa#project-status).
 
 The node does not ship a browser. Point its **RPA Browser** credential at a browser server, such as the `rpa-browser`
 image (`ghcr.io/jb-n8n/rpa-browser`), a hosted endpoint such as Browserless, or the browser the Windows package installs.

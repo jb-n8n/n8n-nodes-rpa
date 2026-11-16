@@ -68,10 +68,10 @@ Entra's `GetCredentialType` is one): declare that path as a login page too (or i
 
 ## Settings you must type
 
-Seven settings must be set directly on the node. Set with an expression, they are a configuration error, so item data
+Eight settings must be set directly on the node. Set with an expression, they are a configuration error, so item data
 cannot switch them: **Require Signed Steps**, **Allow Private Network**, **Allow Unsigned Writes**, **Deliver
 Unconfirmed Rows**, Run Steps' **Login Breaker Reset Key**, **One-Time Code Workflow**, and Sign Steps' **Approver
-Allowlist**. If the whole Options collection is set with one expression, n8n drops it before the node runs, and these
+Allowlist** and **Approval Form Page**. If the whole Options collection is set with one expression, n8n drops it before the node runs, and these
 switches stay off. Type the RPA Browser credential's Endpoint URL, Token and Certificate Fingerprint directly too.
 
 ## Signing and approval

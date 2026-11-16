@@ -66,6 +66,8 @@ image adds:
 
 ## The npm package
 
-`n8n-nodes-rpa` holds this project's code only (`dist/` and `templates/`, with its LICENSE). npm installs its
-dependencies from the registry, each package with its own files: `playwright-core` 1.63.0 (Apache-2.0), `fflate`
-0.8.3 (MIT) and `redis` 6.3.0 (MIT), with what they depend on.
+`n8n-nodes-rpa` holds this project's code (`dist/` and `templates/`, with its LICENSE), and one piece by others: the
+setup command, `dist/setup.mjs`, has `fflate` 0.8.3 (MIT) built into it. The package names it, with its licence text,
+in its own `THIRD-PARTY-NOTICES.md`, and the build stops when the setup command takes in a package that file does not
+name. npm installs the package's dependencies from the registry, each package with its own files: `playwright-core`
+1.63.0 (Apache-2.0), `fflate` 0.8.3 (MIT) and `redis` 6.3.0 (MIT), with what they depend on.

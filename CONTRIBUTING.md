@@ -69,30 +69,50 @@ and templates), `packages/eval` (the heal-rate eval and acceptance tests), `sand
 
 ## Releases
 
-Releases are published to npm from GitHub Actions with provenance (`.github/workflows/publish.yml`), never from a
-laptop. The workflow tests in a job without publish rights, packs the tarball with
-`packages/n8n-nodes-rpa/scripts/pack.mjs` (devDependencies and scripts stripped, the manifest checked) and cuts the
-version's section out of `CHANGELOG.md`; a second job with no checkout publishes that tarball to npm; once it has, a
-third job with no checkout attests the same tarball and creates the GitHub Release `v<version>` with the tarball, its
-SHA-256 and that section as the notes. A maintainer bumps the version in `packages/n8n-nodes-rpa/package.json`, adds
-the `## <version> (<date>)` entry to `CHANGELOG.md`, and pushes a `v<version>` tag. The `rpa-browser` image is published the same way by
-`.github/workflows/browser-image.yml`, from a `browser-v<version>` tag on `main`; its Playwright version must equal the
-node's `playwright-core`.
+Releases are published from GitHub Actions, never from a laptop. One version number covers three releases, each from
+its own tag on a commit on `main`, and one `CHANGELOG.md` section, `## <version> (<date>)`, is the notes of all three:
+the workflows cut out the section whose heading starts `## <version>` and do not read the date.
+
+- **The node**, `.github/workflows/publish.yml`, from a `v<version>` tag, where `<version>` is the one in
+  `packages/n8n-nodes-rpa/package.json`. The workflow tests in a job without publish rights, packs the tarball with
+  `packages/n8n-nodes-rpa/scripts/pack.mjs` (devDependencies and scripts stripped, the manifest checked) and cuts the
+  notes; a second job with no checkout publishes that tarball to npm with provenance; once it has, a third job with no
+  checkout attests the same tarball and creates the GitHub Release `v<version>` with the tarball, its SHA-256 and the
+  notes.
+- **The `rpa-browser` image**, `.github/workflows/browser-image.yml`, from a `browser-v<version>` tag. Its Playwright
+  version must equal the node's `playwright-core`.
+- **The Windows package**, `.github/workflows/desktop-release.yml`, from a `desktop-v<version>` tag, where `<version>`
+  is the `<Version>` in `desktop/Directory.Build.props`. It builds, tests and attests both zips and `Get-Rpa.ps1`, and
+  creates the GitHub Release `desktop-v<version>`. A manual run on `main` is a dry run that publishes nothing
+  ([desktop/README.md](desktop/README.md#releasing-the-windows-package)).
+
+A maintainer sets the version in both files, writes the `CHANGELOG.md` section, and pushes the tags in this order: the
+image, the node, then the Windows package, on the same commit. Each release then points only at what is published
+already: the node's guides name the image, and the Windows package needs that node version.
 
 ## The community package scan
 
 The package is unverified on purpose: it drives a browser through `playwright-core`, which n8n's verification rules do
-not allow. `pnpm -r lint` runs the plugin's `recommendedWithoutN8nCloudSupport` set with two rules off (runtime
-dependencies, `usableAsTool`). n8n's scanner (`npx @n8n/scan-community-package n8n-nodes-rpa`) applies the full
-`recommended` set, and these findings are expected there; anything else is a regression:
+not allow. `pnpm -r lint` runs the plugin's `recommendedWithoutN8nCloudSupport` set over the node's TypeScript, with two
+rules off (runtime dependencies, `usableAsTool`). n8n's scanner (`npx @n8n/scan-community-package n8n-nodes-rpa`)
+applies the full `recommended` set to the published package. Run over the packed `dist/` from the code, that set
+reports these, which are expected; anything else is a regression. The scanner's own file set may differ: run it once
+after each release and update this list.
 
 - `no-runtime-dependencies` (package.json): `playwright-core`, `fflate` and `redis`.
 - `node-usable-as-tool` (Playwright.node.ts): left out on purpose; tool conversion would drop the model input and the
   extra outputs.
-- `no-restricted-imports`: `redis` (redis-store.ts, the shared breaker and lock in queue mode) and `node:fs`
-  (guard-store.ts, to read `EXECUTIONS_MODE_FILE`).
-- `no-restricted-globals`: `process` (guard-store.ts, to detect queue mode) and `setTimeout`/`clearTimeout`
-  (redis-store.ts, to bound every Redis command).
+- In the node (`dist/nodes/`): `no-restricted-imports` for `redis` (redis-store.js, the shared breaker and lock in
+  queue mode) and `node:fs` (guard-store.js, to read `EXECUTIONS_MODE_FILE`); `no-restricted-globals` for `process`
+  (guard-store.js, to detect queue mode) and `setTimeout`/`clearTimeout` (redis-store.js, to bound every Redis command).
+- In the bundled engine (`dist/engine/`): `no-restricted-imports` for `playwright-core`, `fflate`, `node:net`,
+  `node:tls`, `node:dns/promises`, `node:fs/promises`, `node:os` and `node:path` (the browser connection, the
+  private-network checks, downloads, the desktop runner's TLS connection); `no-restricted-globals` for `setTimeout`,
+  `clearTimeout`, `setInterval` and `clearInterval` (time limits, and the lease of a desktop run).
+- In the setup command (`dist/setup.mjs`, the package's bin, which n8n never loads): `no-dangerous-functions` for
+  `spawn` (it runs n8n's own command line); `no-restricted-imports` for `node:child_process`, `node:fs`, `node:os`,
+  `node:path`, `node:readline/promises`, `node:util`, `node:buffer`, `module` and `worker_threads` (the last from the
+  bundled fflate); `no-restricted-globals` for `process`, `setTimeout` and `clearTimeout`.
 
 ## Security
 

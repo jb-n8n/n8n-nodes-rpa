@@ -89,7 +89,7 @@ The login breaker and the run lock are kept per account: the Site Login and the 
 - Later runs skip that account with `locked_out`. Correct its password in your data, and the next run tries once. If the password was right, or the account is unlocked
   now (`account_locked`), type a new **Options → Login Breaker Reset Key**: it reopens every account of this Site Login.
 - Two runs of the same account at the same time: the second fails `busy`. Different accounts may run at the same time.
-- A breaker from version 0.2.0 or earlier stops every account until you type a new reset key
+- A breaker from version 0.1.0 stops every account until you type a new reset key
   ([Operator guide](../reference/operator.md#login-breaker-and-run-lock)).
 
 ## Rotating passwords
