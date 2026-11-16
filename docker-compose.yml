@@ -25,7 +25,9 @@ services:
       N8N_HOST: localhost
       N8N_PORT: "5678"
       N8N_PROTOCOL: http
-      WEBHOOK_URL: http://localhost:5678/
+      # n8n's address for its webhooks and forms. n8n 2.45 warns that WEBHOOK_URL is deprecated; every n8n the guides
+      # support (2.41 and later) reads N8N_WEBHOOK_URL.
+      N8N_WEBHOOK_URL: http://localhost:5678/
       N8N_SECURE_COOKIE: "false"
       GENERIC_TIMEZONE: UTC
       # The key that encrypts credentials comes from .env, not from n8n's own first start. n8n 2.41 still writes it

@@ -12,7 +12,7 @@ name: n8n-rpa-queue
 # Merged into n8n and both workers. Workers take everything else (the encryption key included) from docker-compose.yml's
 # n8n service through `extends`.
 x-queue-env: &queue-env
-  WEBHOOK_URL: http://localhost:35678/
+  N8N_WEBHOOK_URL: http://localhost:35678/
   EXECUTIONS_MODE: queue
   OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS: "true"
   QUEUE_BULL_REDIS_HOST: redis

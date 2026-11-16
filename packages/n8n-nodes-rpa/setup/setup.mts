@@ -178,13 +178,14 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
 
 /**
  * n8n's own address for its forms, when this command runs where n8n does (it talks to n8n on this machine, as inside
- * n8n's container): WEBHOOK_URL, n8n's address for webhooks and forms, else N8N_EDITOR_BASE_URL. n8n's public API does
+ * n8n's container): N8N_WEBHOOK_URL, n8n's address for webhooks and forms; else WEBHOOK_URL, its older name (n8n 2.45
+ * still reads it, and warns); else N8N_EDITOR_BASE_URL. n8n's public API does
  * not tell it. Only an http(s) address without a user, a password, a query or a fragment, ending in "/"; undefined
  * otherwise. Nothing is asked of that address: the form is checked at the address this command reaches n8n at.
  */
 function formBase(env: NodeJS.ProcessEnv, reachedHost: string): string | undefined {
   if (!isLoopback(reachedHost)) return undefined;
-  for (const value of [env.WEBHOOK_URL, env.N8N_EDITOR_BASE_URL]) {
+  for (const value of [env.N8N_WEBHOOK_URL, env.WEBHOOK_URL, env.N8N_EDITOR_BASE_URL]) {
     const text = (value ?? '').trim();
     if (!text) continue;
     const url = URL.canParse(text) ? new URL(text) : undefined;

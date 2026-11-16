@@ -339,12 +339,23 @@ describe('npx n8n-nodes-rpa setup', () => {
     const same = await n8n();
     const s = await run(setup(same.url), { ...ENV, WEBHOOK_URL: `${same.url}/` });
     expect(s.stdout.split('\n')[1]).toBe(`Setting up ${same.url} for RPA`);
-    // N8N_EDITOR_BASE_URL when WEBHOOK_URL is not set; an n8n under a path keeps it.
+    // N8N_WEBHOOK_URL (the compose stack's, n8n 2.45's name) first, then WEBHOOK_URL (its older name), then N8N_EDITOR_BASE_URL.
+    for (const [env, want] of [
+      [{ N8N_WEBHOOK_URL: 'https://hooks.example.com/', WEBHOOK_URL: 'https://old.example.com/', N8N_EDITOR_BASE_URL: 'https://editor.example.com/' }, 'https://hooks.example.com/'],
+      [{ N8N_WEBHOOK_URL: 'not an address', WEBHOOK_URL: 'https://old.example.com/' }, 'https://old.example.com/'],
+      [{ N8N_WEBHOOK_URL: 'https://hooks.example.com', N8N_EDITOR_BASE_URL: 'https://editor.example.com/' }, 'https://hooks.example.com/'],
+    ] as [Record<string, string>, string][]) {
+      const order = await n8n();
+      const o = await run(setup(order.url), { ...ENV, ...env });
+      expect(o.code, o.out).toBe(0);
+      expect(o.stdout).toContain(`  Address:    ${want}form/${formOf(order)}\n`);
+    }
+    // N8N_EDITOR_BASE_URL when neither is set; an n8n under a path keeps it.
     const editor = await n8n();
     const e = await run(setup(editor.url), { ...ENV, N8N_EDITOR_BASE_URL: 'https://example.com/n8n' });
     expect(e.stdout).toContain(`  Address:    https://example.com/n8n/form/${formOf(editor)}\n`);
     // Nothing usable from the environment: the address as reached, and one line to say what to change.
-    for (const env of [{}, { WEBHOOK_URL: 'https://user:made-up@n8n.example.com/' }, { WEBHOOK_URL: 'ftp://n8n.example.com/' }, { WEBHOOK_URL: 'not an address' }] as Record<string, string>[]) {
+    for (const env of [{}, { WEBHOOK_URL: 'https://user:made-up@n8n.example.com/' }, { N8N_WEBHOOK_URL: 'https://user:made-up@n8n.example.com/' }, { WEBHOOK_URL: 'ftp://n8n.example.com/' }, { N8N_WEBHOOK_URL: 'not an address' }] as Record<string, string>[]) {
       const fake = await n8n();
       const o = await run(setup(fake.url), { ...ENV, ...env });
       expect(o.code, o.out).toBe(0);
