@@ -272,24 +272,26 @@ describe('what can be adopted', () => {
 
   it('several checked downloads, or a screenshot, are proved together: each file and screenshot with its step number', async () => {
     const shot = { intent: 'Keep a screenshot', screenshot: { capture: 'viewport' } } as Step;
-    for (const steps of [[DOWNLOAD, DOWNLOAD], [shot, DOWNLOAD], [shot]]) {
+    const csv = (step: number) => ({ step, fileName: 'LINEITEMS_1000.csv', mimeType: 'text/csv', bytes: 120, columns: ['Document'], rows: 3 });
+    // draftOf puts the start page and the sign-in first: the steps given here are steps 3 on.
+    const cases: [Step[], ReturnType<typeof csv>[], number[]][] = [[[DOWNLOAD, DOWNLOAD], [csv(3), csv(4)], []], [[shot, DOWNLOAD], [csv(4)], [3]], [[shot], [], [3]]];
+    for (const [steps, files, screenshots] of cases) {
       lane.next = laneSuccess();
-      prove.next = {
-        ok: true, rows: [], total: null, reasons: [], diff: { missing: [], extra: [] }, policyViolation: false, readPosts: [],
-        files: [{ step: 3, fileName: 'LINEITEMS_1000.csv', mimeType: 'text/csv', bytes: 120, columns: ['Document'], rows: 3 }], screenshots: [4],
-      };
+      prove.next = { ok: true, rows: [], total: null, reasons: [], diff: { missing: [], extra: [] }, policyViolation: false, readPosts: [], files, screenshots };
       const r = await adoptDraft(adoptInput(draftOf(steps)));
       if (!r.ok) throw new Error(JSON.stringify(r));
       expect(prove.seen.at(-1)).toMatchObject({ expectFiles: true });
       expect(prove.seen.at(-1)!.expectFile).toBeUndefined();
-      expect(r.proposal.evidence).toEqual({
-        count: 0, total: null, diff: { missing: [], extra: [] },
-        files: [{ step: 3, fileName: 'LINEITEMS_1000.csv', mimeType: 'text/csv', bytes: 120, columns: ['Document'], rows: 3 }], screenshots: [4],
-      });
+      expect(r.proposal.evidence).toEqual({ count: 0, total: null, diff: { missing: [], extra: [] }, files, screenshots });
       // A file is the evidence, as for one download: no "count unverified" flag.
       expect(r.proposal.safetyFlags).not.toContain(UNVERIFIED_COUNT_FLAG);
       expect(r.digest).toBe(proposalDigest(r.proposal));
     }
+    // A proof whose evidence Sign Steps would not take is no proof: the one rule (filesEvidenceProblem) for both.
+    lane.next = laneSuccess();
+    prove.next = { ok: true, rows: [], total: null, reasons: [], diff: { missing: [], extra: [] }, policyViolation: false, readPosts: [], files: [csv(3)], screenshots: [] };
+    const short = await adoptDraft(adoptInput(draftOf([DOWNLOAD, DOWNLOAD])));
+    expect(short).toMatchObject({ ok: false, code: 'incomplete', message: `${IMPORT_PROOF_FAILED}. Reason: the download of step 4 is missing` });
     expect(filesEvidenceText({ files: [{ step: 3, fileName: 'a.csv', mimeType: 'text/csv', bytes: 12, columns: null, rows: 2 }, { step: 7, fileName: 'b.xlsx', mimeType: 'application/zip', bytes: 900, columns: null, rows: null }], screenshots: [5] }))
       .toBe('Proven in a fresh browser: step 3 downloaded "a.csv" (text/csv, 12 bytes, 2 rows), step 5 took a screenshot and step 7 downloaded "b.xlsx" (application/zip, 900 bytes); every file passed the checks its step declares');
     expect(filesEvidenceText({ files: [], screenshots: [4] })).toBe('Proven in a fresh browser: step 4 took a screenshot');

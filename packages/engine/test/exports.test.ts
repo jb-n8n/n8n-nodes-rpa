@@ -27,7 +27,7 @@ const EXPORTS = [
   'codeWorkflowFailed', 'compileProposal', 'connectRunner', 'createAddressGuard', 'createMasker', 'currentIdentity', 'declareWrites',
   'defaultResolveHost', 'describeCheck', 'describeDesktopStep', 'describeInterrupt', 'describeLocator', 'describeStep', 'desktopBinding',
   'desktopProposal', 'desktopSafetyFlags', 'desktopVerbOf', 'desktopWriteCandidates', 'detectImportSource', 'detectTotal',
-  'downloadTemplateIssues', 'downloadTemplateOf', 'effectivePolicy', 'effectiveWriteMode', 'elideOldPages', 'extractsFields', 'fileFacts', 'filesEvidenceText',
+  'downloadTemplateIssues', 'downloadTemplateOf', 'effectivePolicy', 'effectiveWriteMode', 'elideOldPages', 'extractsFields', 'fileFacts', 'filesEvidenceProblem', 'filesEvidenceText',
   'fingerprintOf', 'firstPresent', 'firstUserMessage', 'flattenSteps', 'hasChangePassword', 'hasSecretFill', 'hasSignature', 'hostnameOf',
   'importCannotProve', 'importSource', 'installInterrupts', 'isDesktopDocument', 'isDestructive', 'isEmptySteps', 'isLoginPage', 'isPrivateAddress',
   'isVisibleNow', 'laneFailure', 'laneMasker', 'localLaunchArgs', 'loginBlockEnd', 'maskLog', 'maskedName', 'matchingReadPost',

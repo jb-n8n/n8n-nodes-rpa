@@ -273,7 +273,10 @@ function safetyFlagsProblem(engine: Engine, script: Script, p: ParsedProposal, n
   try {
     expected = fullSafetyFlags(engine, script, notReplayed
       ? { unverifiedCount: false, fieldsDropped: false, notReplayed: true }
-      : { unverifiedCount: p.evidence.total === null && !p.evidence.file && !p.evidence.files, fieldsDropped: p.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
+      // The page states no total: the count is unverified, unless the evidence is a proven file (checked by
+      // fileEvidenceProblem before this) or files that pass the engine's rule, which allows no extract step.
+      : { unverifiedCount: p.evidence.total === null && !p.evidence.file && !(filesEvidenceGiven(p) && filesEvidenceProblemOf(engine, p) === undefined && !engine.flattenSteps(script.steps).some((s) => 'extract' in s || 'extractTable' in s)),
+        fieldsDropped: p.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
   } catch (error) {
     return errorMessage(error);
   }
@@ -337,16 +340,17 @@ function malformedFile(f: unknown): boolean {
  * (isFileDocument) and a download check that sets `name` or `columns`, as repair requires; without it, the steps must
  * have no download step. null counts as absent. Steps that are not a document are left to the later checks.
  */
-function fileEvidenceProblem(p: ParsedProposal): boolean {
+function fileEvidenceProblem(engine: Engine, p: ParsedProposal): boolean {
   const steps = isObject(p.steps) ? p.steps.steps : Array.isArray(p.steps) ? p.steps : undefined;
   if (!Array.isArray(steps)) return false;
   const file = isObject(p.evidence) ? p.evidence.file : undefined;
-  if (isObject(p.evidence) && (p.evidence.files !== undefined || p.evidence.screenshots !== undefined)) {
-    return (file !== undefined && file !== null) || filesEvidenceProblem(steps as Step[], p.evidence.files, p.evidence.screenshots);
-  }
+  // Several files or a screenshot: exactly the engine's own rule for what the import's proof may show (one function).
+  if (filesEvidenceGiven(p)) return (file !== undefined && file !== null) || filesEvidenceProblemOf(engine, p) !== undefined;
   try {
     if (file === undefined || file === null) return hasDownloadStep(steps as Step[]);
-    if (malformedFile(file) || !isFileDocument(steps as Step[])) return true;
+    // The file's name as a download gets it (sanitizeFileName gives it back unchanged): no "; " can cut the line short.
+    if (malformedFile(file) || engine.sanitizeFileName(String((file as { fileName?: unknown }).fileName)) !== (file as { fileName?: unknown }).fileName) return true;
+    if (!isFileDocument(steps as Step[])) return true;
     const download = (steps as Step[]).find((s): s is Extract<Step, { download: unknown }> => 'download' in s);
     return !namesFile(download?.download.check);
   } catch {
@@ -354,23 +358,15 @@ function fileEvidenceProblem(p: ParsedProposal): boolean {
   }
 }
 
-/**
- * Evidence of several files or a screenshot (an import's proof) that does not go with the steps: both lists must be
- * there, each file well formed and from a top-level download step, each screenshot from a top-level screenshot step,
- * at least one of either, and every download of the steps outside paginate with a check that names the file or its
- * columns (the engine's adoptableKind). Steps that are not a document are left to the later checks.
- */
-function filesEvidenceProblem(steps: Step[], files: unknown, screenshots: unknown): boolean {
-  const stepNumber = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= steps.length;
-  if (!Array.isArray(files) || !Array.isArray(screenshots) || files.length + screenshots.length === 0) return true;
+/** Whether the item carries evidence of several files or a screenshot (either list, whatever its shape). */
+const filesEvidenceGiven = (p: ParsedProposal): boolean => isObject(p.evidence) && (p.evidence.files !== undefined || p.evidence.screenshots !== undefined);
+/** The engine's filesEvidenceProblem for the item's steps and lists: a reason, or undefined when they go together. */
+function filesEvidenceProblemOf(engine: Engine, p: ParsedProposal): string | undefined {
+  const e = p.evidence as unknown as { files?: unknown; screenshots?: unknown };
   try {
-    const at = (n: number) => steps[n - 1] as Step;
-    if (!files.every((f) => isObject(f) && !malformedFile(f) && stepNumber(f.step) && 'download' in at(f.step))) return true;
-    if (!screenshots.every((n) => stepNumber(n) && 'screenshot' in at(n))) return true;
-    const nested = steps.some((s) => 'paginate' in s && hasDownloadStep(s.paginate.each));
-    return nested || !steps.every((s) => !('download' in s) || namesFile(s.download.check));
+    return engine.filesEvidenceProblem(p.steps, e.files, e.screenshots);
   } catch {
-    return true;
+    return 'the evidence could not be checked';
   }
 }
 
@@ -506,7 +502,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   if (notReplayed && notReplayedEvidenceProblem(p.evidence)) return refuse([NOT_REPLAYED_EVIDENCE_INVALID]);
   if (readPostsProblem(p.evidence.readPosts, siteLogin)) return refuse([READ_POSTS_NOT_LISTED]);
   // A download that was never run has no file evidence: the evidence line tells the approver the file was never seen.
-  if (!notReplayed && fileEvidenceProblem(p)) return refuse([FILE_EVIDENCE_MISMATCH]);
+  if (!notReplayed && fileEvidenceProblem(engine, p)) return refuse([FILE_EVIDENCE_MISMATCH]);
   if (shownTextChanged(engine, proposal, p.shownText)) return refuse([SHOWN_TEXT_CHANGED]);
   // shownTextChanged skips a missing text (older items may lack one). The point of a not-replayed approval is that the
   // approver saw every step, so its change list must be there.
