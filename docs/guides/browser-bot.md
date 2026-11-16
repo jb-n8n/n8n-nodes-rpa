@@ -151,15 +151,14 @@ if it is set up (AI Repair on the RPA node).
 
 There are two ways on:
 - **Change the bot on the import form.** Open the form, leave **Bot file** empty, type `sandbox-line-items`, choose
-  **Change the steps as JSON**, and paste the steps with the name the message listed (`"name": "G/L Line Items"` in
-  place of `"name": "Line Item Report"`). A control's name is changed as JSON: **Change values** changes only what the
-  steps type, choose or open. The import runs the changed steps once. When a control is still not there, its page
+  **Change values**, and in `3. Click: control name` type the name the message listed (`G/L Line Items` in place of
+  `Line Item Report`). The import runs the changed steps once. When a control is still not there, its page
   names what it shows instead, and the steps after it that act on the same page are checked too, without acting:
   one replay names every renamed field of a form. The sandbox's three labels are on three pages (each click opens
   the next), so each replay names the one on the page it reached and says to change the step's control name to one
-  the page shows; change it and choose **Review** again. A step's description is your own text and is not rewritten:
-  `Click Line Item Report` stays as it is until you change its `intent` in the same paste. The review page shows it
-  beside what the step does (grey, or red when it quotes a value the step does not hold); what runs is the step.
+  the page shows; open the form again and change that name on the values page. A step's description that quotes the old
+  name gets the new one too (`Click G/L Line Items`). The review page shows a description beside what the step does
+  when it says something else (grey, or red when it quotes a value the step does not hold); what runs is the step.
 - **Let it repair itself**, with a chat model: [Part 2](#part-2-let-it-repair-itself).
 
 [Errors](../reference/errors.md#a-control-that-is-not-there) says what the list holds. The bot you approved now

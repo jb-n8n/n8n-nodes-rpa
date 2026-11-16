@@ -17,7 +17,7 @@ import type { Engine } from '../nodes/Playwright/engine.js';
 import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
 import { memoryGuardStore } from '../nodes/Playwright/guard-store.js';
 import {
-  executeImportSteps, IMPORT_NEEDS_START, MAX_IMPORT_BYTES, NOT_TRIED_CANCELLED, SOURCE_UNKNOWN, STEPS_WITHHELD,
+  executeImportSteps, IMPORT_NEEDS_START, MAX_IMPORT_BYTES, NOT_TRIED_CANCELLED, SOURCE_UNKNOWN, STEPS_WITHHELD, withReplayVariableHint,
 } from '../nodes/Playwright/operations/importSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
 import { BY_POSITION, BY_ROW, fullSafetyFlags, reviewSteps } from '../nodes/Playwright/format.js';
@@ -234,7 +234,7 @@ describe('Import Steps: the description', () => {
       'File Type', 'File Name Pattern (Regex)', 'Minimum Size (Bytes)', 'Required Columns', 'Minimum Rows',
     ]);
     expect(optionsFor('importSteps').map((o) => o.name)).toEqual([
-      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'version', 'approvedBeforeHandOver', 'importFormName', 'importFormAddress', 'breakerResetKey', 'saveTrace', 'maxItems',
+      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'version', 'approvedBeforeHandOver', 'importFormName', 'importFormAddress', 'handOverAccounts', 'breakerResetKey', 'saveTrace', 'maxItems',
     ]);
     // Credentials: the browser, the Site Login and its Redis guard store; then the signing key and the desktop runner,
     // which the import only passes on to the workflow file (Sign Steps signs, and the import never reads them).
@@ -386,11 +386,11 @@ describe('Import Steps: execution', () => {
     expect(engine.adoptions.map((a) => a.draft.name)).toEqual(['sap-report-1', 'sap-report-2']);
     expect(repaired.map((r) => r.json.name)).toEqual(['sap-report-1', 'sap-report-2']);
     expect(drafts(data[0]).map((x) => [x.name, x.adopted])).toEqual([['sap-report-1', true], ['sap-report-2', true]]);
-    expect(data[0].json.workflowName).toBe('SAP Report (imported from UiPath)');
+    expect(data[0].json.workflowName).toBe('sap-report (imported from UiPath)');
     const file = data[0].binary?.workflow;
     expect(file).toMatchObject({ mimeType: 'application/json', fileName: 'sap-report.workflow.json' });
     const workflow = JSON.parse(Buffer.from(String(file?.data), 'base64').toString('utf8')) as { name: string; nodes: { name: string }[] };
-    expect(workflow.name).toBe('SAP Report (imported from UiPath)');
+    expect(workflow.name).toBe('sap-report (imported from UiPath)');
     expect(workflow.nodes.map((n) => n.name)).toContain('Get active steps (sap-report-2)');
   });
 
@@ -690,6 +690,13 @@ describe('Import Steps: execution', () => {
     const [data] = await run(engine, { params: params({ aiRepair: true }) });
     expect(engine.adoptions[0].repair).toBeUndefined();
     expect(data[0].json.error).toBe(`drift_detected: No element found for Visible Text "Line Item Report" (${NO_MODEL})`);
+  });
+
+  it('a replay that stops on a run variable nobody gave says that the replay takes it from Import Steps\' Options → Variables', async () => {
+    const engine = importEngine(() => adoptFailure('incomplete', 'Type into To: missing input "to"'));
+    const [data] = await run(engine, { params: params({}) });
+    expect(data[0].json.error).toBe('incomplete: Type into To: missing input "to" (the replay takes run variables from Options → Variables of Import Steps: give it a value there)');
+    expect(withReplayVariableHint('No element found')).toBe('No element found');
   });
 
   describe('the sign-in code', () => {
@@ -1014,7 +1021,7 @@ describe('Import Steps: execution', () => {
     const [data, repaired] = await run(engine, { params: params({ source: 'uipath', stepsName: 'sap-report' }), items: [fileItem('PK', 'bot.zip', 'application/zip')] });
     expect(repaired).toEqual([]);
     expect(data[0].json.error).toBe('Nothing was imported: Workflows/Upload.xaml cannot be read: unclosed tag');
-    expect(details(data[0])).toMatchObject({ configError: true, workflowName: 'SAP Report (imported from UiPath)', report: { source: 'uipath' } });
+    expect(details(data[0])).toMatchObject({ configError: true, workflowName: 'sap-report (imported from UiPath)', report: { source: 'uipath' } });
     expect(Object.keys(data[0].binary ?? {})).toEqual(['workflow']);
     expect(data[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'sap-report.workflow.json' });
     const workflow = JSON.parse(binaryText(data[0], 'workflow').toString('utf8')) as { nodes: { name: string }[] };
@@ -1343,6 +1350,14 @@ describe('Import Steps: a step document', () => {
         expect(JSON.stringify(data[0].json)).not.toContain(EXPORT_PW);
         expect(JSON.stringify(data[0].json)).not.toContain(NEW_PW);
       }
+      // Options → Hand Over a Place for Accounts (a Site Login's own form): the new password is each account's own, named
+      // apart (accountVariables), and the workflow file reads it from the item, with Get accounts before the RPA node.
+      const engine = watched();
+      const [many] = await run(engine, { params: docParams(DOCS['a signIn with changePassword'], {}, { variables, handOverAccounts: true }), items: textItem, credentials: CREDS });
+      expect(drafts(many[0])).toEqual([expect.objectContaining({ secretVariables: ['newPassword'], accountVariables: ['newPassword'] })]);
+      const file = JSON.parse(Buffer.from(String(many[0].binary?.workflow.data), 'base64').toString('utf8')) as { nodes: { name: string; disabled?: boolean }[] };
+      expect(file.nodes.find((n) => n.name === 'Get accounts')).toMatchObject({ disabled: true });
+      expect(drafts((await notReplayed(DOCS['a signIn with changePassword'])).data[0])[0]).not.toHaveProperty('accountVariables');
       // No secret: neither field.
       const { data } = await notReplayed(DOCS['a download with via']);
       expect(drafts(data[0])[0]).not.toHaveProperty('secretVariables');

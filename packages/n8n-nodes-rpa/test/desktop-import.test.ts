@@ -61,7 +61,7 @@ describe('Import Steps with a UiPath desktop project', () => {
     expect(data).toHaveLength(1);
     const json = data[0].json;
     expect(json.error).toBeUndefined();
-    expect(json.workflowName).toBe('ERP Demo Line Items (imported from UiPath)');
+    expect(json.workflowName).toBe('erp (imported from UiPath)');
     expect(data[0].binary?.workflow).toBeDefined();
     expect(json.drafts).toEqual([expect.objectContaining({
       name: 'erp-1', surface: 'desktop', adopted: false, forApproval: true, writeCandidates: [4, 16],
@@ -290,7 +290,7 @@ describe('Import Steps with an RPA recording', () => {
       name: 'erp', surface: 'desktop', adopted: false, forApproval: true, writeCandidates: [4, 16], variables: ['password'], secretVariables: ['password'],
       reason: 'Desktop steps are not replayed at import: they go to approval as imported. Review every step, and mark each step that saves, posts or submits as a write when you approve.',
     })]);
-    expect(json.workflowName).toBe('ERP Demo line items (imported from a recording)');
+    expect(json.workflowName).toBe('erp (imported from a recording)');
     expect(data[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'erp.workflow.json' });
     const item = repaired[0].json;
     expect(item).toMatchObject({ name: 'erp', baseVersion: null, version: 1, attachmentNames: '' });
@@ -350,10 +350,11 @@ describe('Import Steps with an RPA recording', () => {
   it('the generated workflow\'s desktop pair and name say "recording"', async () => {
     const r = engine.importSource('recording', readFileSync(RECORDING), { name: 'erp', hasSiteLogin: false });
     const wf = buildWorkflow(r.flow!, r.drafts, { name: 'erp', desktopDrafts: r.desktopDrafts, source: 'recording' });
-    expect(wf.name).toBe('ERP Demo line items (imported from a recording)');
+    // The workflow and its RPA node are named after the bot (the name typed), the recording in the description.
+    expect(wf.name).toBe('erp (imported from a recording)');
     expect(wf.description).toBe('Imported from the recording ERP Demo line items: 1 desktop step list as signed RPA steps.');
     const run = wf.nodes.find((n) => n.type === 'n8n-nodes-rpa.playwright')!;
-    expect(run.name).toBe('ERP Demo line items');
+    expect(run.name).toBe('erp');
     // The recording's only variable, password, is secret: no Variables here, the RPA Secret Variables credential holds it.
     expect(run.parameters).toMatchObject({ operation: 'runSteps', aiRepair: false, options: { name: 'erp' } });
     expect(run.parameters.options).not.toHaveProperty('variables');
@@ -405,7 +406,7 @@ describe('Import Steps with an RPA recording', () => {
     expect(expressions.length).toBeGreaterThan(0);
     for (const e of expressions) expect(e).not.toContain('process.env');
     for (const n of wf.nodes) expect(n.name.startsWith('='), n.name).toBe(false);
-    expect(wf.name).toBe('{{ process.env.SECRET }} (imported from a recording)');
+    expect(wf.name).toBe('erp (imported from a recording)');
     // The text is still there to read, as text: in the About sticky.
     expect(String(wf.nodes.find((n) => n.name === 'About this import')!.parameters.content)).toContain('`{{ process.env.SECRET }}`');
   });

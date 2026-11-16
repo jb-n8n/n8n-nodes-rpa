@@ -28,22 +28,26 @@ first, before anything reads or writes them.
 - **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the rows of
   `playwright_steps` (the `active` ones are the approved bots), and **Change or sign again** shows the newest active steps of the name typed, to read
   and copy, a required choice, **Sign the approved steps again, unchanged**, **Change values** or **Change the steps
-  as JSON**, and one box that is empty to start with. **Change values** is offered when the steps hold 1 to 40 values
-  that a text field can hold; otherwise the page says why it is not. **Choice fits the box?** lets through only sign
+  as JSON**, and one box that is empty to start with. **Change values** is offered when the steps hold 1 to 80 values
+  and control names that a text field can hold; otherwise the page says why it is not. **Choice fits the box?** lets through only sign
   again or change values with the box empty or holding the approved steps unchanged (compared as JSON), or change as
   JSON with text in it; any other answer goes back through **Page answered?** to **Change or sign again**, which then
   says at its top what to correct and keeps the choice and the pasted text. A page not answered in time ends on
-  **Choice and box differ**, and nothing is imported or signed.
+  **Choice and box differ**, and nothing is imported or signed. The change page, the values page, the question below
+  and the review page wait 10 minutes for an answer, and say so; the other pages wait an hour.
 - **Change values** (after **Change values?**) is the values page. **The bot to change** lists, in step order, the
   text a step types and the option it chooses (browser and desktop) and the address a browser step opens, each with
-  its step's number and the review page's words (`4. Type into To: typed value`). Each gets a text field holding the
-  approved value. A value with `{{` (a variable, or the desktop export folder), one a field cannot hold as it is (`<`,
+  its step's number and the review page's words (`4. Type into To: typed value`), and before it the name a browser
+  step finds its control by, in the comparison's words (`3. Click: control name`, `4. Type into: field label`, visible
+  text). Each gets a text field holding the approved one; a name's field is required. A control found by a selector, a
+  test id, its role alone or its position, and desktop controls, are changed as JSON (the page names the first four).
+  Role, exact match and fallbacks stay as they are. A value with `{{` (a variable, or the desktop export folder), one a field cannot hold as it is (`<`,
   `>`, a line break, a space at an end) and several options are shown as text, without a field. **Values to steps**
-  puts only the changed values into the approved steps, each at the place it was listed, as text; a step's own
+  puts only the changed values and names into the approved steps, each at the place it was listed, as text; a step's own
   description gets the new value wherever it quotes the old one, and nothing else changes. A value with `{{` is
   refused (steps read it as a variable, and they have no way to say "literal"): **Values taken?** then ends on **Value
   not taken**, which says why, and nothing is imported or signed; so does the values page not answered in time. With
-  no value changed, the steps are the row's own, as for sign again. The field names (`value_4`) can be filled from an
+  no value changed, the steps are the row's own, as for sign again. The field names (`value_4`, `name_3`) can be filled from an
   address only through the first page's, which **Plain address?** refuses.
 - **Compared with the approved version** takes the steps to review: signed again, the active row's steps as **The bot
   to change** read them from the table (they never pass through the browser); values changed, the approved steps with
@@ -91,6 +95,11 @@ first, before anything reads or writes them.
   the question above (or the review page's warning) says it does not fit. Nothing on the form writes to the table
   before an approver signed: an approval's **Supersede older versions** marks every active row of the name saved
   before the new one `superseded`, whatever its version, so the name has one active row again.
+- **The approved version** lists the stored rows to check: the version that runs now and, for an upload of several
+  step lists under running names (`<name>-1`, `<name>-2`), the running row of each; **Rows to check** gives each to
+  **Sign steps**' check. A list whose row does not fit is called the stored version on the review page, never the
+  approved one and never unchanged, and the warning shows; a list whose row the check did not reach says to read
+  every step.
 - Before the review page, **Sign steps** runs with **Check Only** on (on the change path it has already run so once,
   before the change page): it signs nothing. It gives the name of the
   RPA Site Login it signs for, and after **Change or sign again** it checks the approved version's signature with its
@@ -106,6 +115,10 @@ first, before anything reads or writes them.
   never calls that version approved and never says unchanged: `<name>: these are the steps of the stored version 4,
   whose signature does not fit this form (the warning says what that can mean).`, or `changed from the stored
   version 4, whose signature does not fit this form: …`, on the change path and for an upload alike.
+- **Import steps** hands over a workflow file named after the bot. On a Site Login's own form (its title starts
+  `Import a bot for`, as the setup command makes it) its **Options → Hand Over a Place for Accounts** is on: the file
+  has **Get accounts**, off until a table is picked, and the last page says that a password change's new password
+  comes from each account's data, not from an RPA Secret Variables credential.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". A new bot's ticks start from the rule (every candidate but a key pressed in a secret
@@ -116,7 +129,7 @@ first, before anything reads or writes them.
   approved one always falls back to the rule, a value changed on the values page included; when that moves its tick
   or number, the page names the step (`Step 6 changed since the approved version, so whether it may save or send
   starts from the rule: check it.`). The
-  **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
+  **Decision** is **Approve and sign** or **Reject**. A page left unanswered for 10 minutes
   signs nothing. Once it is answered, **Versions now** reads the steps table again and **Still the next version?**
   checks that no row of a name on the page has that version or a higher one: another review page of the same bot,
   open at the same time, may have been answered first. Then nothing is signed or rejected, and **Approved meanwhile**

@@ -582,7 +582,8 @@ const IMPORTED_RESULT =
     );
 
 // For each step list signed and active that types a secret: the RPA Secret Variables credential to make or add to, and
-// the names to copy into it. Template 5, the two last pages.
+// the names to copy into it. A many-accounts bot's new password (accountVariables) is each account's own: it is not
+// copied into the credential, which holds one value; the page says where it comes from. Template 5, the two last pages.
 const IMPORTED_SECRETS =
   $('Review and approve').isExecuted && $('Sign steps').isExecuted && !$('Change or sign again').isExecuted
     ? (
@@ -590,12 +591,30 @@ const IMPORTED_SECRETS =
         signed.filter((s) => s.status === 'active').map((s) => drafts.find((d) => d.name === s.name)).filter(
           (d) => d && [].concat(d.secretVariables ?? []).length
         ).map(
-          (d) => '\n\n'
-            + e(d.name)
-            + ' types a secret. In n8n, make an RPA Secret Variables credential (+ → New credential), or add these to the one you have for this app or site; select it on the bot\'s RPA node, and copy these into it:\nCredential: <code>RPA Secret Variables</code>'
-            + [].concat(d.secretVariables).map((v) => '\nName: <code>' + e(v) + '</code>').join('')
-            + (d.mayBeTypedInto ? '\nMay Be Typed Into: <code>' + e(d.mayBeTypedInto) + '</code>' : '')
-            + '\nType the value there only: this form never asks for it.'
+          (d) => (
+            (own, single) => (
+              single.length
+                ? '\n\n'
+                  + e(d.name)
+                  + ' types a secret. In n8n, make an RPA Secret Variables credential (+ → New credential), or add these to the one you have for this app or site; select it on the bot\'s RPA node, and copy these into it:\nCredential: <code>RPA Secret Variables</code>'
+                  + single.map((v) => '\nName: <code>' + e(v) + '</code>').join('')
+                  + (d.mayBeTypedInto ? '\nMay Be Typed Into: <code>' + e(d.mayBeTypedInto) + '</code>' : '')
+                  + '\nType the value there only: this form never asks for it.'
+                : ''
+            )
+              + (
+                own.length
+                  ? '\n\n'
+                    + e(d.name)
+                    + ' sets a new password for each account: '
+                    + own.map((v) => '<code>' + e(v) + '</code>').join(', ')
+                    + ' comes from each account\'s data, in the same item as its user name and password, not from an RPA Secret Variables credential. The workflow file reads it in the RPA node\'s Options → Variables.'
+                  : ''
+              )
+          )(
+            [].concat(d.accountVariables ?? []),
+            [].concat(d.secretVariables).filter((v) => ![].concat(d.accountVariables ?? []).includes(v))
+          )
         ).join('')
     )(
       [].concat($('Import steps').first(0).json.drafts ?? []),

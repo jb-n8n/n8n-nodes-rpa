@@ -2,7 +2,7 @@
 // Node: Choice fits the box?
 // Parameter: conditions.conditions[0].leftValue
 //
-// True when the choice fits the box: Sign again unchanged, or Change values (1 to 40 values offered), with the box empty
+// True when the choice fits the box: Sign again unchanged, or Change values (1 to 80 values and control names offered), with the box empty
 // or holding the approved steps unchanged (as parsed JSON: spacing and key order do not count); or Change the steps as
 // JSON with text in the box.
 
@@ -11,7 +11,7 @@
     (choice, typed, stored, count) => (
       (
         choice === 'Sign the approved steps again, unchanged'
-          || (choice === 'Change values' && count > 0 && count <= 40)
+          || (choice === 'Change values' && count > 0 && count <= 80)
       )
         && (
           typed.trim() === ''

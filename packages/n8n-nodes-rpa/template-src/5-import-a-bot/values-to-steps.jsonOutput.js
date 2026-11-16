@@ -2,8 +2,8 @@
 // Node: Values to steps
 // Parameter: jsonOutput
 //
-// The approved steps with the values changed on the values page put in, each where The bot to change found it; a
-// step's intent gets the new value where it quotes the old one as a whole word. A value that holds two opening braces
+// The approved steps with the values and control names changed on the values page put in, each where The bot to change
+// found it; a step's intent gets the new value or name where it quotes the old one as a whole word. A value that holds two opening braces
 // is refused. No value changed: no steps.
 
 ={{
@@ -37,13 +37,17 @@
         const typed = answer[String(v.name)];
         if (typeof typed !== 'string' || typed === v.value) continue;
         // '{' + '{' is two braces written apart: side by side they would start an expression.
-        if (typed.includes('{' + '{')) { refused.push(v.step); continue; }
+        if (typed.includes('{' + '{')) { if (!refused.includes(v.step)) refused.push(v.step); continue; }
         const s = list[v.step - 1];
-        const holder = s !== null && typeof s === 'object' ? (v.at === 'goto' ? s : s[v.at]) : null;
+        // A control's name: never emptied (the page requires it).
+        if (String(v.name).startsWith('name_') && typed.trim() === '') continue;
+        const holder = s !== null && typeof s === 'object'
+          ? (v.at === 'goto' ? s : typeof v.inner === 'string' && v.inner !== '' ? (s[v.at] ?? { })[v.inner] : s[v.at])
+          : null;
         if (holder === null || typeof holder !== 'object' || holder[v.key] !== v.value) continue;
         holder[v.key] = typed;
         if (typeof s.intent === 'string' && v.value !== '') s.intent = swap(s.intent, v.value, typed);
-        changed.push(v.step);
+        if (!changed.includes(v.step)) changed.push(v.step);
       }
       if (refused.length) return {
         answered: true,

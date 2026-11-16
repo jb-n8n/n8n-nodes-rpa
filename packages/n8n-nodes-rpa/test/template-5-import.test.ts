@@ -76,7 +76,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // A file under the name of an approved bot: Compared with the running version gives the review page its first line.
     expect(targets(t, 'Approve on this form?')).toEqual([['Compared with the running version'], ['Workflow file?']]);
     expect(targets(t, 'Compared with the running version')).toEqual([['The approved version']]);
-    expect(targets(t, 'The approved version')).toEqual([['Sign steps']]);
+    expect(targets(t, 'The approved version')).toEqual([['Rows to check']]);
+    expect(targets(t, 'Rows to check')).toEqual([['Sign steps']]);
     expect(targets(t, 'Checked?')).toEqual([['Change page next?'], ['Signed?']]);
     // v1 order runs the topmost child's branch to its end first: every step list is signed and saved before the last page.
     // Once the review page is answered, the steps table is read again, and only if no other approval or rejection of a
@@ -111,13 +112,19 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(working).toEqual([
       'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Approved meanwhile', 'Approved on another form?', 'Asks about a download?', 'Change an approved bot?',
       'Change it on its own form', 'Change or sign again', 'Change page next?', 'Change values', 'Change values?', 'Checked?', 'Choice and box differ', 'Choice fits the box?', 'Compared with the approved version', 'Compared with the running version', 'Create run log table', 'Create steps table', 'Fits this form?', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
-      'No approved bot', 'Page answered?', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign it again here?', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older versions',
+      'No approved bot', 'Page answered?', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Rows to check', 'Running versions', 'Save signed steps', 'Settings', 'Sign it again here?', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older versions',
       'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Value not taken', 'Values taken?', 'Values to steps', 'Versions now', 'What it replaces', 'Workflow file?',
     ]);
     expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual(Array(15).fill(2.5));
     // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
+    // A page that waits for a person and holds no work (the change page, the values page, the question and the review page)
+    // stops after 10 minutes and says so; the others keep an hour.
+    const TEN = ['Change or sign again', 'Change values', 'Approved on another form?', REVIEW];
     for (const n of t.nodes.filter((x) => x.type === COMPLETION)) {
-      expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours' });
+      const ten = TEN.includes(n.name);
+      expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: ten ? 10 : 1, resumeUnit: ten ? 'minutes' : 'hours' });
+      if (ten) expect(String((n.parameters.options as IDataObject).formDescription), n.name).toMatch(/ Answer within 10 minutes: after that, nothing (changes|is signed)\.$/);
+      if (ten) expect(n.notes, n.name).toContain('at most 10 minutes');
     }
     // Credentials slots stay empty: nothing in the file names a credential.
     for (const n of t.nodes) expect(n, n.name).not.toHaveProperty('credentials');
@@ -453,7 +460,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // A short top: the name and version as the page's title, two sentences.
     const options = review.parameters.options as IDataObject;
     expect(render(String(options.formTitle), { $: nodesRan(ran) })).toBe(`${String(item.name)}, version 1`);
-    expect(options.formDescription).toBe('Approve and sign: these steps are signed and run under this name. Reject: nothing is signed.');
+    expect(options.formDescription).toBe('Approve and sign: these steps are signed and run under this name. Reject: nothing is signed. Answer within 10 minutes: after that, nothing is signed.');
     expect(options.buttonLabel).toBe('Submit');
     // What it does besides reading, in short lines, then one short sentence per step: its verb, the value it types or
     // chooses and its field, as the recorder's bar words it; a secret variable never shows a value.
@@ -560,6 +567,35 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(odd).toContain('\n\na&lt;b types a secret.');
     expect(odd).toContain('\nName: <code>pin</code>\nMay Be Typed Into: <code>erp.example.com</code>\n');
     expect(odd.match(/types a secret/g)).toHaveLength(1);
+    // A many-accounts bot's new password (accountVariables, from a Site Login's own form) is each account's own: no copy
+    // block for it, a sentence that says where it comes from; a true single secret beside it keeps its block.
+    const accounts = (secretVariables: string[]) => render(completion('Imported').completionMessage, { $: nodesRan({
+      Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [{ name: 'rows', forApproval: true, secretVariables, accountVariables: ['newPassword'], mayBeTypedInto: 'sandbox' }] } }], []],
+      [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[{ json: { status: 'active', name: 'rows', version: 1 } }], []],
+    }) });
+    const OWN = "\n\nrows sets a new password for each account: <code>newPassword</code> comes from each account's data, in the same item as its user name and password, not from an RPA Secret Variables credential. The workflow file reads it in the RPA node's Options → Variables.";
+    expect(accounts(['newPassword']).endsWith(OWN)).toBe(true);
+    expect(accounts(['newPassword'])).not.toContain('types a secret');
+    const both = accounts(['newPassword', 'pin']);
+    expect(both).toContain('\nName: <code>pin</code>\n');
+    expect(both).not.toContain('Name: <code>newPassword</code>');
+    expect(both.endsWith(OWN)).toBe(true);
+    // The form tells Import steps whether it is a Site Login's own form (its title, as the setup command sets it).
+    const option = String((byName(t, 'Import steps').parameters.options as IDataObject).handOverAccounts);
+    expect(['Import a bot', 'Import a bot for Sample accounts', ''].map((formTitle) => evaluate(option, { $: (n: string) => ({ params: n === 'Import a bot' ? { formTitle } : {} }) }))).toEqual([false, true, false]);
+  });
+
+  it('a description with the same kind of action is grey even when it names another control (RF4-3)', () => {
+    // Accepted (RF4-3): the mark judges the kind of action and the values a description states, not which control it
+    // names. "Close the banner" on a click of Delete is shown grey, as the author's words, and the step's own sentence,
+    // "Click Delete", leads. Changing this is a ruling, not a side effect.
+    const steps = [{ intent: 'Close the banner', click: { role: 'button', name: 'Delete' } }];
+    const shown = reviewSteps(steps, { desktop: false, shownUrl });
+    expect(shown).toEqual([{ text: 'Click Delete', describedAs: 'Close the banner', quiet: true, marks: [] }]);
+    const item = { name: 'banner', version: 1, steps: { startUrl: 'https://a.example/', steps }, reviewSteps: shown, safetyFlags: [], evidenceLine: 'Proven in a fresh browser: 1 rows' };
+    const html = String(reviewFields({ $: nodesRan({ Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 1, items: [] }, drafts: [] } }], [{ json: item }]] }) })[0].html);
+    expect(html).toContain('<li>Click Delete <em>(the author calls it: Close the banner)</em></li>');
+    expect(html).not.toContain('described differently');
   });
 
   it('a Sign steps refusal signs nothing and the last page names the reason; an approver not on the allowlist is refused', async () => {
@@ -680,6 +716,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(notRun[0].html).toContain('<br>Not run by the import: check every step, each form&#39;s target and each download before you approve.</p><p><b>The steps</b></p><ol>');
     expect(notRun[0].html).toContain(`<b>Evidence:</b> ${escapeHtml(NOT_REPLAYED_LINE)}</em></p><p><em><b>What changed (as written; these steps were never run):</b>`);
     expect(notRun[0].html).not.toContain('Screenshots');
+    // A forced password change says how the change form is reached and that the step signs in again, as the step does.
+    const change = (extra: object) => ({ intent: 'Sign in', signIn: { username: { label: 'User' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' },
+      changePassword: { detect: { text: 'Password expired' }, new: [{ label: 'New password' }], submit: { role: 'button', name: 'Save' }, value: '{{var.newPassword}}', ...extra } } });
+    expect(reviewSteps([change({}), change({ via: [{ role: 'link', name: 'Modify password' }, { text: 'Continue' }], signInAgain: { via: [{ role: 'button', name: 'OK' }] } }), change({ signInAgain: {} })], { desktop: false, shownUrl }).map((r) => r.text)).toEqual([
+      'Sign in, and set a new password if the site asks for one',
+      'Sign in, and set a new password if the site asks for one, reached with Modify password, then Continue, then sign in again with it',
+      'Sign in, and set a new password if the site asks for one, then sign in again with it',
+    ]);
     // A variable written with spaces gets its mark too (the page's own regex used to miss it).
     expect(reviewSteps([{ intent: 'Type the note', fill: { field: { label: 'Note' }, value: '{{ var.note }}' } }], { desktop: false, shownUrl }))
       .toEqual([{ text: 'Type into Note: a variable', describedAs: 'Type the note', quiet: true, marks: ['variable note'] }]);

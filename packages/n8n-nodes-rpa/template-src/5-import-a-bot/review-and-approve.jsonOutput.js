@@ -94,7 +94,11 @@
         $('Compared with the approved version').isExecuted
           ? $('Compared with the approved version').first().json.compared
           : '',
-        SIGN_STEPS_JSON,
+        // Sign steps' check: of the first stored row that does not fit, else of the version that runs now (as for fit).
+        ($('Sign steps').isExecuted ? $('Sign steps').all().map((i) => i.json) : []).find(
+          (j) => j.checkOnly === true && Boolean(j.approvedVersion) && j.approvedVersion.signatureFits === false
+        )
+          ?? (SIGN_STEPS_JSON),
         $('Import steps').all(1).map((i) => i.json),
         ESCAPE_HTML_CH
       ).concat(
@@ -122,7 +126,7 @@
                         + '</h3>'
                       : ''
                   )
-                    + ((x) => (x ? '<p><b>' + e(told(x.compared)) + '</b></p>' : ''))(
+                    + ((x) => (x ? '<p><b>' + e(told(x.compared, l.name)) + '</b></p>' : ''))(
                       (
                         $('Compared with the running version').isExecuted
                           ? $('Compared with the running version').first().json.lists ?? []
@@ -516,29 +520,68 @@
               + 'with another signing key, or its row was changed after it was approved.'
             : ''
         )
-      )(SIGN_STEPS_JSON, ESCAPE_HTML_CH),
-      (
-        (k, name) =>
-          (line) => (
-            (n) => (
-              k.approvedVersion
-                && k.approvedVersion.signatureFits === false
-                && name !== ''
-                && String(line).startsWith(name + ': ')
-                ? String(line).split(name + ': unchanged from the approved version ' + n + '.').join(
-                  name
-                    + ': these are the steps of the stored version '
-                    + n
-                    + ', whose signature does not fit this form (the warning says what that can mean).'
-                ).split('the approved version ' + n + ':').join(
-                  'the stored version ' + n + ', whose signature does not fit this form:'
-                ).split('the approved version').join('the stored version')
-                : String(line)
-            )
-          )(String(k.approvedVersion ? k.approvedVersion.version : ''))
       )(
-        SIGN_STEPS_JSON,
-        $('The approved version').isExecuted ? String($('The approved version').first().json.name ?? '') : ''
+        // The first stored row Sign steps' check found not to fit (on an upload of several step lists, any of them),
+        // else its check of the version that runs now.
+        ($('Sign steps').isExecuted ? $('Sign steps').all().map((i) => i.json) : []).find(
+          (j) => j.checkOnly === true && Boolean(j.approvedVersion) && j.approvedVersion.signatureFits === false
+        )
+          ?? (SIGN_STEPS_JSON),
+        ESCAPE_HTML_CH
+      ),
+      // A comparison line, as the review page shows it, for the step list `which` (the version that runs now when
+      // none is named). Each stored row The approved version lists (rows) went through Sign steps' check, in that order
+      // (Rows to check). A row whose signature does not fit is called the stored version, never the approved one, and
+      // never unchanged; a list whose row the check did not reach says to read every step.
+      (
+        (rows, checks, first, running) =>
+          (line, which) => (
+            (name) => (
+              (i) => (
+                (k, n) => (
+                  name === '' || !String(line).startsWith(name + ': ')
+                    ? String(line)
+                    : k === null
+                    ? name + ': could not be compared with the stored version ' + n + ': read every step.'
+                    : k.approvedVersion && k.approvedVersion.signatureFits === false
+                    ? String(line).split(name + ': unchanged from the approved version ' + n + '.').join(
+                      name
+                        + ': these are the steps of the stored version '
+                        + n
+                        + ', whose signature does not fit this form (the warning says what that can mean).'
+                    ).split('the approved version ' + n + ':').join(
+                      'the stored version ' + n + ', whose signature does not fit this form:'
+                    ).split('the approved version').join('the stored version')
+                    : String(line)
+                )
+              )(
+                // Before Rows to check (no rows): only the version that runs now was checked, as Sign steps' first item.
+                rows.length === 0
+                  ? (name === first ? checks[0] ?? { } : { })
+                  : i >= 0 && checks[i] && checks[i].checkOnly === true
+                  ? checks[i]
+                  : null,
+                String(
+                  (
+                    rows.length === 0
+                      ? (name === first && checks[0] && checks[0].approvedVersion ? checks[0].approvedVersion : { })
+                      : i >= 0 && checks[i] && checks[i].approvedVersion
+                      ? checks[i].approvedVersion
+                      : i >= 0
+                      ? rows[i]
+                      : running.find((r) => r.name === name) ?? { }
+                  ).version ?? ''
+                )
+              )
+            )(rows.findIndex((r) => r.name === name))
+          )(which === undefined ? first : which)
+      )(
+        $('The approved version').isExecuted && Array.isArray($('The approved version').first().json.rows)
+          ? $('The approved version').first().json.rows
+          : [],
+        $('Sign steps').isExecuted ? $('Sign steps').all().map((i) => i.json) : [],
+        $('The approved version').isExecuted ? String($('The approved version').first().json.name ?? '') : '',
+        $('What it replaces').isExecuted ? $('What it replaces').first().json.running : []
       )
     )
   // "$" goes out as \u0024: n8n puts this text in with String.replace, where "$&" or "$$" would change it.

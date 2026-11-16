@@ -19,10 +19,13 @@ function made(n: Node): string | undefined {
   const p = n.parameters as { resource?: string; operation?: string; tableName?: string; options?: { createIfNotExists?: boolean } };
   return n.type === DATA_TABLE && p.resource === 'table' && p.operation === 'create' && p.options?.createIfNotExists === true ? p.tableName : undefined;
 }
-/** The table a row operation (get, insert, update, upsert, delete) reads or writes, or none. */
+/**
+ * The table a row operation (get, insert, update, upsert, delete) reads or writes, or none. A table not picked yet (a
+ * many-accounts bot's Get accounts, which the person points at their own table) is none: it is not one the file makes.
+ */
 export function used(n: Node): string | undefined {
   const p = n.parameters as { resource?: string; dataTableId?: { value?: string } };
-  return n.type === DATA_TABLE && p.resource === 'row' ? String(p.dataTableId?.value ?? '') : undefined;
+  return n.type === DATA_TABLE && p.resource === 'row' && String(p.dataTableId?.value ?? '') !== '' ? String(p.dataTableId?.value) : undefined;
 }
 
 /** Each node that reads or writes a table not made before it on every path, as "<node> uses <table>". Empty: all made first. */

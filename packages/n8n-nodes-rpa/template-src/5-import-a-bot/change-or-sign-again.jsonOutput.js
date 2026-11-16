@@ -3,7 +3,7 @@
 // Parameter: jsonOutput
 //
 // The change page's fields, as JSON for the form: on a second visit what to correct, then the approved steps to read,
-// the choice (Change values only for 1 to 40 values a field can hold) and the box for changed steps.
+// the choice (Change values only for 1 to 80 values and control names a field can hold) and the box for changed steps.
 
 ={{
   JSON.stringify(
@@ -53,15 +53,15 @@
             )
             + '<p>'
             + (
-              count > 0 && count <= 40
-                ? 'Choose what to do below. To change a date, a text the bot types, an option it chooses or an address it opens, choose Change values: the next page offers each value as a field. To add or remove steps, choose Change the steps as JSON and paste the changed steps in the box.'
+              count > 0 && count <= 80
+                ? 'Choose what to do below. To change a date, a text the bot types, an option it chooses, an address it opens or the name of a control it uses, choose Change values: the next page offers each value as a field. To add or remove steps, choose Change the steps as JSON and paste the changed steps in the box.'
                 : 'Choose what to do below. To change the steps, choose Change the steps as JSON and paste the changed steps in the box. '
                   + (
                     count === 0
-                      ? 'This bot has no value that a page of fields can offer, so Change values is not offered.'
+                      ? 'This bot has no value or control name that a page of fields can offer, so Change values is not offered.'
                       : 'This bot has '
                         + count
-                        + ' values, more than one page of fields shows well, so Change values is not offered.'
+                        + ' values and control names, more than one page of fields shows well, so Change values is not offered.'
                   )
             )
             + '</p><p><em>This form cannot tell steps signed with an older key from steps changed in the table, so read every step on the next page.</em></p><p><em>'
@@ -79,7 +79,7 @@
             fieldType: 'radio',
             fieldOptions: {
               values: [{ option: 'Sign the approved steps again, unchanged' }].concat(
-                count > 0 && count <= 40 ? [{ option: 'Change values' }] : [],
+                count > 0 && count <= 80 ? [{ option: 'Change values' }] : [],
                 [{ option: 'Change the steps as JSON' }]
               )
             },

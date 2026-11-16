@@ -128,6 +128,10 @@ Write the steps as JSON ([Steps](../reference/steps.md)), save them as a `.json`
 download through a form, type a secret or change a password are not run by the import: they go to approval as
 written, marked so.
 
+Steps that use a run variable (`{{var.name}}`) need a value for the replay: before you upload, open the import form's
+workflow and add each one, with a value to try, in **Import steps → Options → Variables**. Without it, the replay
+stops with `missing input "name"` and says where the value goes. A secret one is not replayed, as above.
+
 Steps that read rows need an `idPattern` on each `extract` and `extractTable` step ([ID Pattern](../reference/steps.md#id-pattern)).
 The import checks the rows it reads with it, and the workflow file's **Run steps** gets the same **ID Pattern**. The
 form asks for nothing more. Without one, the last page says:
@@ -141,24 +145,27 @@ form asks for nothing more. Without one, the last page says:
 2. The next page shows the steps that run now under that name, to read or copy. Under **What to do**, choose
    **Change values** and click **Review**.
 3. The values page has one field for each value the steps type, choose or open, in step order, with the approved
-   value in it, such as `6. Type into To: typed value` holding `2026-09-30`. Change the ones you need and click
-   **Review**.
+   value in it, such as `6. Type into To: typed value` holding `2026-09-30`. A browser step's control has a field
+   for its name too, such as `3. Click: control name` holding `Line Item Report`: change it when the site renamed
+   a button, link or field. Change the ones you need and click **Review**.
 4. The review page of an import follows: read every step, check the write ticks of desktop steps, and choose
    **Approve and sign** or **Reject**.
 
-Everything else, such as adding or removing a step or how a step finds its control, is changed as JSON: choose
+Everything else, such as adding or removing a step, a control found by a selector, a test id or its position, or a
+desktop control, is changed as JSON: choose
 **Change the steps as JSON**, copy the steps into an editor, change what you need, and paste the whole step document
 into the box. To sign the steps again as they are, for example after the signing key changed, choose **Sign the
 approved steps again, unchanged** and leave the box empty.
 
-On the values page, only the values you change change. Where a step's own description quotes the old value, it gets
-the new one too; where it does not, it is left as it is, and the review page shows it in red when it states another
+On the values page, only the values and names you change change. Where a step's own description quotes the old value
+or name, it gets the new one too; where it does not, it is left as it is, and the review page shows it in red when it states another
 value. A value is taken as text. A value with `{{` is refused, because steps read `{{` as the start of a variable, and
 nothing is imported. Change no value and click **Review**: the steps are signed again, and the review page says that
 no value was changed. The page has no field for a value a field cannot hold as it is (with `<`, `>`, a line break, or
 a space at an end) or for several options: it shows them, and they are changed as JSON. A run variable
 (`{{var.name}}`, such as a value you ticked in the recorder) is not changed on the form at all: the page says so, and
-you change it on the bot's workflow, in the RPA node's **Options → Variables**, with no new approval. For a bot with more than 40 values, or none, **Change values** is not offered.
+you change it on the bot's workflow, in the RPA node's **Options → Variables**, with no new approval. A control's name cannot be empty; its role and exact match stay as they are. For a bot with more than 80 values and
+control names, or none, **Change values** is not offered.
 
 Signed again unchanged, the steps are the active row's steps as the workflow reads them from the Data Table: they do
 not pass through your browser, also when you pasted them back unchanged under sign again. A choice that does not fit the
@@ -176,7 +183,7 @@ key, and the old row is superseded: the bot's workflow runs the new version as i
 happened, says `Signed again: <name> version 2, unchanged.`, or `Changed: <name> version 2 is now the version that
 runs, replacing version 1.` Desktop steps signed again with other write ticks say which: `Signed again: <name> version
 2, steps unchanged; write marks changed from version 1: added step 9 (Click Post).` (marks are compared only with an
-approved version whose signature fits this form; otherwise it says `steps unchanged` and lists the marks signed). Rejected, or not answered within an hour, the old version keeps running, and the last page says `Nothing
+approved version whose signature fits this form; otherwise it says `steps unchanged` and lists the marks signed). Rejected, or not answered within 10 minutes, the old version keeps running, and the last page says `Nothing
 changed: <name> version 1 keeps running.` This path offers no workflow file. A name the form does not find ends on a page that lists the approved
 bots.
 
