@@ -10,15 +10,16 @@ Please keep the report private until a fixed version is published or we agree on
 
 ## Supported versions
 
-Only the latest published version of `n8n-nodes-rpa` (on npm, and the same tarball on the GitHub Release), the latest `ghcr.io/jb-n8n/rpa-browser` image, and the Windows package `rpa-windows-x64.zip` of the latest `desktop-v<version>` GitHub Release are supported. Fixes land on `main` and ship in a new version.
+Only the latest published version of `n8n-nodes-rpa` (on npm, and the same tarball on the GitHub Release), the latest `ghcr.io/jb-n8n/rpa-browser` image, and the Windows package of the latest `desktop-v<version>` GitHub Release (`rpa-windows-x64.zip`, `rpa-browser-windows-x64.zip` and `Get-Rpa.ps1`) are supported. Fixes land on `main` and ship in a new version.
 
 ## Scope
 
 In scope:
-- The engine (`packages/engine`) and the n8n node and credentials (`packages/n8n-nodes-rpa`), including the templates.
+- The npm package `n8n-nodes-rpa` (`packages/n8n-nodes-rpa`, with the engine `packages/engine` built into it): the node, the credentials, the templates, and the setup command (`npx n8n-nodes-rpa setup`, the package's bin, `packages/n8n-nodes-rpa/setup`).
 - The `rpa-browser` image (`images/browser`): the token gate in front of the browser server, its supervisor and its Dockerfile.
-- The compose stack and images: `docker-compose.yml`, `docker-compose.dev.yml`, `docker/`.
-- The Windows package (`desktop/` and the browser host `images/browser/host`): the desktop runner, the policy tool `RpaPolicy.exe`, the installer scripts and the browser host, as released in `rpa-windows-x64.zip`.
+- The compose stack and images: `docker-compose.yml`, `docker-compose.dev.yml`, `docker-compose.queue.yml`, `docker/`.
+- The deployment files in `deploy/`: the Helm chart, the Terraform modules and `deploy/scripts/configure-n8n.mjs`.
+- The Windows package (`desktop/`, and the browser host `images/browser/host`), as released in `rpa-windows-x64.zip` and `rpa-browser-windows-x64.zip`: the download script `Get-Rpa.ps1`, the installer and uninstaller scripts, the `rpa` command, the desktop runner `RpaRunner.exe`, the RPA Supervisor service `RpaSupervisor.exe`, the policy tool `RpaPolicy.exe`, the RPA Recorder `RpaRecorder.exe`, and the browser host.
 
 Out of scope:
 - The sandbox site (`sandbox/portal`). It is a deliberately weak mock site with attack pages for tests; its synthetic passwords, TOTP secrets and missing protections are intended.
@@ -27,14 +28,14 @@ Out of scope:
 
 ## What the safety model is designed to do
 
-The full rules are in the [security reference](docs/reference/security.md#browser-runs). Desktop runs follow the desktop runner's local policy on the Windows machine ([Desktop runs](docs/reference/security.md#desktop-runs)), not the browser rules in the bullets below. With the browser installed beside the runner (the installer's default), a Windows machine set up with the installer trusts the n8n that holds its tokens: the runner's policy keeps mistakes and automatic repair within the allowed apps, and is not a barrier against that n8n (see the install guide, [Who can reach the ports](docs/install/windows.md#who-can-reach-the-ports)). In short, a report is a vulnerability when one of these does not hold:
+The full rules are in the [security reference](docs/reference/security.md#browser-runs). Desktop runs follow the desktop runner's local policy on the Windows machine ([Desktop runs](docs/reference/security.md#desktop-runs)), not the browser rules in the bullets below. With the browser installed beside the runner (`-WithBrowser`, which the installer leaves out by default), a Windows machine set up with the installer trusts the n8n that holds its tokens: the runner's policy keeps mistakes and automatic repair within the allowed apps, and is not a barrier against that n8n (see the install guide, [Who can reach the ports](docs/install/windows.md#who-can-reach-the-ports)). In short, a report is a vulnerability when one of these does not hold:
 
 - A run opens only the sites its operation allows: the URL's site plus **Also Allow These Sites**, or, with a Site Login, only the sites listed in that credential.
 - Sites on your own network (loopback, private, link-local, shared address space) are blocked as literal addresses, as names that resolve to them and on every redirect hop, unless **Allow Private Network** is on.
 - Read operations send nothing: only GET, HEAD and OPTIONS leave the browser. Writes happen only where the operation allows them: the submit click of Fill and Submit Form, or the `submit` and `download.via` targets that steps declare (signed, or allowed for unsigned steps), each only while its own step runs and at most 3 times. AI repair and its proof send no writes and stop on a page address that names a destructive action.
 - Site Login secrets reach a page only through a `signIn` step on a listed login page, and every text output, error and trace passes through a masker that holds every secret of the run. Run Steps runs a `signIn` step from a step list only when the list is signed, or when it is unsigned with **Require Signed Steps** off and **Allow Unsigned Writes** on; on a first run or a repair, the agent signs in with its own tool, and the proof replays the compiled steps before they are signed (their sign-in too, when the sign-in was built or repaired). With **Allow Unsigned Writes** on, whoever can set the steps drives the Site Login and, on a login page that copies typed values into the page, can read its password out through step outcomes.
 - With **Require Signed Steps** on, only steps signed with the Step Signing key run, and a signature is bound to its Site Login.
-- The six literal-only settings (**Require Signed Steps**, **Allow Private Network**, **Allow Unsigned Writes**, **Deliver Unconfirmed Rows**, Run Steps' **Login Breaker Reset Key** and Sign Steps' **Approver Allowlist**) cannot be switched by item data.
+- The eight literal-only settings (**Require Signed Steps**, **Allow Private Network**, **Allow Unsigned Writes**, **Deliver Unconfirmed Rows**, Run Steps' **Login Breaker Reset Key**, **One-Time Code Workflow**, and Sign Steps' **Approver Allowlist** and **Approval Form Page**) cannot be switched by item data.
 - Pages cannot open channels the engine does not see: shared workers, WebSockets from workers, WebSocketStream, WebTransport and WebRTC are unavailable in every frame.
 - The browser gate forwards only connections that carry the token and refuses launch options other than `headless`, `timeout` and `slowMo`.
 
