@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecuteWorkflowData, IExecuteWorkflowInfo, INodeExecutionData } from 'n8n-workflow';
 import { WORKFLOW_CODE, type Script } from 'n8n-rpa-engine';
 import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
-import { codeProviderFor, ONE_TIME_CODE } from '../nodes/Playwright/operations/codeWorkflow.js';
+import { CODE_WORKFLOW_NOT_AN_ID, codeProviderFor, ONE_TIME_CODE } from '../nodes/Playwright/operations/codeWorkflow.js';
 import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
 import { readRunStepsParams } from '../nodes/Playwright/operations/runStepsParams.js';
 import { optionsProperty } from '../nodes/Playwright/description/options.js';
@@ -51,13 +51,14 @@ describe('One-Time Code Workflow options', () => {
     const opts = optionsProperty.options as { name: string; displayName: string; default: unknown; type: string; displayOptions?: unknown }[];
     const wf = opts.find((o) => o.name === 'codeWorkflowId');
     const timeout = opts.find((o) => o.name === 'codeTimeout');
-    // n8n's workflow selector, as its Execute Workflow node uses: by list or by ID, never an expression.
+    // n8n's workflow selector, as its Execute Workflow node uses: by list or by ID, or an expression that gives the ID.
     expect(wf).toMatchObject({
-      displayName: 'One-Time Code Workflow', type: 'workflowSelector', default: '', noDataExpression: true, displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } },
+      displayName: 'One-Time Code Workflow', type: 'workflowSelector', default: '', displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } },
     });
     expect(wf).not.toHaveProperty('placeholder');
+    expect(wf).not.toHaveProperty('noDataExpression');
     expect(wf).toMatchObject({
-      description: 'The workflow that returns the sign-in\'s one-time code when the sign-in takes it from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, gets requestedAt and returns one item whose code field holds 6 to 10 digits; publish it first. In Import Steps, a recorded sign-in then takes its code from it (a step document sets "source" itself); give Run Steps the same workflow. Must be set directly, not with an expression.',
+      description: 'The workflow that returns the sign-in\'s one-time code when the sign-in takes it from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, gets requestedAt and returns one item whose code field holds 6 to 10 digits; publish it first. In Import Steps, a recorded sign-in then takes its code from it (a step document sets "source" itself); give Run Steps the same workflow. An expression may pick the workflow per item, by its ID.',
     });
     expect(timeout).toMatchObject({ displayName: 'Code Timeout (Seconds)', type: 'number', default: 120, displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } } });
   });
@@ -77,15 +78,29 @@ describe('One-Time Code Workflow options', () => {
     expect(read({ __rl: true, mode: 'list', value: '' })).toBe('');
   });
 
-  it('an expression is refused, in the picker\'s value or as a plain value, before anything runs', async () => {
-    for (const codeWorkflowId of [{ __rl: true, mode: 'id', value: '={{ $json.workflow }}' }, '={{ $json.workflow }}', { value: 'wf-code-1' }]) {
+  it('an expression picks the workflow per item: each item\'s sign-in runs its own code workflow', async () => {
+    // As n8n resolves it for each item: the picker's value (or a plain value) from the item's own data.
+    const ids = ['wfMbCode0001', 'wf_other-2'];
+    for (const shape of [(id: string) => ({ __rl: true, mode: 'id', value: id }), (id: string) => id]) {
+      const { h, calls } = ctx(returning([{ json: { code: CODE } }]), {
+        params: (i: number) => params({ codeWorkflowId: shape(ids[i]) }), items: [{ json: { account: 'a' } }, { json: { account: 'b' } }],
+      });
+      const engine = fakeEngine(async (input) => { await input.codeProvider!({ requestedAt: '2026-10-30T10:00:00.000Z' }); return scriptOk(); });
+      await executeRunSteps(h, engine);
+      expect(calls.map((c) => c.info)).toEqual([{ id: 'wfMbCode0001' }, { id: 'wf_other-2' }]);
+    }
+  });
+
+  it('what is not a workflow ID is a configuration error before anything runs, and names no value', async () => {
+    for (const codeWorkflowId of [{ __rl: true, mode: 'id', value: 'wf 1; drop' }, '../wf', { value: 'wf-code-1' }, 42]) {
       const engine = fakeEngine(() => scriptOk());
       const [data] = await executeRunSteps(harness({
         params: params({ codeWorkflowId }), credentials: CREDS, credentialIds: { playwrightBrowserApi: 'b-1', playwrightSiteLoginApi: 's-1' }, continueOnFail: true,
       }), engine);
-      expect(data[0].json.error, JSON.stringify(codeWorkflowId)).toBe('One-Time Code Workflow must be set directly, not with an expression.');
+      expect(data[0].json.error, JSON.stringify(codeWorkflowId)).toBe(CODE_WORKFLOW_NOT_AN_ID);
       expect(engine.calls).toHaveLength(0);
     }
+    expect(CODE_WORKFLOW_NOT_AN_ID).toBe('One-Time Code Workflow is not a workflow ID: it must give letters, digits, - and _ only, or nothing.');
   });
 
   it('a workflow picked from the list is the one the code provider runs', async () => {

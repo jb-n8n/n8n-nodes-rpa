@@ -1,7 +1,8 @@
 // Options → One-Time Code Workflow: how Run Steps and Import Steps read it, and the engine's code provider that runs it.
 import type { CodeProvider } from 'n8n-rpa-engine';
 import type { NodeContext } from '../context.js';
-import { asNumber, asString, clamp, errorMessage, isExpressionText, isObject, literalRaw } from './common.js';
+import { ConfigError } from '../config.js';
+import { asNumber, asString, clamp, errorMessage, isObject } from './common.js';
 
 /**
  * Options → One-Time Code Workflow as saved: the workflow picker's value ({ __rl: true, mode, value }), or the plain ID a
@@ -14,18 +15,23 @@ function workflowIdOf(raw: unknown): string | undefined {
   return undefined;
 }
 
+/** A workflow ID as n8n gives one: letters, digits, "-" and "_", at most 64 characters. */
+const WORKFLOW_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** An expression that did not give a workflow ID. Names no value: the value comes from item data. */
+export const CODE_WORKFLOW_NOT_AN_ID = 'One-Time Code Workflow is not a workflow ID: it must give letters, digits, - and _ only, or nothing.';
+
 /**
- * Options → One-Time Code Workflow and Code Timeout (Seconds), read the same way by Run Steps and Import Steps. The
- * workflow is a literal, read from the saved parameter: an expression (in the picker's value or as text) is refused, so
- * item data never chooses which workflow the node runs.
+ * Options → One-Time Code Workflow and Code Timeout (Seconds), read the same way by Run Steps and Import Steps, for the
+ * item. The workflow may be an expression, so one workflow can pick the code workflow per item (per account): what it
+ * picks can only return a one-time code, which the sign-in types into the declared code field of a listed login page
+ * like any other code, and n8n runs it only when that workflow's own settings let this one call it. Nothing signed or
+ * checked by the trust gate depends on it. What the expression gives must be a workflow ID, or empty (no workflow).
  */
-export function codeWorkflowOptions(ctx: NodeContext, opt: (name: string) => unknown): { codeWorkflowId: string; codeTimeoutMs: number } {
-  const raw = literalRaw(ctx, 'options.codeWorkflowId', 'One-Time Code Workflow', (r) => {
-    const id = workflowIdOf(r);
-    return id === undefined || isExpressionText(id);
-  });
+export function codeWorkflowOptions(_ctx: NodeContext, opt: (name: string) => unknown): { codeWorkflowId: string; codeTimeoutMs: number } {
+  const id = workflowIdOf(opt('codeWorkflowId'))?.trim();
+  if (id === undefined || (id !== '' && !WORKFLOW_ID.test(id))) throw new ConfigError(CODE_WORKFLOW_NOT_AN_ID);
   return {
-    codeWorkflowId: (workflowIdOf(raw) ?? '').trim(),
+    codeWorkflowId: id,
     codeTimeoutMs: clamp(Math.floor(asNumber(opt('codeTimeout'), 120)), 1, 300) * 1000,
   };
 }

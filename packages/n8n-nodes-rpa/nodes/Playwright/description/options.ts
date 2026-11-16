@@ -303,10 +303,9 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     // n8n's workflow selector (as its Execute Workflow node), by list or by ID. A plain ID saved before arrives as text.
     type: 'workflowSelector',
     default: '',
-    // A literal: the steps run whichever workflow it names (operations/runSteps.ts codeWorkflowOptions).
-    noDataExpression: true,
+    // May be an expression, read per item (operations/codeWorkflow.ts codeWorkflowOptions): it must give a workflow ID.
     description:
-      'The workflow that returns the sign-in\'s one-time code when the sign-in takes it from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, gets requestedAt and returns one item whose code field holds 6 to 10 digits; publish it first. In Import Steps, a recorded sign-in then takes its code from it (a step document sets "source" itself); give Run Steps the same workflow. Must be set directly, not with an expression.',
+      'The workflow that returns the sign-in\'s one-time code when the sign-in takes it from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, gets requestedAt and returns one item whose code field holds 6 to 10 digits; publish it first. In Import Steps, a recorded sign-in then takes its code from it (a step document sets "source" itself); give Run Steps the same workflow. An expression may pick the workflow per item, by its ID.',
     displayOptions: only(['runSteps', 'importSteps']),
   },
   {

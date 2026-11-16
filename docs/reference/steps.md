@@ -180,7 +180,8 @@ code" or "Send me the code". `totp.check` lists 1 to 5 checkboxes to tick before
 
 **Code from a workflow.** By default the code is made from the Site Login's **TOTP Secret** (`"source": "seed"`). When
 the code comes from somewhere else, such as an email or a desktop authenticator app, set `"source": "workflow"` in
-`totp` and pick that workflow in **Options → One-Time Code Workflow**. Publish that workflow first: the node starts it
+`totp` and pick that workflow in **Options → One-Time Code Workflow** (an expression may pick one per item, by its
+ID). Publish that workflow first: the node starts it
 by its ID, and n8n 2.x refuses one that is not published ("Workflow is not active and cannot be executed"). The run
 then fails `auth_blocked`. That workflow starts with an **Execute Workflow Trigger**, receives one item
 `{ requestedAt }` once the code field shows, and must return exactly one item whose `code` is 6 to 10 digits. The run
