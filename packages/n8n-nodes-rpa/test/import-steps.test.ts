@@ -726,7 +726,7 @@ describe('Import Steps: execution', () => {
       // The import's run asked the workflow through the provider, with Code Timeout in ms.
       expect(engine.adoptions[0].codeTimeoutMs).toBe(45_000);
       expect(codes).toEqual([CODE]);
-      expect(subs).toEqual([{ info: { id: 'wf-code-1' }, items: [{ json: { requestedAt: '2026-11-10T10:00:00.000Z' } }] }]);
+      expect(subs).toEqual([{ info: { id: 'wf-code-1' }, items: [{ json: { requestedAt: '2026-11-10T10:00:00.000Z', account: SECRETS.username } }] }]);
       // The imported sign-in, as adopted and as it goes to approval, takes its code from the workflow.
       expect(signInOf(engine.adoptions[0].draft)?.signIn.totp).toMatchObject({ source: 'workflow' });
       expect(signInOf(repaired[0].json.steps as unknown as Script)?.signIn.totp).toMatchObject({ source: 'workflow' });
@@ -773,6 +773,21 @@ describe('Import Steps: execution', () => {
       expect((error as NodeOperationError).description).toBe(
         `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`,
       );
+    });
+
+    it('the code workflow gets the Site Login\'s user name as account, and nothing secret', async () => {
+      const sent: unknown[] = [];
+      const engine = importEngine(async (input) => {
+        await input.codeProvider!({ requestedAt: '2026-11-10T10:00:00.000Z' });
+        return adoptFailure('auth_blocked', 'Sign in with an authentication code: detected:mfa_code: stop here');
+      });
+      const ctx = nodeContext({
+        params: params({}, { codeWorkflowId: 'wf-code-1' }), items: [fileItem(CHROME)], credentials: CREDS as never, continueOnFail: true,
+        executeWorkflow: async (_info, items) => { sent.push(items); return { executionId: 'sub-1', data: [[{ json: { code: CODE } }]] }; },
+      }) as Harness;
+      await run(engine, {}, ctx);
+      expect(sent).toEqual([[{ json: { requestedAt: '2026-11-10T10:00:00.000Z', account: SECRETS.username } }]]);
+      for (const secret of [SECRETS.password, SECRETS.totpSecret]) expect(JSON.stringify(sent)).not.toContain(secret);
     });
 
     it('after a step list fails on the code, the item\'s other step lists are not tried: one sign-in in all', async () => {
