@@ -11,7 +11,7 @@ import { PolicyError } from '../errors.js';
 import { DETECTED_PREFIX } from '../../classify/classify.js';
 import {
   CODE_WORKFLOW_NOT_A_CODE, CODE_WORKFLOW_NOT_SET, CODE_WORKFLOW_REJECTED_TWICE, codeWorkflowFailed, codeWorkflowTimedOut, SIGNIN_NEEDS_SITE_LOGIN,
-  SIGNIN_NEXT_NO_PASSWORD, signInCodeFieldMissing, UNSIGNED_CHANGE_PASSWORD,
+  SIGNIN_NEXT_NO_PASSWORD, changePasswordFormMissing, signInAgainPageMissing, signInCodeFieldMissing, UNSIGNED_CHANGE_PASSWORD,
 } from '../../messages.js';
 import { SECRET_FILL_VALUE } from '../../secrets/render.js';
 import { renderSecretValue } from '../../secrets/secret-fills.js';
@@ -187,7 +187,15 @@ async function tickChecks(ctx: StepContext, check: DslLocator[] | undefined, tim
   }
 }
 
-/** Types the TOTP code into a declared login page's code field and submits it. Shared by signIn and the agent's enter_code tool. */
+/** The 30-second window of the last code a run typed from the TOTP secret: a second code in a run never reuses it. */
+const lastCodeWindow = new WeakMap<StepContext, number>();
+const codeWindow = (ms: number): number => Math.floor(ms / 30_000);
+
+/**
+ * Types the TOTP code into a declared login page's code field and submits it. Shared by signIn and the agent's
+ * enter_code tool. A second code in the same run (a sign-in again after a password change) waits for the next window:
+ * many sites refuse a code whose window was already used.
+ */
 export async function submitTotp(ctx: StepContext, spec: CodeSpec, timeout: number): Promise<void> {
   const totpSecret = ctx.secrets?.totpSecret;
   if (!totpSecret) throw new Error(`${DETECTED_PREFIX}mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret`);
@@ -195,9 +203,11 @@ export async function submitTotp(ctx: StepContext, spec: CodeSpec, timeout: numb
   const button = await resolveUnique(ctx.page, spec.submit, timeout);
   const left = msUntilNextWindow(Date.now());
   if (left < 3000) await sleep(left + 250);
+  if (lastCodeWindow.get(ctx) === codeWindow(Date.now())) await sleep(msUntilNextWindow(Date.now()) + 250);
   assertLoginPage(ctx);
   await assertFieldOnLoginPage(ctx, field.locator, 'totp');
   const now = Date.now();
+  lastCodeWindow.set(ctx, codeWindow(now));
   const code = totp(totpSecret, now);
   // The code is a secret too: Playwright traces keep fill values and DOM snapshots, and a page may echo it. The run's
   // masker (shared with the trace scrubbing) learns it, and the adjacent windows', before it is typed.
@@ -459,7 +469,8 @@ async function passwordRejected(
   return seen === 'rejected';
 }
 
-type SubmitSpec = Pick<SignInSpec, 'password' | 'submit' | 'totp' | 'changePassword'>;
+/** What the password submit needs; `username` and `next` too when changePassword.signInAgain signs in once more. */
+type SubmitSpec = Pick<SignInSpec, 'password' | 'submit' | 'totp' | 'changePassword'> & Partial<Pick<SignInSpec, 'username' | 'next'>>;
 
 /**
  * After the password is typed (both paths): submit it and type the code (submitCredentials), then, with
@@ -467,7 +478,7 @@ type SubmitSpec = Pick<SignInSpec, 'password' | 'submit' | 'totp' | 'changePassw
  */
 async function submitPassword(ctx: StepContext, s: SubmitSpec, pass: Locator, secrets: PortalSecrets, state: RunState, timeout: number): Promise<void> {
   await submitCredentials(ctx, s, pass, state, timeout);
-  if (s.changePassword) await changePassword(ctx, s.changePassword, secrets, state, timeout);
+  if (s.changePassword) await changePassword(ctx, s, s.changePassword, secrets, state, timeout);
 }
 
 /**
@@ -661,16 +672,23 @@ const CHANGE_GONE_STABLE_MS = 1000;
 
 /**
  * signIn.changePassword, once the sign-in and its code are done (both sign-in paths end here). When `detect` shows on a
- * loaded document within CHANGE_PAGE_WAIT_MS: the page must be a declared login page, `current` (when given) and every
- * `new` field password inputs on one, and `submit` must post to one (else a fatal signin violation, before anything is
- * typed). The value is rendered as a secret fill's (the masker holds it before the first keystroke); then the Site Login
- * password goes into `current`, the value into each `new` field, and `submit` is clicked. Sets state.passwordChanged
- * once `detect` is gone (changeAnswer); throws `detected:password_change_failed: …` when the site sent the change page
- * back, or when it still showed once the wait ran out (then the text says the new password may or may not be in force).
+ * loaded document within CHANGE_PAGE_WAIT_MS: the page must be a declared login page; with `via`, its buttons or links
+ * are clicked until the first `new` field shows (toChangeForm). Then `current` (when given) and every `new` field must
+ * be password inputs on a declared login page, and `submit` must post to one (else a fatal signin violation, before
+ * anything is typed). The value is rendered as a secret fill's (the masker holds it before the first keystroke); then
+ * the Site Login password goes into `current`, the value into each `new` field, and `submit` is clicked. Sets
+ * state.passwordChanged once the change page is gone (changeAnswer: `detect`, or the first `new` field with `via`);
+ * throws `detected:password_change_failed: …` when the site sent the change page back, or when it still showed once
+ * the wait ran out (then the text says the new password may or may not be in force). With `signInAgain`, signs in once
+ * more with the new password when the site asks for it (signInAgain).
  */
-async function changePassword(ctx: StepContext, spec: ChangePasswordSpec, secrets: PortalSecrets, state: RunState, timeout: number): Promise<void> {
+async function changePassword(
+  ctx: StepContext, s: SubmitSpec, spec: ChangePasswordSpec, secrets: PortalSecrets, state: RunState, timeout: number,
+): Promise<void> {
   const asked = await poll(async () => (await documentLoaded(ctx)) && (await isVisibleNow(ctx.page, spec.detect)), Math.min(timeout, CHANGE_PAGE_WAIT_MS));
   if (!asked) return;
+  assertLoginPage(ctx);
+  if (spec.via) await toChangeForm(ctx, spec.new[0], spec.via, timeout);
   assertLoginPage(ctx);
   const current = spec.current ? (await resolveUnique(ctx.page, spec.current, timeout)).locator : undefined;
   const fresh: Locator[] = [];
@@ -699,10 +717,114 @@ async function changePassword(ctx: StepContext, spec: ChangePasswordSpec, secret
   const typed = await fresh[0].elementHandle({ timeout });
   await submit.click({ timeout });
   await settle(ctx.page);
-  const answer = await changeAnswer(ctx, spec.detect, typed, timeout);
+  // Behind a link, `detect` (the sign-in page's notice) went away with the via click: the form's own field marks the change page.
+  const answer = await changeAnswer(ctx, spec.via ? spec.new[0] : spec.detect, typed, timeout);
   if (answer === 'refused') throw new Error(PASSWORD_CHANGE_REFUSED);
   if (answer === 'unconfirmed') throw new Error(passwordChangeUnconfirmed(Math.max(1, Math.round(Math.min(timeout, CHANGE_ANSWER_WAIT_MS) / 1000))));
   state.passwordChanged = true;
+  if (spec.signInAgain) await signInAgain(ctx, s, spec.signInAgain.via ?? [], { ...secrets, password: value }, state, timeout);
+}
+
+/**
+ * changePassword.via, once `detect` showed: wait up to `timeout` for the first of the via locators not passed yet, or the
+ * change form's first new-password field (`field`). A via locator that shows is clicked (one that did not show is
+ * skipped) and the wait starts over from the next one; returns once `field` shows. Nothing is typed, but each button or
+ * link is gated like signIn's own buttons before its click (assertButtonPostsToLoginPage 'via': no post off the login
+ * pages, not in a form with a password field). Throws changePasswordFormMissing (drift) when a wait runs out.
+ */
+async function toChangeForm(ctx: StepContext, field: DslLocator, via: DslLocator[], timeout: number): Promise<void> {
+  let from = 0;
+  let clicked = 0;
+  for (;;) {
+    const seen = await poll(async () => {
+      if (await isVisibleNow(ctx.page, field)) return 'form' as const;
+      for (let i = from; i < via.length; i++) if (await isVisibleNow(ctx.page, via[i])) return { via: i };
+      return undefined;
+    }, timeout);
+    if (!seen) throw new Error(changePasswordFormMissing(Math.max(1, Math.round(timeout / 1000)), clicked, via.length));
+    if (seen === 'form') return;
+    const button = await resolveUnique(ctx.page, via[seen.via], timeout);
+    await assertButtonPostsToLoginPage(ctx, button.locator, 'via');
+    await button.locator.click({ timeout });
+    clicked++;
+    from = seen.via + 1;
+    await settle(ctx.page);
+  }
+}
+
+/** A sign-in again after a password change that the site sent back: the new password is in force, so the text says so. */
+const SIGN_IN_AGAIN_REJECTED = `${DETECTED_PREFIX}login_failed: the site took the new password, then sent the sign-in page back when the run signed in with it`;
+/** How long a page off the login pages must stay before signInAgain counts the run as signed in without a new sign-in. */
+const LEFT_LOGIN_STABLE_MS = 1000;
+
+/**
+ * changePassword.signInAgain, after the site took the new password: wait up to `timeout` for the sign-in page (an
+ * editable username field, or else the password field, on a loaded document), clicking each `via` locator in order when
+ * it shows first (gated like every via click). When the run stays off the declared login pages for LEFT_LOGIN_STABLE_MS
+ * with no via locator showing, the site let it in: nothing is typed. Otherwise the sign-in runs again with `secrets`
+ * (the Site Login username and the new password): the same login-page checks before each field, the new password
+ * typed as a secret (May Be Typed Into), then the submit and the code as the step declares. A sign-in page sent back is
+ * SIGN_IN_AGAIN_REJECTED; the output still says passwordChanged, so the breaker stays closed and the workflow stores it.
+ */
+async function signInAgain(ctx: StepContext, s: SubmitSpec, via: DslLocator[], secrets: PortalSecrets, state: RunState, timeout: number): Promise<void> {
+  const { username, next, password } = s;
+  let from = 0;
+  for (;;) {
+    let offSince: number | undefined;
+    const seen = await poll(async () => {
+      if (!(await documentLoaded(ctx))) { offSince = undefined; return undefined; }
+      if (onLoginPage(ctx)) {
+        offSince = undefined;
+        if (username && (await editableNow(ctx, username))) return 'username' as const;
+        if (await isVisibleNow(ctx.page, password)) return 'password' as const;
+      }
+      for (let i = from; i < via.length; i++) if (await isVisibleNow(ctx.page, via[i])) return { via: i };
+      if (onLoginPage(ctx)) return undefined;
+      offSince ??= Date.now();
+      return Date.now() - offSince >= LEFT_LOGIN_STABLE_MS ? 'in' as const : undefined;
+    }, timeout);
+    if (!seen) throw new Error(signInAgainPageMissing(Math.max(1, Math.round(timeout / 1000))));
+    if (seen === 'in') return;
+    if (typeof seen === 'object') {
+      const button = await resolveUnique(ctx.page, via[seen.via], timeout);
+      await assertButtonPostsToLoginPage(ctx, button.locator, 'via');
+      await button.locator.click({ timeout });
+      from = seen.via + 1;
+      await settle(ctx.page);
+      continue;
+    }
+    const again: SubmitSpec = { password, submit: s.submit, ...(s.totp ? { totp: s.totp } : {}) };
+    try {
+      if (seen === 'username' && username && next) {
+        const found = await findUsernamePage(ctx, { username, next }, timeout);
+        await submitUsername(ctx, { username, password }, found, secrets, state, timeout);
+        assertLoginPage(ctx);
+        const pass = (await resolveUnique(ctx.page, password, timeout)).locator;
+        await typeNewPassword(ctx, pass, secrets.password, timeout);
+        await submitCredentials(ctx, again, pass, state, timeout);
+      } else {
+        const user = seen === 'username' && username ? (await resolveUnique(ctx.page, username, timeout)).locator : undefined;
+        const pass = (await resolveUnique(ctx.page, password, timeout)).locator;
+        assertLoginPage(ctx);
+        if (user) await assertFieldOnLoginPage(ctx, user, 'username');
+        await assertFieldOnLoginPage(ctx, pass, 'password');
+        await assertSecretTarget(ctx, pass, secrets.password, timeout);
+        if (user) await user.fill(secrets.username, { timeout });
+        await typeNewPassword(ctx, pass, secrets.password, timeout);
+        await submitCredentials(ctx, again, pass, state, timeout);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === PASSWORD_REJECTED) throw new Error(SIGN_IN_AGAIN_REJECTED);
+      throw err;
+    }
+    return;
+  }
+}
+
+/** The new password into the sign-in page's password field: checked as a password field on a login page, typed as a secret. */
+async function typeNewPassword(ctx: StepContext, pass: Locator, value: string, timeout: number): Promise<void> {
+  await assertFieldOnLoginPage(ctx, pass, 'password');
+  await typeSecret(ctx, pass, value, timeout);
 }
 
 /**

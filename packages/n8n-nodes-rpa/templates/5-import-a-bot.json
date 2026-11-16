@@ -1480,7 +1480,7 @@
           "conditions": [
             {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b1",
-              "leftValue": "={{ Boolean($('Import steps').first(0).json.workflowName) && !$('Change or sign again').isExecuted && (!$('Review and approve').isExecuted || ($('Sign steps').isExecuted && $('Sign steps').all(0).some((i) => i.json.status === 'active'))) }}",
+              "leftValue": "={{ Boolean($('Import steps').first(0).json.workflowName) && !$('Change or sign again').isExecuted && ($('Review and approve').isExecuted ? $('Sign steps').isExecuted && $('Sign steps').all(0).some((i) => i.json.status === 'active') : $('Import steps').all(1).length > 0) }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",

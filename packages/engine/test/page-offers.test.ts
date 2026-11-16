@@ -61,7 +61,9 @@ describe('the names a page shows', () => {
     expect(nearestFirst('Execute', ['Back', 'Run', 'Export'])[0]).toBe('Export');
     expect(editDistance('kitten', 'sitting')).toBe(3);
   });
-  it('a click gets links and buttons, a typed or chosen value fields and lists; a table or a wait gets none', () => {
+  it('a click or a wait gets links and buttons, a typed or chosen value fields and lists; a table gets none', () => {
+    expect(controlKind({ intent: 'x', waitFor: { target: { text: 'Go' } } }, { text: 'Go' })).toBe('buttons');
+    expect(controlKind({ intent: 'x', waitFor: { target: { label: 'Amount' } } }, { label: 'Amount' })).toBe('fields');
     expect(controlKind({ intent: 'x', click: { text: 'Go' } }, { text: 'Go' })).toBe('buttons');
     expect(controlKind({ intent: 'x', fill: { field: { css: '#a' }, value: '1' } }, { css: '#a' })).toBe('fields');
     expect(controlKind({ intent: 'x', click: { role: 'checkbox', name: 'A' } }, { role: 'checkbox', name: 'A' })).toBe('fields');

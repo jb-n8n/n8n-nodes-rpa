@@ -130,6 +130,10 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
     evidence: { count: p.evidence.count, total: p.evidence.total, diff: { missing: [...p.evidence.diff.missing], extra: [...p.evidence.diff.extra] },
       ...(p.evidence.readPosts?.length ? { readPosts: [...p.evidence.readPosts] } : {}),
       ...(p.evidence.file ? { file: { ...p.evidence.file, columns: p.evidence.file.columns ? [...p.evidence.file.columns] : null } } : {}),
+      ...(p.evidence.files ? {
+        files: p.evidence.files.map((f) => ({ ...f, columns: f.columns ? [...f.columns] : null })),
+        screenshots: [...(p.evidence.screenshots ?? [])],
+      } : {}),
     },
     changes: p.changes.map((c) => ({ was: c.was, now: c.now })),
     safetyFlags: [...safetyFlags],
@@ -199,7 +203,13 @@ export async function failureItem(
   details: { name: string | null; version: number | null; hash: string }, paired: IPairedItemData[],
 ): Promise<INodeExecutionData> {
   const full = 'ok' in f ? f : undefined;
-  const binary = full ? await failureBinary(ctx, full, details.name ?? '') : undefined;
+  let binary = full ? await failureBinary(ctx, full, details.name ?? '') : undefined;
+  // The files earlier steps downloaded before the failure, under the binary names a success gives them.
+  const files: IDataObject[] = [];
+  for (const file of full?.files ?? []) {
+    binary = { ...binary, [file.binaryName]: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) };
+    files.push({ fileName: file.fileName, mimeType: file.mimeType, bytes: file.data.length, binaryProperty: file.binaryName });
+  }
   const message = shownMessage(f.message);
   const d: FailureDetails = {
     code: f.code,
@@ -218,6 +228,7 @@ export async function failureItem(
     ...(f.passwordChanged ? { passwordChanged: true as const } : {}),
     guidance: guidanceFor(f.code, f.message),
     ...(full?.missingControls?.length ? { missingControls: full.missingControls.map((c) => ({ ...c, offered: [...c.offered] })) } : {}),
+    ...(files.length ? { files } : {}),
   };
   return { json: errorJson(`${f.code}: ${message}`, message, d), pairedItem: paired, ...(binary ? { binary } : {}) };
 }

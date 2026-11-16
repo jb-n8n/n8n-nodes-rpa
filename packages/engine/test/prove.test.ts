@@ -326,6 +326,40 @@ describe('file proofs', () => {
     expect(r.reasons).toEqual(['the proof downloaded 2 files; expected one']);
     expect(r).not.toHaveProperty('file');
   });
+  describe('several files or a screenshot (expectFiles)', () => {
+    const proveFiles = (script: Script) => proveScript({
+      script, policy: publicPolicy(portal, { startUrl: script.startUrl }), output: {}, endpoint: LOCAL, masker,
+      defaultStepTimeoutMs: 3000, budgetMs: 30_000, agentRows: [], expectFiles: true,
+    });
+    const csv = { intent: 'Download the report', download: { trigger: { css: '#csv' }, mime: ['text/csv'], check: { name: '^report', columns: ['code'] } } } as Step;
+    const zip = { intent: 'Download the archive', download: { trigger: { css: '#zip' }, mime: ['application/zip'], check: { name: '^archive' } } } as Step;
+    const shot = { intent: 'Keep a screenshot', screenshot: { capture: 'viewport' } } as Step;
+    it('passes with each checked file and the screenshot, each with its step number', async () => {
+      const r = await proveFiles({ ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, csv, shot, zip] });
+      expect(r.reasons).toEqual([]);
+      expect(r.ok).toBe(true);
+      expect(r.files?.map((f) => [f.step, f.fileName])).toEqual([[2, 'report.csv'], [4, 'archive.zip']]);
+      expect(r.files?.[0]).toMatchObject({ mimeType: 'text/csv', bytes: 'code,name\nSKU-1,Widget\n'.length, columns: ['code', 'name'], rows: 1 });
+      expect(r.screenshots).toEqual([3]);
+      expect(r).not.toHaveProperty('file');
+    });
+    it('a step its condition skipped is not listed; an optional download that brought no file fails the proof', async () => {
+      const skipped = { ...zip, when: { visible: { text: 'No such text' } } } as Step;
+      const ok = await proveFiles({ ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, csv, skipped] });
+      expect(ok.reasons).toEqual([]);
+      expect(ok.files?.map((f) => f.step)).toEqual([2]);
+      const missing = { intent: 'Download a missing file', optional: true, timeoutMs: 500, download: { trigger: { css: '#none' }, check: { name: '^x' } } } as Step;
+      const r = await proveFiles({ ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, csv, missing] });
+      expect(r.ok).toBe(false);
+      expect(r.reasons).toEqual(['the download in step 3 brought no file in the proof']);
+    });
+    it('a proof that downloaded nothing and took no screenshot fails', async () => {
+      const skipped = { ...shot, when: { visible: { text: 'No such text' } } } as Step;
+      const r = await proveFiles({ ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, skipped] });
+      expect(r.ok).toBe(false);
+      expect(r.reasons).toEqual(['the proof downloaded no file and took no screenshot']);
+    });
+  });
   it('a file proof with a failing check fails with the check reason', async () => {
     const r = await proveFile(filesScript({ check: { columns: ['No Such Column'] } }));
     expect(r.ok).toBe(false);

@@ -263,7 +263,9 @@ export async function runTask(input: TaskInput): Promise<TaskResult> {
     // A write already left the browser before the drift: repair is refused like steps that submit, and the
     // result says the run submitted. A runtime event, not a configuration error. The kept session closes
     // with its failure trace, as a plain drift would.
-    const refused: TaskFailure = { ...r, lane: 'script', code: 'policy_violation', message: REPAIR_REFUSED_WRITES, submitted: true };
+    // A policy stop: no file the run downloaded is handed over (script-lane FILES_ON_FAILURE).
+    const { files: _files, ...stopped } = r;
+    const refused: TaskFailure = { ...stopped, lane: 'script', code: 'policy_violation', message: REPAIR_REFUSED_WRITES, submitted: true };
     return runtime ? finishLane(input, runtime, refused) : refused;
   }
   if (!heal || !repair || !runtime || !run.ctx || !run.state || !run.script) {

@@ -1095,7 +1095,7 @@ describe('import messages', () => {
   it('are verbatim', () => {
     expect(IMPORT_NEEDS_SITE_LOGIN).toBe('The recording signs in: attach an RPA Site Login so the import can sign in without the typed password.');
     expect(IMPORT_REFUSES_WRITES).toBe('Imported steps that submit a form or post to download cannot be adopted: repair and import never write.');
-    expect(IMPORT_NOT_ADOPTABLE).toBe('These steps read no rows and download no file, so there is nothing to prove: the draft is returned for review but cannot be signed.');
+    expect(IMPORT_NOT_ADOPTABLE).toBe('These steps read no rows, download no file and take no screenshot, so there is nothing to prove: the draft is returned for review but cannot be signed.');
     expect(IMPORT_UNSUPPORTED_TARGET).toBe('Only JavaScript or TypeScript Playwright code can be imported; record with --target javascript.');
     expect(IMPORT_EMPTY).toBe('Nothing in this file could be turned into steps.');
   });

@@ -1,7 +1,7 @@
 // Adoption: an imported draft runs once in draft mode and, when it runs clean, is replayed in a fresh
 // browser and becomes a proposal with no base (version 1). A drift heals through the existing agent lane with the draft
 // as its base. Either way the only output is a Proposal for the approval workflow and Sign Steps: nothing is delivered.
-import { FILE_WITHHELD, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, IMPORT_ROWS_NEED_ID, ROWS_WITHHELD } from '../messages.js';
+import { FILE_WITHHELD, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, IMPORT_ROWS_NEED_ID, importCannotProve, ROWS_WITHHELD } from '../messages.js';
 import { noWritePolicy } from '../policy/derive.js';
 import { flattenSteps, validateScript } from '../policy/validate.js';
 import { buildProposal, proposalDigest, stepChanges, type Proposal } from '../proposal/proposal.js';
@@ -9,7 +9,7 @@ import { proveScript } from '../prove/prove.js';
 import { scriptHash } from '../sign.js';
 import { parseScript } from '../steps/parse.js';
 import { shownMessage } from '../steps/urls.js';
-import type { ErrorCode, OutputSpec, Script } from '../types.js';
+import type { ErrorCode, OutputSpec, Script, Step } from '../types.js';
 import { CANCELLED, clampBudget, codeSettings, laneFailure, laneMasker, traceOn } from '../lane/script-lane.js';
 import { draftWrites, runDraft } from '../lane/draft.js';
 import { repairPrecondition, type TaskFailure, type TaskInput, type TaskResult } from '../lane/task.js';
@@ -22,12 +22,7 @@ export type AdoptResult =
   | { ok: true; lane: 'script' | 'agent'; proposal: Proposal; digest: string; llmCalls: number; durationMs: number }
   | (TaskFailure & { adoptable?: false });
 
-const CAPTURES = ['screenshot', 'pdf', 'read'];
 const ROWS_NEED = 'Rows need an ID Pattern and an extract or table step.';
-const FILE_NEEDS =
-  'A file needs exactly one download step, outside paginate, with a check that names the file or its columns, and no extract step.';
-const NO_CAPTURES = 'Screenshot, PDF and read steps cannot be proved.';
-
 /**
  * The ID Pattern the steps state for their rows: the idPattern of their extract and extractTable steps (inside paginate
  * too), when every one of them has one. Different ones are joined as alternatives. Undefined when the steps read no rows
@@ -40,25 +35,63 @@ export function statedIdPattern(script: Script): string | undefined {
   return distinct.length === 1 ? distinct[0] : distinct.map((p) => `(?:${p})`).join('|');
 }
 
+/** "1 file", "3 files": a count and its noun. */
+const counted = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** "a", "a and b", "a, b and c". */
+const listed = (parts: string[]) => (parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`);
+/** "step 4", "steps 4 and 9": the 1-based numbers of the top-level steps. */
+const stepsNamed = (numbers: number[]) => `${numbers.length === 1 ? 'step' : 'steps'} ${listed(numbers.map(String))}`;
+
+/** A top-level step and its number (1-based); a step inside paginate carries the number of its paginate. */
+interface Numbered { step: Step; at: number; nested: boolean }
+function numbered(steps: Step[]): Numbered[] {
+  return steps.flatMap((step, i) => [
+    { step, at: i + 1, nested: false },
+    ...('paginate' in step ? flattenSteps(step.paginate.each).map((inner) => ({ step: inner, at: i + 1, nested: true })) : []),
+  ]);
+}
+
 /**
- * What prove can judge: rows (an ID Pattern, an extract or table step, no download) or one file (exactly one
- * top-level download, none inside paginate, whose check names the file or its columns, and no extract). Screenshot,
- * PDF and read steps are never adoptable. Returns the kind, or why not (IMPORT_NOT_ADOPTABLE first, then what is
- * missing; rows without an ID Pattern: IMPORT_ROWS_NEED_ID).
+ * What prove can judge: rows (an ID Pattern, an extract or table step, no download or screenshot), one file (exactly one
+ * download, whose check names the file or its columns, and no screenshot), or files (several such downloads, or
+ * screenshots with or without them). Every download must be outside paginate and checked; PDF and read steps are never
+ * adoptable, and neither are rows together with files. Returns the kind, or why not: IMPORT_NOT_ADOPTABLE when the steps
+ * read, download and capture nothing, IMPORT_ROWS_NEED_ID for rows without an ID Pattern, else importCannotProve, which
+ * says what the steps do and what keeps the replay from proving it.
  */
-export function adoptableKind(script: Script, output: OutputSpec | undefined): { kind: 'rows' | 'file' } | { refused: string } {
-  const all = flattenSteps(script.steps);
-  const downloads = all.filter((s): s is Extract<typeof s, { download: unknown }> => 'download' in s);
-  const extracts = all.filter((s) => 'extract' in s || 'extractTable' in s);
-  const why = (detail?: string) => ({ refused: detail ? `${IMPORT_NOT_ADOPTABLE} ${detail}` : IMPORT_NOT_ADOPTABLE });
-  if (all.some((s) => CAPTURES.some((verb) => verb in s))) return why(NO_CAPTURES);
-  if (downloads.length === 0 && extracts.length === 0) return why(output?.idPattern ? ROWS_NEED : undefined);
-  if (downloads.length === 0) return output?.idPattern ? { kind: 'rows' } : { refused: IMPORT_ROWS_NEED_ID };
-  const top = script.steps.filter((s) => 'download' in s);
-  const check = downloads[0].download.check;
-  const namesFile = !!check && (check.name !== undefined || check.columns !== undefined);
-  if (downloads.length !== 1 || top.length !== 1 || extracts.length > 0 || !namesFile) return why(FILE_NEEDS);
-  return { kind: 'file' };
+export function adoptableKind(script: Script, output: OutputSpec | undefined): { kind: 'rows' | 'file' | 'files' } | { refused: string } {
+  const all = numbered(script.steps);
+  const of = (verb: string) => all.filter((n) => verb in n.step);
+  const downloads = of('download');
+  const shots = of('screenshot');
+  const pdfs = of('pdf');
+  const reads = of('read');
+  const extracts = all.filter((n) => 'extract' in n.step || 'extractTable' in n.step);
+  const found = listed([
+    ...(extracts.length ? ['read rows'] : []),
+    ...(downloads.length ? [`download ${counted(downloads.length, 'file')}`] : []),
+    ...(shots.length ? [`take ${counted(shots.length, 'screenshot')}`] : []),
+    ...(pdfs.length ? [`save ${counted(pdfs.length, 'PDF')}`] : []),
+    ...(reads.length ? [`read the page in ${counted(reads.length, 'step')}`] : []),
+  ]);
+  const cannot = (why: string) => ({ refused: importCannotProve(found, why) });
+  const at = (list: Numbered[]) => stepsNamed([...new Set(list.map((n) => n.at))]);
+  if (pdfs.length || reads.length) return cannot(`a replay cannot prove a PDF or read step (${at([...pdfs, ...reads])})`);
+  if (downloads.length === 0 && shots.length === 0) {
+    if (extracts.length === 0) return { refused: output?.idPattern ? `${IMPORT_NOT_ADOPTABLE} ${ROWS_NEED}` : IMPORT_NOT_ADOPTABLE };
+    return output?.idPattern ? { kind: 'rows' } : { refused: IMPORT_ROWS_NEED_ID };
+  }
+  if (extracts.length) return cannot('a replay proves rows or files, not both in one step list');
+  const repeated = [...downloads, ...shots].filter((n) => n.nested);
+  if (repeated.length) return cannot(`a download or screenshot inside paginate (${at(repeated)}) repeats, so the replay cannot tell what to expect`);
+  const unchecked = downloads.filter((n) => {
+    const check = (n.step as Extract<Step, { download: unknown }>).download.check;
+    return !check || (check.name === undefined && check.columns === undefined);
+  });
+  if (unchecked.length) {
+    return cannot(`the download in ${at(unchecked)} has no check that names the file or its columns (check.name or check.columns), so the replay cannot tell the right file from a wrong one`);
+  }
+  return downloads.length === 1 && shots.length === 0 ? { kind: 'file' } : { kind: 'files' };
 }
 
 /**
@@ -155,7 +188,7 @@ export async function adoptDraft(input: AdoptInput): Promise<AdoptResult> {
     endpoint: input.endpoint, masker, budgetMs: clampBudget(input.budgetMs), agentRows: [],
     ...(input.defaultStepTimeoutMs ? { defaultStepTimeoutMs: input.defaultStepTimeoutMs } : {}),
     ...(input.signal ? { signal: input.signal } : {}), ...(input.viewport ? { viewport: input.viewport } : {}),
-    ...(kind === 'file' ? { expectFile: true } : {}), ...(mayHaveTypedCode ? { freshTotpAfter: Date.now() } : {}), trace: traceOn(input.saveTrace),
+    ...(kind === 'file' ? { expectFile: true } : kind === 'files' ? { expectFiles: true } : {}), ...(mayHaveTypedCode ? { freshTotpAfter: Date.now() } : {}), trace: traceOn(input.saveTrace),
   });
   if (prove.policyViolation) {
     return fail('policy_violation', 'the imported steps attempted a blocked request during the proof', {

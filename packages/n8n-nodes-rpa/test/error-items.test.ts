@@ -122,6 +122,22 @@ describe('v2 error items keep their structured fields through n8n', () => {
     const [, plain] = throughN8n(await runSteps(), INPUT);
     expect((plain[0].json.details as IDataObject).missingControls).toBeUndefined();
   });
+  it('a run that failed late keeps the files earlier steps downloaded: the same binary names as a success, listed in details.files', async () => {
+    const files = [
+      { fileName: 'Inventory.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', data: Buffer.from('PK-inventory'), binaryName: 'file_13' },
+      { fileName: 'Sales.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', data: Buffer.from('PK-sales'), binaryName: 'file_21' },
+    ];
+    const out = await runSteps({}, {}, () => ({ ...DRIFT, files } as unknown as TaskFailure));
+    const [, errors] = throughN8n(out, INPUT);
+    expect(Object.keys(errors[0].binary ?? {}).sort()).toEqual(['file_13', 'file_21', 'trace']);
+    expect(errors[0].binary?.file_21?.fileName).toBe('Sales.xlsx');
+    expect((errors[0].json.details as IDataObject).files).toEqual([
+      { fileName: 'Inventory.xlsx', mimeType: files[0].mimeType, bytes: 12, binaryProperty: 'file_13' },
+      { fileName: 'Sales.xlsx', mimeType: files[1].mimeType, bytes: 8, binaryProperty: 'file_21' },
+    ]);
+    const [, plain] = throughN8n(await runSteps(), INPUT);
+    expect((plain[0].json.details as IDataObject).files).toBeUndefined();
+  });
   it('with AI Repair off the same failure reaches the error output at index 1', async () => {
     const out = await runSteps();
     expect(out).toHaveLength(1);

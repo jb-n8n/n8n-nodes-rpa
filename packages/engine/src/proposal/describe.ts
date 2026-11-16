@@ -68,7 +68,13 @@ function stepAction(step: Step): string {
         ? `${totp.via ? `, then click ${totp.via.map(reviewLocator).join(', then ')} if shown` : ''}, code in ${reviewLocator(totp.field)}`
           + `${totp.check ? `, tick ${totp.check.map(reviewLocator).join(', ')}` : ''}, submit ${reviewLocator(totp.submit)}`
         : '')
-      + (changePassword ? `; if the site asks for a new password, set it from variable ${token(newPasswordVar ?? changePassword.value)}` : '');
+      + (changePassword
+        ? `; if the site asks for a new password, ${changePassword.via ? `click ${changePassword.via.map(reviewLocator).join(', then ')} if shown, ` : ''}`
+          + `set it from variable ${token(newPasswordVar ?? changePassword.value)}`
+          + (changePassword.signInAgain
+            ? `, then sign in again with it${changePassword.signInAgain.via ? ` after ${changePassword.signInAgain.via.map(reviewLocator).join(', then ')} if shown` : ''}`
+            : '')
+        : '');
   } else if ('click' in step) s = `${step.modifiers ? `${step.modifiers.map(token).join('+')}+` : ''}click ${reviewLocator(step.click)}`;
   else if ('fill' in step) s = `fill ${reviewLocator(step.fill.field)} with ${q(step.fill.value)}`;
   else if ('select' in step) s = `select ${q([step.select.value].flat().join(', '))} in ${reviewLocator(step.select.field)}`;

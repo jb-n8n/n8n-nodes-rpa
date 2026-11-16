@@ -1190,8 +1190,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(lists(completion('Imported, with the workflow file').completionMessage)).toBe(lists(shown.completionMessage));
     const ifParams = byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } };
     expect(ifParams.conditions.conditions).toEqual([expect.objectContaining({ operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
-    // Every import with steps comes with a workflow file now, a Chrome recording's too.
-    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []] }) })).toBe(true);
+    // An import with steps comes with a workflow file, a Chrome recording's too, once a step list went to approval
+    // (here by email: no review page). When no step list passed the replay, nothing can be signed: no file, and the
+    // last page does not say one downloads.
+    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, [{ json: { name: 'line-item-export' } }]] }) })).toBe(true);
+    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []] }) })).toBe(false);
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [[{ json: { report: {}, drafts: [] } }], []] }) })).toBe(false);
     // After the review page, the file comes only when Sign steps signed a step list: a rejected bot, or one Sign steps
     // refused (an approver not on the allowlist), gets no workflow to run, and the page does not say a file comes.
@@ -1218,7 +1221,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const [ui] = await runImport(formItem('UiPath project', uipath), () => NOT_ADOPTABLE);
     expect(ui[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'line-item-export.workflow.json' });
     // n8n's Return Binary File looks for the field on the page's parent nodes: Import steps is one of them on both paths.
-    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [ui, []] }) })).toBe(true);
+    // With a step list sent for approval; without one, nothing can be signed and no file comes (above).
+    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [ui, [{ json: { name: 'line-item-export' } }]] }) })).toBe(true);
+    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [ui, []] }) })).toBe(false);
     const uiMessage = page(withFile.completionMessage, { 'Import steps': [ui, []] });
     expect(uiMessage).toMatch(/^Imported: \d+ steps[;.]/);
     expect(uiMessage).toContain('line-item-export.workflow.json');

@@ -238,6 +238,33 @@ between `-AutoSignIn` and `-Unattended` keeps the password.
 By hand: sign in as the bot user at the console and leave the session open. Disconnecting a Remote Desktop session
 locks it: hand it back with `tscon <ID> /dest:console` (the ID from `query session`) before you close the window.
 
+### Setting up an app as the bot user
+
+An app that needs setting up in the bot user's own profile (an account in an authenticator app, a first-run wizard) is
+set up once, signed in as the bot user, after it is installed for all users ([section 8](#8-allow-your-own-app)). With
+automatic sign-in, do it on the console, which shows the bot user's desktop. Unattended, install with a password you
+keep in your password manager (whoever knows it can act as the bot user):
+`$pw = Read-Host 'Password' -AsSecureString; .\Get-Rpa.ps1 -AllowFrom <n8n address> -Unattended -UserPassword $pw`. Then:
+
+1. Turn off the schedules of the desktop bots, and wait until `rpa status` shows no session of the bot user.
+2. Sign in as `.\rpa-runner` at the console, or over Remote Desktop (it is in **Remote Desktop Users**; the installer
+   opens no firewall rule for Remote Desktop). Set the app up.
+3. Sign out (**Start → rpa-runner → Sign out**): a disconnected session stays, and runs are refused while it does
+   (`UserSignedIn`). Turn the schedules back on: the next run finds the app set up.
+
+When the installer made up the password, set one first. The runner's certificate must then be made again, and what the
+bot user's programs protected with the old password is lost (nothing, before an app is set up). In an administrator
+Windows PowerShell:
+
+```powershell
+$pw = Read-Host 'New password' -AsSecureString; Set-LocalUser -Name rpa-runner -Password $pw
+Remove-Item -LiteralPath "C:\ProgramData\RPA Runner\runner-certificate.pfx.bin"; Set-ExecutionPolicy -Scope Process Bypass -Force
+& "C:\Program Files\RPA package\<version>\rpa-windows-x64\Install-Rpa.ps1" -User rpa-runner -Unattended -UserPassword $pw -Force
+```
+
+The installer checks the password and stores it for the supervisor. Paste the line of `rpa connection -ShowTokens` into
+the RPA Desktop Runner credential (new fingerprint, same token).
+
 ## 5. The rpa command
 
 `C:\Program Files\RPA Runner\rpa.cmd` (not on PATH: type the full path) runs in an administrator PowerShell:

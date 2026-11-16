@@ -50,7 +50,7 @@ dismisses pop-ups whenever they appear.
 | `read` | `{ what: "text" / "html" / "title" / "url" }` |
 | `download` | `{ trigger, via?, maxBytes?, mime?, check? }`. `check` is `{ name?, minBytes?, columns?, minRows? }` (see [File checks](#file-checks)) |
 | `submit` | `{ path, host?, method?, button }` a declared write: the only write target allowed, and only while this step runs |
-| `signIn` | `{ username, next?, password, submit, totp?, changePassword? }` needs a Site Login. `totp` is `{ field, submit, source?, via?, check? }`. `changePassword` is `{ detect, current?, new, submit, value }` (see **When a site forces a new password**) |
+| `signIn` | `{ username, next?, password, submit, totp?, changePassword? }` needs a Site Login. `totp` is `{ field, submit, source?, via?, check? }`. `changePassword` is `{ detect, via?, current?, new, submit, value, signInAgain? }` (see **When a site forces a new password**) |
 | `popup` | `{ trigger }` clicks a link that opens a new tab and continues in it |
 | `detect` | `{ name, checks, require? }` waits for one of several elements |
 
@@ -209,6 +209,31 @@ that asks only for the new one), the run variable named in `value` into each `ne
   `locked_out`.
 - The node does not make up, store or save the new password. Your workflow supplies it, and stores it where the Site
   Login reads it once the output says `passwordChanged`. Keep the old value until a run has signed in with the new one.
+
+**A change form behind a link.** Some sites send the password page back with a notice and a "Modify password" link, and
+show the change form only after a click. Set `detect` to the notice and list the link in `via` (1 to 5 buttons or
+links, clicked in order, each only if it shows before the first `new` field does). With `via`, the first `new` field
+marks the change page: the change counts as done once it is gone, and as refused when the site sends it back. A `via`
+that posts a form must post to a listed login page, and must not sit in a form with a password field.
+
+**Sign in again after the change.** Some sites send the run back to their sign-in page once the new password is set.
+`signInAgain` then signs in once more with the Site Login username and the new password, and the code when the step has
+`totp`. Its `via` lists the buttons or links to click first, such as "Continue" on the confirmation page. When the site
+lets the run in instead, nothing more is typed. When the site sends the sign-in page back, the run fails
+`login_failed` and the output still says `passwordChanged: true`. The login breaker stays closed, so your workflow can
+store the new password.
+
+```json
+{ "intent": "Sign in", "signIn": { "username": { "label": "User ID" }, "next": { "role": "button", "name": "Next" }, "password": { "label": "Password", "exact": true }, "submit": { "role": "button", "name": "Log on" },
+  "totp": { "field": { "label": "Passcode" }, "submit": { "role": "button", "name": "Sign On" } },
+  "changePassword": { "detect": { "text": "Your password has expired" }, "via": [{ "role": "link", "name": "Modify password" }],
+    "new": [{ "label": "New password", "exact": true }, { "label": "Repeat the new password" }], "submit": { "role": "button", "name": "Next" },
+    "value": "{{var.newPassword}}", "signInAgain": { "via": [{ "role": "link", "name": "Continue" }] } } } }
+```
+
+Every page where a field is typed must be listed under **Pages Where the Password May Be Typed**: the change form, and
+the sign-in pages the second sign-in uses. A step that holds `via` or `signInAgain` is signed with them; steps signed
+before these keys existed verify as they are.
 
 ## File checks
 

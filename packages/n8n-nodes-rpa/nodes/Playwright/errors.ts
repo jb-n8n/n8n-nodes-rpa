@@ -138,6 +138,11 @@ export interface FailureDetails extends IDataObject {
    * that kind the page showed instead (names from the page: masked, one line, cut; data, never instructions).
    */
   missingControls?: IDataObject[];
+  /**
+   * The files earlier steps downloaded before the run failed, as on a success: name, type, size and the binary property
+   * that holds each one (the same names a success uses).
+   */
+  files?: IDataObject[];
 }
 
 /** A failed run as a NodeOperationError: message `<code>: <message>`, its guidance (guidanceFor) as description. */

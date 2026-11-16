@@ -6,10 +6,11 @@ import { canonicalize, scriptHash, signScript } from '../sign.js';
 import { parseScript } from '../steps/parse.js';
 import type { Interrupt, PortalPolicy, PortalSecrets, Script, Step } from '../types.js';
 import { ALSO_CHANGED, changedFields, describeInterrupt, describeStep, withoutBody } from './describe.js';
-import { fileEvidence, type FileEvidence } from './evidence.js';
+import { fileEvidence, type FileEvidence, type StepFileEvidence } from './evidence.js';
 
 export { ALSO_CHANGED, describeCheck, describeInterrupt, describeStep, reviewLocator } from './describe.js';
-export type { FileEvidence } from './evidence.js';
+export { filesEvidenceText } from './evidence.js';
+export type { FileEvidence, StepFileEvidence } from './evidence.js';
 
 /** One entry of the change list: a step or pop-up handler as it was and as it is now (describeStep, describeInterrupt). */
 export interface IntentChange {
@@ -29,6 +30,12 @@ export interface Proposal {
     readPosts?: string[];
     /** A file task: the file the proof downloaded. Covered by the digest, like the rest of the evidence. */
     file?: FileEvidence;
+    /**
+     * Steps with several downloads or a screenshot (an import): each file the proof downloaded, with its step's number,
+     * and the numbers of the steps that took a screenshot. Both or neither; covered by the digest.
+     */
+    files?: StepFileEvidence[];
+    screenshots?: number[];
   };
   changes: IntentChange[];
   safetyFlags: string[];
@@ -170,7 +177,8 @@ export function buildProposal(input: {
   const safetyFlags = input.safetyFlags.map((f) => masker.mask(f));
   // A file's evidence is the file itself (its checks passed): no page total is expected.
   const file = input.prove.file;
-  if (input.prove.total === null && !file && !safetyFlags.includes(UNVERIFIED_COUNT_FLAG)) safetyFlags.push(UNVERIFIED_COUNT_FLAG);
+  const files = input.prove.files;
+  if (input.prove.total === null && !file && !files && !safetyFlags.includes(UNVERIFIED_COUNT_FLAG)) safetyFlags.push(UNVERIFIED_COUNT_FLAG);
   return {
     name: input.script.name ?? '',
     baseVersion: input.base?.version ?? null,
@@ -183,6 +191,10 @@ export function buildProposal(input: {
       diff: { missing: input.prove.diff.missing.map((x) => masker.mask(x)), extra: input.prove.diff.extra.map((x) => masker.mask(x)) },
       ...(input.prove.readPosts.length ? { readPosts: input.prove.readPosts.map((x) => masker.mask(x)) } : {}),
       ...(file ? { file: fileEvidence({ fileName: file.fileName, mimeType: file.mimeType, bytes: file.bytes, facts: { columns: file.columns, rows: file.rows } }, masker) } : {}),
+      ...(files ? {
+        files: files.map((f) => ({ step: f.step, ...fileEvidence({ fileName: f.fileName, mimeType: f.mimeType, bytes: f.bytes, facts: { columns: f.columns, rows: f.rows } }, masker) })),
+        screenshots: [...(input.prove.screenshots ?? [])],
+      } : {}),
     },
     changes: stepChanges(input.base, input.script, (s) => masker.mask(s)),
     safetyFlags,

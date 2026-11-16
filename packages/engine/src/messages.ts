@@ -130,6 +130,15 @@ export const CODE_WORKFLOW_REJECTED_TWICE = 'the site rejected the one-time code
 /** A signIn with totp.via: the code field did not show within the step timeout after the password or the last via click (drift). */
 export const signInCodeFieldMissing = (seconds: number, clicked: number, total: number) =>
   `signIn: the one-time code field did not appear within ${seconds} s after the password was submitted (${clicked} of ${total} totp.via clicked)`;
+/** signIn.changePassword with via: the change form's first new-password field did not show within the step timeout (drift). */
+export const changePasswordFormMissing = (seconds: number, clicked: number, total: number) =>
+  `signIn: the change-password form did not appear within ${seconds} s after the site asked for a new password (${clicked} of ${total} changePassword.via clicked)`;
+/**
+ * signIn.changePassword.signInAgain: the site took the new password, but neither its sign-in page nor any other page
+ * showed within the step timeout (drift). The output still says passwordChanged.
+ */
+export const signInAgainPageMissing = (seconds: number) =>
+  `signIn: the site took the new password, but its sign-in page did not show again within ${seconds} s`;
 /** The agent's two-page sign_in typed the username and moved to the password page, but never ran its second call. */
 export const AGENT_SIGN_IN_UNFINISHED = 'the agent typed the username but did not finish signing in on the password page';
 
@@ -299,7 +308,10 @@ export const DOWNLOAD_NEEDS_BROWSER_SERVER =
 export const IMPORT_NEEDS_SITE_LOGIN = 'The recording signs in: attach an RPA Site Login so the import can sign in without the typed password.';
 export const IMPORT_REFUSES_WRITES = 'Imported steps that submit a form or post to download cannot be adopted: repair and import never write.';
 export const IMPORT_NOT_ADOPTABLE =
-  'These steps read no rows and download no file, so there is nothing to prove: the draft is returned for review but cannot be signed.';
+  'These steps read no rows, download no file and take no screenshot, so there is nothing to prove: the draft is returned for review but cannot be signed.';
+/** Steps that do something a replay could prove, in a shape it cannot: what they do (`found`), and what stands in the way. */
+export const importCannotProve = (found: string, why: string) =>
+  `These steps ${found}, but ${why}: the draft is returned for review but cannot be signed.`;
 export const IMPORT_ROWS_NEED_ID =
   'These steps read rows, but a step that reads them has no idPattern, so the replay cannot check the rows: the draft is returned for review but cannot be signed. Give each extract and extractTable step an idPattern, the shape of the ID every row has, such as INV-\\d{4}.';
 export const IMPORT_UNSUPPORTED_TARGET = 'Only JavaScript or TypeScript Playwright code can be imported; record with --target javascript.';

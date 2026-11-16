@@ -4,7 +4,7 @@ import { maskedPageText, openStartPage } from '../lane/start-page.js';
 import { openReusedSession } from './entry.js';
 import { signInIndex } from '../policy/login-block.js';
 import { flattenSteps, loginBlockEnd } from '../policy/validate.js';
-import { fileEvidence, type FileEvidence } from '../proposal/evidence.js';
+import { fileEvidence, type FileEvidence, type StepFileEvidence } from '../proposal/evidence.js';
 import { maskViolations, type Masker } from '../secrets/mask.js';
 import { msUntilNextWindow } from '../secrets/totp.js';
 import { stopTrace } from '../trace/trace.js';
@@ -13,8 +13,8 @@ import { secretFillValues } from '../secrets/secret-fills.js';
 import { screenshotMasks } from '../steps/masks.js';
 import { sleep } from '../steps/poll.js';
 import { hostOf, isLoginPage, shownMessage } from '../steps/urls.js';
-import { runSteps, type StepContext } from '../steps/run.js';
-import type { BrowserEndpoint, CodeProvider, OutputSpec, ErrorCode, PortalPolicy, PortalSecrets, Row, Script, Violation } from '../types.js';
+import { CONDITION_NOT_MET, runSteps, type StepContext } from '../steps/run.js';
+import type { BrowserEndpoint, CodeProvider, OutputSpec, ErrorCode, PortalPolicy, PortalSecrets, Row, Script, StepLogEntry, Violation } from '../types.js';
 import { verifyRows } from '../verify/verify.js';
 
 const TOTP_WINDOW_MS = 30_000;
@@ -62,6 +62,11 @@ export interface ProveInput {
   viewport?: { width: number; height: number };
   /** A file task: the proof passes on exactly one downloaded file (its step's checks already passed), not on rows. */
   expectFile?: boolean;
+  /**
+   * Steps with several downloads or a screenshot: the proof passes when every download step that ran brought its file
+   * (each one's checks already passed) and the run downloaded a file or took a screenshot, not on rows.
+   */
+  expectFiles?: boolean;
 }
 export interface ProveResult {
   ok: boolean;
@@ -86,6 +91,10 @@ export interface ProveResult {
   trace?: Buffer;
   /** A file task's proof: the one file it downloaded (strings masked, columns clipped). */
   file?: FileEvidence;
+  /** An expectFiles proof: each file it downloaded, with the number of the step that downloaded it. */
+  files?: StepFileEvidence[];
+  /** An expectFiles proof: the numbers of the steps that took a screenshot. */
+  screenshots?: number[];
 }
 
 
@@ -110,6 +119,7 @@ async function proveInner(input: ProveInput): Promise<ProveResult> {
   let blocked: Violation[] | undefined;
   let proofSession: Session | undefined;
   let file: FileEvidence | undefined;
+  let files: { files: StepFileEvidence[]; screenshots: number[] } | undefined;
   const finish = (rows: Row[], total: number | null, screenshot?: Buffer, failureCode?: ErrorCode): ProveResult => {
     const ids = new Set(idsOf(rows));
     // Reasons reach messages (ROWS_WITHHELD): masked, URLs without query string, masked again.
@@ -123,6 +133,7 @@ async function proveInner(input: ProveInput): Promise<ProveResult> {
       readPosts: proofSession ? [...proofSession.readPostsUsed] : [],
       ...(blocked ? { violations: maskViolations(blocked, masker) } : {}),
       ...(file ? { file } : {}),
+      ...(files ? files : {}),
     };
   };
   /** Records the session's fatal violations; true when there was one. */
@@ -244,6 +255,23 @@ async function proveInner(input: ProveInput): Promise<ProveResult> {
       if (n > 1) reasons.push(`the proof downloaded ${n} files; expected one`);
       else if (!got) reasons.push('the proof downloaded no file');
       else file = fileEvidence({ fileName: got.fileName, mimeType: got.mimeType, bytes: got.data.length, facts: got.facts }, masker);
+    } else if (input.expectFiles) {
+      // Several downloads or a screenshot: each download step's checks already passed (a failing check failed the step
+      // above). A download step that ran but brought no file (an optional one) fails the proof; one its `when` skipped
+      // proves nothing and is not listed.
+      const numberOf = (index: number) => offset + index + 1;
+      const brought = new Set(run.state.downloads.map((d) => /^file_(\d+)$/.exec(d.binaryName)?.[1]).filter((x) => x !== undefined).map(Number));
+      // An optional step that failed is logged 'skipped' with its error; one whose `when` was not met says so.
+      const ran = (e: StepLogEntry) => e.status === 'ok' || (e.status === 'skipped' && e.note !== CONDITION_NOT_MET);
+      const missed = run.state.log.filter((e) => ran(e) && 'download' in (steps[e.index] ?? {}) && !brought.has(e.index)).map((e) => numberOf(e.index));
+      for (const n of missed) reasons.push(`the download in step ${n} brought no file in the proof`);
+      const proven: StepFileEvidence[] = run.state.downloads.map((d) => ({
+        step: numberOf(Number(/^file_(\d+)/.exec(d.binaryName)?.[1] ?? -1)),
+        ...fileEvidence({ fileName: d.fileName, mimeType: d.mimeType, bytes: d.data.length, facts: d.facts }, masker),
+      }));
+      const screenshots = run.state.outputs.filter((o) => o.verb === 'screenshot').map((o) => numberOf(o.index));
+      if (proven.length === 0 && screenshots.length === 0) reasons.push('the proof downloaded no file and took no screenshot');
+      files = { files: proven, screenshots };
     } else {
       const v = verifyRows({
         rows: run.state.rows, evidence: run.state.evidence, output: input.output, requireGrounding: true, ungroundedFields: run.state.attributeFields,

@@ -230,7 +230,7 @@ describe('the desktop bot guide and the Windows guide', () => {
   it('keeps the section numbers the installer, the credentials and the licensing note name', () => {
     const headings = doc.windows.match(/^## .+$/gm) ?? [];
     for (const h of ['## 4. Signing in', '## 6. Connect n8n', '## 10. Changing the tokens and the certificates']) expect(headings).toContain(h);
-    expect(doc.windows.split('\n').length).toBeLessThanOrEqual(450);
+    expect(doc.windows.split('\n').length).toBeLessThanOrEqual(480);
     for (const text of ['rpa connection', 'rpa status', 'rpa policy apply', '-Unattended', '-AutoSignIn', 'No sign-in mode was given, so this install is unattended']) {
       expect(doc.windows, text).toContain(text);
     }
@@ -332,7 +332,7 @@ describe('the steps reference', () => {
       + 'For `select` on a multi-select, `value` may be an array of strings, `["north", "{{var.region}}"]`: exactly those options end up selected and the others are cleared '
       + '(a single string still selects one option). The array holds at most 50 values, of at most 4096 characters over all values together |');
     expect(doc.steps).toContain('| `signIn` | `{ username, next?, password, submit, totp?, changePassword? }` needs a Site Login. `totp` is `{ field, submit, source?, via?, check? }`. '
-      + '`changePassword` is `{ detect, current?, new, submit, value }` (see **When a site forces a new password**) |');
+      + '`changePassword` is `{ detect, via?, current?, new, submit, value, signInAgain? }` (see **When a site forces a new password**) |');
   });
 
   it('lists the Data fields, and states the AI Repair rules and messages word for word', () => {

@@ -102,12 +102,14 @@ Windows-side failures (the supervisor, the installer, the policy tool) are in th
 When a browser step's control is not on the page, the run looks at the page once, after the step's own wait ran out,
 and the message says what the page shows instead:
 - for a click, a download or another step that presses something: the visible links and buttons, by their names;
+- for a wait for a control or a text that never showed: the visible links and buttons too (a wait for a field by its
+  label lists the fields);
 - for a typed or chosen value: the visible fields and lists, by their labels.
 
 At most 12 are listed, nearest in name to what the step looked for first, each cut to 60 characters, then `and N more`
 when the page shows more. The look takes a few milliseconds (under 15 ms on the sample site and on a page of 400 controls); there is no second wait. It reads names only, never what a
 field holds, and it does not look at a page on a site the Site Login's rules do not allow. A control inside a frame,
-and a step that reads a table or waits, get no list.
+and a step that reads a table, get no list. A wait for a control to hide or go away keeps its own message.
 
 The names come from the site. They are shown as text: one line, without control characters, quotes as `'` and angle
 brackets as `‹ ›`, a Site Login or secret value as `[secret]`, an address without its query. Self-repair is not given
@@ -115,6 +117,13 @@ the list: it reads the page itself.
 
 The same list is on the error item as `details.missingControls`: for each step, `step` (its number), `intent`,
 `lookedFor`, `kind` (`buttons` or `fields`), `offered` and `more`.
+
+**Files downloaded before the failure.** When a run fails `drift_detected`, `not_found`, `site_down` or `incomplete`
+after earlier steps downloaded files, the error item keeps them: each as a binary under the name a successful run gives it (such as `file_5`), and listed in
+`details.files` with `fileName`, `mimeType`, `bytes` and `binaryProperty`. Each passed its own step's checks; the
+file of the step that failed is not there, and neither is a file that would take the run over its size limit. A run
+the rules stopped (`policy_violation`, a blocked request or site), a refused sign-in and any other code return no
+file. The import's replay never returns a file.
 
 **On the import form, every missing control on the page.** The import's replay (nothing is signed yet, and it blocks
 writes) also checks the later steps that act on the same page, without pressing, typing or reading anything. It goes
