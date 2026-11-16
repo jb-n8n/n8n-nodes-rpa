@@ -2324,6 +2324,31 @@ describe('a second Windows machine (entry 11)', () => {
     expectNoSecrets(s.out + o.out, [NEW_LINE, NEW_TOKEN]);
   });
 
+  it('a second Windows machine: the default answer keeps the first machine\'s line (audit T7)', async () => {
+    // A working runner credential (n8n's test passes), and the --windows run a person makes for a second machine.
+    const PASTE = /Paste the Connection Line, which starts with rpa-runner:\/\/ \(not shown\), or press Enter to skip: /;
+    for (const answer of ['', 'n', 'N', 'no', 'y', 'yes']) {
+      const fake = await n8n({ credentials: [MADE] });
+      expect((await run(plain(fake.url), ENV)).code).toBe(0);
+      const before = JSON.stringify(fake.state.credentials);
+      const wf = JSON.stringify(fake.state.workflows.map((w) => w.nodes));
+      const r = await runAtTerminal(plain(fake.url, '--windows'), ENV, [[PASTE, NEW_LINE], [QUESTION, answer]]);
+      expect(r.code, r.out).toBe(0);
+      expect(JSON.stringify(fake.state.credentials), `answer "${answer}"`).toBe(before);
+      expect(JSON.stringify(fake.state.workflows.map((w) => w.nodes))).toBe(wf);
+      expect(fake.state.requests.filter((q) => q.method === 'PATCH' || q.method === 'DELETE')).toEqual([]);
+      expect(fake.state.requests.filter((q) => q.method === 'POST' && q.path === '/api/v1/credentials')).toHaveLength(1);
+      expect(r.out).toContain('The line was not used: nothing was changed.');
+      expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
+    }
+    // Only the explicit answer for a new machine makes a credential, and it holds only the new line.
+    const fake = await n8n({ credentials: [MADE] });
+    const a = await runAtTerminal(plain(fake.url, '--windows'), ENV, [[PASTE, NEW_LINE], [QUESTION, 'a']]);
+    expect(a.code, a.out).toBe(0);
+    expect(lineOf(fake, 'c-made')).toBe(LINE);
+    expect(runnersOf(fake).map((c) => [c.name, c.data.connectionLine])).toEqual([['RPA Desktop Runner', LINE], ['RPA Desktop Runner (rpa.example.com)', NEW_LINE]]);
+  });
+
   it('several: numbered; its number is a new line for that one', async () => {
     const fake = await n8n({ credentials: [MADE, NIGHT] });
     const r = await runAtTerminal(plain(fake.url), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE }, [[/another Windows machine \(a\), or a new line for one of these \(its number\)\? Enter changes nothing: /, '2']]);
