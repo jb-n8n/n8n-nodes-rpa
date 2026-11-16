@@ -46,6 +46,11 @@ export interface RepairInput {
   deliverUnconfirmed?: boolean;
   /** A repair already ran in this execution: no healing, drift is reported. */
   alreadyRan?: boolean;
+  /**
+   * Why AI repair does not run this time (in n8n: a repair of these steps already failed, see the node's repair-stop.ts):
+   * no healing, no model call; the drift is reported with this text after it, as for alreadyRan.
+   */
+  held?: string;
   /** A first run's expected file, from the node's Expected File; ignored when the steps are not empty. */
   download?: DownloadTemplate;
 }
@@ -245,10 +250,12 @@ export async function runTask(input: TaskInput): Promise<TaskResult> {
   }
   if (empty) {
     if (!repair) return { ...laneFailure(t0, maskerOf(input), 'drift_detected', NO_STEPS_NO_REPAIR), lane: 'agent' };
-    if (repair.alreadyRan) return { ...laneFailure(t0, maskerOf(input), 'drift_detected', REPAIR_ALREADY_RAN), lane: 'agent' };
+    const held = heldReason(repair);
+    if (held) return { ...laneFailure(t0, maskerOf(input), 'drift_detected', held), lane: 'agent' };
     return firstRun(input, repair, t0, repairKind(input.script, input.output, repair));
   }
-  const canHeal = !!repair && !repair.alreadyRan;
+  const held = repair ? heldReason(repair) : undefined;
+  const canHeal = !!repair && !held;
   // Decided before the run so the healing session is never kept (no model call, no extra login).
   const fieldsBlocked = canHeal && repairKind(input.script, input.output, repair ?? {}) === 'rows'
     && recordsFields(input.output, input.policy.startUrl, input.script);
@@ -270,7 +277,7 @@ export async function runTask(input: TaskInput): Promise<TaskResult> {
   }
   if (!heal || !repair || !runtime || !run.ctx || !run.state || !run.script) {
     await runtime?.dispose();
-    const why = r.code !== 'drift_detected' ? undefined : fieldsBlocked ? FIELDS_UNSUPPORTED : repair?.alreadyRan ? REPAIR_ALREADY_RAN : undefined;
+    const why = r.code !== 'drift_detected' ? undefined : fieldsBlocked ? FIELDS_UNSUPPORTED : held;
     return { ...r, lane: 'script', ...(why ? { message: `${r.message} (${why})` } : {}) };
   }
   if (run.state.credentialsSubmitted && !run.state.submitClicked) {
@@ -294,6 +301,13 @@ export async function runTask(input: TaskInput): Promise<TaskResult> {
     storageState: run.storageState, ...(run.beforeDetect ? { beforeDetect: run.beforeDetect } : {}),
     screenshot: r.screenshot, version: r.version, hash: r.hash, t0,
   });
+}
+
+/** Why a repair may not run: it already ran in this execution, or the caller holds it (RepairInput.held). */
+function heldReason(repair: RepairInput): string | undefined {
+  if (repair.alreadyRan) return REPAIR_ALREADY_RAN;
+  const held = repair.held?.trim();
+  return held || undefined;
 }
 
 /**
