@@ -488,7 +488,9 @@ jobs:
           $random = [Security.Cryptography.RandomNumberGenerator]::Create()
           try { $random.GetBytes($bytes) } finally { $random.Dispose() }
           $password = New-Object Security.SecureString
-          foreach ($char in ('Aa1-' + [Convert]::ToBase64String($bytes)).ToCharArray()) { $password.AppendChar($char) }
+          # Kept to look for in what the installer prints and logs; never printed.
+          $passwordText = 'Aa1-' + [Convert]::ToBase64String($bytes)
+          foreach ($char in $passwordText.ToCharArray()) { $password.AppendChar($char) }
           $password.MakeReadOnly()
 
           $global:LASTEXITCODE = 0
@@ -498,8 +500,17 @@ jobs:
           $said | ForEach-Object { Write-Host "  | $_" }
           Assert ($code -eq 0) "Install-Rpa.ps1 exits 0 (it was $code)"
           $closing = @($said | Select-Object -Skip ([array]::IndexOf($said, 'RPA is installed.')))
-          Assert ($closing.Count -gt 1 -and $closing -contains '  Task:      \RPA\RPA Runner starts when rpa-ci-bot signs in' -and $closing -contains '  Firewall:  inbound TCP 8765 is open to 127.0.0.1 (rule RPA-Runner-In)') 'the closing lines name the runner task and the runner firewall rule'
-          Assert (($said -join "`n") -notmatch '(?i)browser|3000') 'nothing the installer printed names a browser or port 3000'
+          # Where everything is, and the steps, are in install.log; the window has the short ending.
+          $log = [IO.File]::ReadAllText("$install\install.log")
+          $logged = @($log -split "`r`n")
+          Assert ($closing.Count -gt 1 -and $closing -contains '  Firewall:  inbound TCP 8765 is open to 127.0.0.1 (rule RPA-Runner-In)' -and $closing -contains "  Where everything is, and what changed: $install\install.log") 'the closing lines name the runner firewall rule and the install log'
+          Assert ($logged -contains '  Task:      \RPA\RPA Runner starts when rpa-ci-bot signs in' -and $logged -contains '  Firewall:  inbound TCP 8765 is open to 127.0.0.1 (rule RPA-Runner-In)') 'install.log names the runner task and the runner firewall rule'
+          # Without a console (this step reads the output) each step is a line, as install.log keeps it.
+          Assert ($said -contains '  copy program files' -and $said -contains '  register the runner task' -and $logged -contains '  copy program files' -and $logged -contains '  register the runner task') 'the steps are lines in the output and in install.log'
+          Assert ($closing[-1] -ceq ('  & "{0}\rpa.cmd" connection -ShowTokens' -f $install)) 'the closing lines end with the one command to run after the sign-in'
+          Assert (($said -join "`n") -notmatch '(?i)browser|3000' -and $log -notmatch '(?i)browser|3000') 'nothing the installer printed or logged names a browser or port 3000'
+          $token = ([IO.File]::ReadAllText("$data\token")).Trim()
+          Assert (-not ($said -join "`n").Contains($passwordText) -and -not ($said -join "`n").Contains($token) -and -not $log.Contains($passwordText) -and -not $log.Contains($token)) 'neither the output nor install.log holds the password or the runner token'
 
           $bot = (New-Object Security.Principal.NTAccount("$env:COMPUTERNAME\rpa-ci-bot")).Translate([Security.Principal.SecurityIdentifier]).Value
           $groups = @(([ADSI]"WinNT://$env:COMPUTERNAME/rpa-ci-bot,user").Groups() | ForEach-Object { $_.GetType().InvokeMember('Name', 'GetProperty', $null, $_, $null) })
@@ -973,9 +984,16 @@ jobs:
           Write-Host "before: fDenyTSConnections $deny; Remote Desktop firewall rules: $rdpRules"
 
           $global:LASTEXITCODE = 0
-          # -Address: the name n8n reaches this machine at (behind a NAT, for example); install.json keeps it.
-          & 'C:\rpa-ci\package\rpa-windows-x64\Install-Rpa.ps1' -User rpa-ci-unattended -Unattended -AllowFrom 127.0.0.1 -Address rpa-ci.example -Force
-          Assert ($LASTEXITCODE -eq 0) "Install-Rpa.ps1 -Unattended exits 0 (it was $LASTEXITCODE)"
+          # -Address: the name n8n reaches this machine at (behind a NAT, for example); install.json keeps it. In a
+          # powershell.exe of its own, to read everything it prints (the Connection Line comes through the host).
+          $said = @(& (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File 'C:\rpa-ci\package\rpa-windows-x64\Install-Rpa.ps1' -User rpa-ci-unattended -Unattended -AllowFrom 127.0.0.1 -Address rpa-ci.example -Force)
+          $code = $LASTEXITCODE
+          $said | ForEach-Object { Write-Host "  | $_" }
+          Assert ($code -eq 0) "Install-Rpa.ps1 -Unattended exits 0 (it was $code)"
+          # -Force and a -Unattended given: no question, and the line with its token hidden, with the command that shows it.
+          $token = ([IO.File]::ReadAllText("$data\token")).Trim()
+          Assert (@($said | Where-Object { $_ -like 'rpa-runner://rpa-ci.example:8765/rpa/v1#token=<hidden: run with -ShowTokens>&fingerprint=*' }).Count -eq 1 -and $said -contains ('The token is hidden in the line (token=<hidden: run with -ShowTokens>). For the line to paste, run as an administrator: & "{0}\rpa.cmd" connection -ShowTokens' -f $install)) 'the closing lines show the Connection Line with its token hidden, and the command that shows it'
+          Assert (($said -join "`n") -notmatch 'Show the Connection Line' -and -not ($said -join "`n").Contains($token) -and -not ([IO.File]::ReadAllText("$install\install.log")).Contains($token)) 'with -Force it asks nothing, and neither the output nor install.log holds the runner token'
 
           $record = Get-Content -Raw -LiteralPath "$install\install.json" -Encoding UTF8 | ConvertFrom-Json
           Assert ($record.mode -eq 'unattended' -and $record.user -eq 'rpa-ci-unattended' -and $record.idleSeconds -eq 15 -and $record.runnerInnerPort -eq 18765 -and (@($record.listenAddresses) -join ',') -eq '0.0.0.0') 'install.json records the mode, the user, the idle time, the port behind the supervisor and where it listens'

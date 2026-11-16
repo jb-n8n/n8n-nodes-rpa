@@ -90,8 +90,11 @@
 # -UserPassword; give one to store a changed password). On a change of user (another -User on an upgrade, or a first
 # install over a data directory whose access rules name another user) both tokens are replaced, because the earlier
 # user could read them, and the n8n credentials then need the new ones. Without a user of its own making,
-# -AutoSignIn needs -UserPassword: a password the installer generated is stored for Windows and known to nobody. The
-# installer prints no secret.
+# -AutoSignIn needs -UserPassword: a password the installer generated is stored for Windows and known to nobody.
+# The installer ends with what is installed and the one thing to do next; where everything is and the steps that ran go
+# to C:\Program Files\RPA Runner\install.log. After an unattended install it shows the Connection Line with its token
+# hidden; at a console, without -Force and without -Unattended given, it first asks whether to show it with its token,
+# and does only after y. Otherwise the installer prints no secret.
 # When an earlier uninstall could not put a setting of -AutoSignIn back, it left a list in
 # C:\Program Files\RPA Runner\uninstall-leftovers.json. The installer reads that list (when it is a file of
 # Administrators or SYSTEM), records each setting with what it was before the earlier install, and removes the list
@@ -347,11 +350,21 @@ if ($plan.AskAddress) {
 # read it as NoBrowser.
 $browser = [bool]$plan.Browser
 $parameters.NoBrowser = -not $browser
+# A person at a console: input and output are the console, not a pipe or a file (a remote command, a program that
+# reads the output). The steps are then one progress line, and the Connection Line may be offered with its token.
+$console = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
+$parameters.Progress = $console
+$layout = Get-RpaLayout
+# The version this run installs, for the install log.
+$version = ''
+try { $version = ([string](Get-Content -LiteralPath (Join-Path $package 'VERSION') -TotalCount 1)).Trim() } catch { }
 $upgrade = $plan.Steps -contains 'stop running services'
 if ($upgrade) { Write-Host 'Upgrading RPA:' } else { Write-Host 'Installing RPA:' }
 try { Invoke-RpaInstallPlan -Plan $plan -Parameters $parameters -SourceDir $package }
 catch {
   Write-Host $_.Exception.Message
+  # The steps up to the one that failed, and why, in the install log (when the install folder is there by then).
+  try { Add-RpaInstallLog $layout (Get-RpaInstallLog -Plan $plan -Version $version -Time ([DateTimeOffset]::Now) -Failure $_.Exception.Message -FailedStep ([string]$_.Exception.Data['Step'])) } catch { }
   $notPutBack = @($_.Exception.Data['NotPutBack'] | Where-Object { $_ })
   $userKept = $_.Exception.Data['UserKept']
   if ($notPutBack.Count -eq 0) {
@@ -375,70 +388,24 @@ catch {
   exit 1
 }
 
-$layout = Get-RpaLayout
+# Where everything is, and the steps that ran, go to the install log; the window gets what is installed and what to do
+# next. The Connection Line follows an unattended install: with its token only after a yes at this console, else
+# hidden, with the command that shows it.
+$ending = Get-RpaInstallEnding -Plan $plan -Parameters $parameters -Layout $layout -Console $console
+try { Add-RpaInstallLog $layout (Get-RpaInstallLog -Plan $plan -Version $version -Time ([DateTimeOffset]::Now) -Details $ending.Details) }
+catch { Write-Warning ('The install log {0} could not be written: {1}' -f $ending.LogFile, $_.Exception.Message) }
 Write-Host ''
 Write-Host 'RPA is installed.'
-Write-Host ('  Programs:  {0}' -f $layout.InstallDir)
-if (-not $browser) { Write-Host ('  Data:      {0} (policy.json, the token, the certificate, logs)' -f $layout.DataDir) }
-else { Write-Host ('  Data:      {0} (policy.json, the tokens, the certificates, logs)' -f $layout.DataDir) }
-Write-Host ('  Policy:    {0}' -f (Join-Path $layout.DataDir 'policy.json'))
-$policyTool = Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaPolicy.exe'
-if ($plan.Steps -contains 'write policy') { Write-Host ('             It is new and allows no app. Change it with {0}' -f $policyTool) }
-else { Write-Host ('             It was there already and is kept as it is. Change it with {0}' -f $policyTool) }
-if (-not $browser) { Write-Host ('  Task:      \RPA\RPA Runner starts when {0} signs in' -f $User) }
-else { Write-Host ('  Tasks:     \RPA\RPA Runner and \RPA\RPA Browser start when {0} signs in' -f $User) }
-if ($plan.Unattended) {
-  Write-Host ('  Service:   RPA Supervisor signs {0} in when n8n connects, and out {1} s after the last connection;' -f $User, $plan.IdleSeconds)
-  Write-Host ('             its log is {0}' -f (Join-Path $layout.SupervisorDir 'supervisor.log'))
-}
-if ($NoFirewall) { Write-Host '  Firewall:  not changed (-NoFirewall)' }
-elseif (-not $plan.AllowFrom) { Write-Host '  Firewall:  not changed (this install was made with -NoFirewall)' }
-else {
-  $from = 'any address'
-  if ($plan.AllowFrom -notcontains 'any') { $from = $plan.AllowFrom -join ', ' }
-  if (-not $browser) { Write-Host ('  Firewall:  inbound TCP {0} is open to {1} (rule RPA-Runner-In)' -f $RunnerPort, $from) }
-  else { Write-Host ('  Firewall:  inbound TCP {0} and {1} are open to {2} (rules RPA-Runner-In and RPA-Browser-In)' -f $RunnerPort, $BrowserPort, $from) }
-  if ($plan.Unattended) { Write-Host '             for the RPA Supervisor' }
-  if ($plan.PublicNetwork) { Write-Host '             on Domain, Private and Public networks' }
-  else { Write-Host '             on Domain and Private networks, not on Public ones' }
-}
-Write-Host ('  Remove:    {0}' -f (Join-Path $layout.InstallDir 'Uninstall-Rpa.ps1'))
-Write-Host ''
-# The short command in the install folder (rpa.cmd), by its full path: nothing puts the install folder on PATH.
-$rpa = Join-Path $layout.InstallDir 'rpa.cmd'
-if ($plan.Steps -contains 'remove the old tokens') {
-  if (-not $browser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }
-  else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }
-  if (-not $browser) { Write-Host ('Update the n8n credential with the new runner token, which & "{0}" connection -ShowTokens shows.' -f $rpa) }
-  else { Write-Host ('Update the n8n credentials with the new tokens, which & "{0}" connection -ShowTokens shows.' -f $rpa) }
-}
-$autoSignIn = $plan.Steps -contains 'turn on automatic sign-in'
-if ($plan.Unattended) {
-  Write-Host ('Nobody needs to be signed in: the RPA Supervisor signs {0} in for each run.' -f $User)
-  if ($plan.Steps -contains 'register the supervisor service') {
-    Write-Host ('The installer signed {0} in once, to check the runner; that session ends by itself {1} s after the check (the idle time).' -f $User, $plan.IdleSeconds)
-  }
-  # What the n8n credentials need, as rpa connection shows it (the tokens hidden). The installer prints no secret.
-  Write-Host ''
-  try { & (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') | Out-Host }
+foreach ($line in $ending.Lines) { Write-Host $line }
+if ($ending.Line) {
+  $tokens = $ending.Ask -and (Read-RpaYes $ending.Question { param($Prompt) Read-Host $Prompt })
+  try { & (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') -Short -ShowTokens:$tokens | Out-Host }
   catch {
     $shown = 'The connection lines could not be shown'
     if (-not $browser) { $shown = 'The connection line could not be shown' }
-    Write-Host ('{0} ({1}). Run: & "{2}" connection' -f $shown, $_.Exception.Message, $rpa)
+    Write-Host ('{0} ({1}). Run: & "{2}" connection -ShowTokens' -f $shown, $_.Exception.Message, (Join-Path $layout.InstallDir 'rpa.cmd'))
   }
-  Write-Host ''
-  Write-Host ('For how the supervisor is doing: & "{0}" status' -f $rpa)
-  Write-Host ('While someone is signed in as {0}, runs are refused: sign {0} out after looking at something.' -f $User)
-}
-else {
-  if ($autoSignIn) {
-    $starts = 'the runner and the browser'
-    if (-not $browser) { $starts = 'the runner' }
-    Write-Host ('Automatic sign-in is on. Restart this machine now (Restart-Computer): Windows then signs {0} in and starts {1}. About a minute after its desktop shows, run:' -f $User, $starts)
-  }
-  else { Write-Host ('Sign in as {0}, then run:' -f $User) }
-  Write-Host ('  & "{0}" connection' -f $rpa)
-  if (-not $autoSignIn -and -not $upgrade) { Write-Host ('If {0} is already signed in, sign out and sign in again.' -f $User) }
+  if ($tokens) { Write-Host $ending.Caveat }
 }
 # The exit code of a run that finished, whatever the last Windows tool it ran left in $LASTEXITCODE.
 exit 0

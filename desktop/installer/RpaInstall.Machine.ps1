@@ -114,6 +114,29 @@ function Read-RpaReachableAddress($AllowFrom, [scriptblock]$Read) {
   }
 }
 
+# The question the installer asks before it shows the Connection Line with its token. Returns whether the answer is
+# y or yes; Enter, any other answer, and a host that cannot ask (Read-Host fails without a console) are a no. -Read is
+# Read-Host.
+function Read-RpaYes([string]$Question, [scriptblock]$Read) {
+  try { $answer = [string](& $Read $Question) } catch { return $false }
+  @('y', 'yes') -contains $answer.Trim()
+}
+
+# Adds -Text (Get-RpaInstallLog's) to install.log in the install folder, where only administrators can change
+# anything; nothing when that folder is not there (a first install that failed before it copied the programs).
+function Add-RpaInstallLog([hashtable]$Layout, [string]$Text) {
+  if (-not (Test-Path -LiteralPath $Layout.InstallDir -PathType Container)) { return }
+  [IO.File]::AppendAllText((Join-Path $Layout.InstallDir 'install.log'), $Text, (New-Object Text.UTF8Encoding $false))
+}
+
+# At a console the steps are one progress line, which the window replaces as they go on and removes at the end
+# (-Total 0); the install log keeps them.
+function Write-RpaStepProgress([string]$Activity, [string]$Step, [int]$Done, [int]$Total) {
+  $ProgressPreference = 'Continue'
+  if ($Total -gt 0) { Write-Progress -Activity $Activity -Status $Step -PercentComplete ([int](100 * $Done / $Total)) }
+  else { Write-Progress -Activity $Activity -Completed }
+}
+
 # Where things are. Program Files keeps its default permissions (users read and run, only administrators change), so
 # the bot user cannot replace what it runs.
 function Get-RpaLayout {
@@ -1905,8 +1928,14 @@ function Invoke-RpaInstallPlan {
   $judge = (-not $previous) -or ($steps -contains 'create user') -or ([string]$previous.user -ne $account.Display)
   $ownSid = $run.Sid
 
+  # Each step as a line, or at a console (Parameters.Progress) as one progress line.
+  $activity = 'Installing RPA'
+  if ($steps -contains 'stop running services') { $activity = 'Upgrading RPA' }
+  $done = 0
   foreach ($step in $steps) {
-    Write-Host ('  {0}' -f $step)
+    if ($Parameters.Progress) { Write-RpaStepProgress $activity $step $done $steps.Count }
+    else { Write-Host ('  {0}' -f $step) }
+    $done++
     try {
       switch ($step) {
         'stop running services' {
@@ -1971,15 +2000,18 @@ function Invoke-RpaInstallPlan {
         'start tasks' { Start-RpaTasks }
       }
     } catch {
+      if ($Parameters.Progress) { Write-RpaStepProgress $activity '' 0 0 }
       $failure = New-Object InvalidOperationException ('The step "{0}" failed: {1}' -f $step, $_.Exception.Message)
       $undone = Undo-RpaFailedRun $run
       if ($run.Stopped) { Resume-RpaAfterFailedRun $run }
       $failure.Data['NotPutBack'] = [string[]]@($undone.NotPutBack)
       $failure.Data['UserKept'] = $undone.UserKept
       $failure.Data['SignedOut'] = [bool]$run.SignedOut
+      $failure.Data['Step'] = $step
       throw $failure
     }
   }
+  if ($Parameters.Progress) { Write-RpaStepProgress $activity '' 0 0 }
   # install.json holds the records of the list by now, and the install has finished: the list has done its work. (A
   # failed first install loses its install.json again, so the list stays until an install finishes.)
   if ($run.LeftoversRead) { Remove-Item -LiteralPath $layout.LeftoversFile -Force -ErrorAction SilentlyContinue }
