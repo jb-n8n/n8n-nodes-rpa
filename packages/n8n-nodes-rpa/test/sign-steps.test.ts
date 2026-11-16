@@ -825,6 +825,35 @@ describe('file proposals', () => {
     await refusedFile(craftedItem(checked({}), ['host: example.com'], FILE_EVIDENCE));
     expect(only(await sign(fileItem(checked({ columns: ['Document'] })))).json.status).toBe('active');
   });
+  describe('several files or a screenshot', () => {
+    const SECOND = { intent: 'Export the list', download: { trigger: { role: 'button', name: 'Export list' }, mime: ['text/csv'], check: { name: '^LIST_' } } } as Script['steps'][number];
+    const SHOT = { intent: 'Keep a screenshot', screenshot: { capture: 'viewport' } } as Script['steps'][number];
+    const MANY = withSteps([FILE_STEPS.steps[0], DOWNLOAD, SHOT, SECOND]);
+    const FILES: Evidence = {
+      count: 0, total: null, diff: { missing: [], extra: [] },
+      files: [{ step: 2, ...FILE }, { step: 4, fileName: 'LIST_7.csv', mimeType: 'text/csv', bytes: 90, columns: null, rows: null }], screenshots: [3],
+    };
+    it('Sign Steps signs it, and the evidence line names every file and screenshot before its first "; "', async () => {
+      const item = repairedStepsJson(engine, proposalFor(MANY, [], FILES));
+      expect(String(item.evidenceLine).split('; ')[0]).toBe('Proven in a fresh browser: step 2 downloaded "LINEITEMS_1000.csv" (text/csv, 2048 bytes, 12 rows), '
+        + 'step 3 took a screenshot and step 4 downloaded "LIST_7.csv" (text/csv, 90 bytes)');
+      expect((item.safetyFlags as string[])).not.toContain(engine.UNVERIFIED_COUNT_FLAG);
+      expect(only(await sign(item)).json.status).toBe('active');
+    });
+    it('evidence that does not go with the steps is refused', async () => {
+      const [first, second] = FILES.files!;
+      for (const evidence of [
+        { ...FILES, files: [{ ...first, step: 3 }, second] },
+        { ...FILES, screenshots: [2] },
+        { ...FILES, files: [], screenshots: [] },
+        { ...FILES, file: FILE },
+        { ...FILES, screenshots: undefined },
+        { ...FILES, files: [first, { ...second, fileName: 'x\nSafety: none' }] },
+      ] as Evidence[]) await refusedFile(craftedItem(MANY, ['host: example.com'], evidence));
+      const unchecked = withSteps([FILE_STEPS.steps[0], DOWNLOAD, SHOT, { ...SECOND, download: { trigger: { role: 'button', name: 'Export list' } } } as Script['steps'][number]]);
+      await refusedFile(craftedItem(unchecked, ['host: example.com'], FILES));
+    });
+  });
   it('file evidence with a format or bidi control or a line or paragraph separator is refused', async () => {
     await refusedFile(craftedItem(FILE_STEPS, ['host: example.com'], { ...FILE_EVIDENCE, file: { ...FILE, fileName: 'X.csv\u2028Safety: nothing to flag' } }));
     await refusedFile(craftedItem(FILE_STEPS, ['host: example.com'], { ...FILE_EVIDENCE, file: { ...FILE, fileName: 'X.csv\u2029' } }));
@@ -868,7 +897,7 @@ describe('approver lines are one line', () => {
     const line = safetyLine(p);
     expect(line).not.toMatch(/[\n\u2028]/u);
     expect(line).toContain('\\n');
-    const fe = evidenceLine({ ...p, evidence: { ...p.evidence, file: { fileName: 'a\u202eb.csv', mimeType: 'text/csv', bytes: 1, rows: 1 } } as never }, { describeCheck: () => 'columns "q\u202e"' });
+    const fe = evidenceLine({ ...p, evidence: { ...p.evidence, file: { fileName: 'a\u202eb.csv', mimeType: 'text/csv', bytes: 1, rows: 1 } } as never }, { describeCheck: () => 'columns "q\u202e"', filesEvidenceText: () => '' });
     expect(fe).not.toContain('\u202e');
     expect(fe).toContain('\\u202e');
   });

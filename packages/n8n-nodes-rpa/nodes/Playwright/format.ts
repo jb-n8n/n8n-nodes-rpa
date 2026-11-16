@@ -57,10 +57,12 @@ const oneLine = (s: string): string =>
  * One line of evidence for the approver. For a file proposal it describes the PROVEN file (the evidence's), and the
  * checks come from the download step of the steps, never from the evidence.
  */
-export function evidenceLine(p: Proposal | DesktopProposal, engine: Pick<Engine, 'describeCheck'>): string {
+export function evidenceLine(p: Proposal | DesktopProposal, engine: Pick<Engine, 'describeCheck' | 'filesEvidenceText'>): string {
   if (isDesktopProposal(p)) return DESKTOP_EVIDENCE_LINE;
   const { count, total, diff, file: f } = p.evidence;
   const reads = p.evidence.readPosts?.length ? `; read-only requests the Site Login allowed: ${p.evidence.readPosts.join(', ')}` : '';
+  // Several files or a screenshot (an import): every file and screenshot before the first "; ", which the review page shows.
+  if (p.evidence.files) return oneLine(`${engine.filesEvidenceText({ files: p.evidence.files, screenshots: p.evidence.screenshots ?? [] })}${reads}`);
   if (f) {
     const checks = engine.describeCheck(downloadTemplate(p.steps.steps) ?? { check: {} });
     return oneLine(`Proven in a fresh browser: downloaded ${JSON.stringify(f.fileName)} (${f.mimeType}, ${f.bytes} bytes${f.rows !== null ? `, ${f.rows} rows` : ''}); checks: ${checks}${reads}`);

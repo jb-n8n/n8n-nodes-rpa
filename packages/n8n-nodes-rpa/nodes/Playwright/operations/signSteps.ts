@@ -273,7 +273,7 @@ function safetyFlagsProblem(engine: Engine, script: Script, p: ParsedProposal, n
   try {
     expected = fullSafetyFlags(engine, script, notReplayed
       ? { unverifiedCount: false, fieldsDropped: false, notReplayed: true }
-      : { unverifiedCount: p.evidence.total === null && !p.evidence.file, fieldsDropped: p.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
+      : { unverifiedCount: p.evidence.total === null && !p.evidence.file && !p.evidence.files, fieldsDropped: p.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
   } catch (error) {
     return errorMessage(error);
   }
@@ -313,7 +313,8 @@ function malformedEvidence(e: unknown): boolean {
 
 /** Not-replayed evidence is exactly empty: no rows, no total, no file, no read-only requests, an empty diff. */
 function notReplayedEvidenceProblem(e: Proposal['evidence']): boolean {
-  return e.count !== 0 || e.total !== null || e.file !== undefined || e.readPosts !== undefined || e.diff.missing.length !== 0 || e.diff.extra.length !== 0;
+  return e.count !== 0 || e.total !== null || e.file !== undefined || e.files !== undefined || e.screenshots !== undefined || e.readPosts !== undefined
+    || e.diff.missing.length !== 0 || e.diff.extra.length !== 0;
 }
 
 /** Whether a download check can tell the right file from the wrong one: it sets `name` or `columns` (the engine's rule). */
@@ -340,6 +341,9 @@ function fileEvidenceProblem(p: ParsedProposal): boolean {
   const steps = isObject(p.steps) ? p.steps.steps : Array.isArray(p.steps) ? p.steps : undefined;
   if (!Array.isArray(steps)) return false;
   const file = isObject(p.evidence) ? p.evidence.file : undefined;
+  if (isObject(p.evidence) && (p.evidence.files !== undefined || p.evidence.screenshots !== undefined)) {
+    return (file !== undefined && file !== null) || filesEvidenceProblem(steps as Step[], p.evidence.files, p.evidence.screenshots);
+  }
   try {
     if (file === undefined || file === null) return hasDownloadStep(steps as Step[]);
     if (malformedFile(file) || !isFileDocument(steps as Step[])) return true;
@@ -347,6 +351,26 @@ function fileEvidenceProblem(p: ParsedProposal): boolean {
     return !namesFile(download?.download.check);
   } catch {
     return false;
+  }
+}
+
+/**
+ * Evidence of several files or a screenshot (an import's proof) that does not go with the steps: both lists must be
+ * there, each file well formed and from a top-level download step, each screenshot from a top-level screenshot step,
+ * at least one of either, and every download of the steps outside paginate with a check that names the file or its
+ * columns (the engine's adoptableKind). Steps that are not a document are left to the later checks.
+ */
+function filesEvidenceProblem(steps: Step[], files: unknown, screenshots: unknown): boolean {
+  const stepNumber = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= steps.length;
+  if (!Array.isArray(files) || !Array.isArray(screenshots) || files.length + screenshots.length === 0) return true;
+  try {
+    const at = (n: number) => steps[n - 1] as Step;
+    if (!files.every((f) => isObject(f) && !malformedFile(f) && stepNumber(f.step) && 'download' in at(f.step))) return true;
+    if (!screenshots.every((n) => stepNumber(n) && 'screenshot' in at(n))) return true;
+    const nested = steps.some((s) => 'paginate' in s && hasDownloadStep(s.paginate.each));
+    return nested || !steps.every((s) => !('download' in s) || namesFile(s.download.check));
+  } catch {
+    return true;
   }
 }
 
