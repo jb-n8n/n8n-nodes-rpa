@@ -93,6 +93,12 @@ services:
   mailpit:
     image: axllent/mailpit:v1.32.0@sha256:0790692be935ea4420d085694f7985b1f692ca6a8771ab0e0bd8ba75ac180498
     restart: unless-stopped
+    # Mail kept in the mailpit_data volume (Mailpit's --database, MP_DATABASE), so open approval emails outlive an
+    # upgrade or a restart. Without it Mailpit keeps mail in a temporary file that goes with the container.
+    environment:
+      MP_DATABASE: /data/mailpit.db
+    volumes:
+      - mailpit_data:/data
     ports:
       - "127.0.0.1:8025:8025" # inbox UI; n8n sends to mailpit:1025
     networks: [mail]
@@ -105,3 +111,4 @@ networks:
 volumes:
   n8n_data: {}
   sandbox_state: {}
+  mailpit_data: {} # Mailpit's mail: approval emails hold approval links, so treat it like n8n_data
