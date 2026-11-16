@@ -30,7 +30,7 @@ async function runCode(name: string, items: Record<string, unknown>[], s: Record
     return { first: () => ({ json: s }) };
   };
   const setTimeoutFake = (resolve: () => void, ms: number) => { sleeps.push(ms); resolve(); };
-  return await new AsyncFunction('$input', '$', 'setTimeout', code)({ all: () => items.map((json) => ({ json })) }, $, setTimeoutFake);
+  return await new AsyncFunction('$input', '$', 'setTimeout', code)({ all: () => items.map((json) => ({ json })), first: () => ({ json: items[0] }) }, $, setTimeoutFake);
 }
 
 const outlook = (o: { subject: string; body: string; from?: string; seconds: number }) => ({
@@ -90,7 +90,7 @@ describe('6-one-time-code.json: the contract of a One-Time Code Workflow', () =>
 });
 
 describe('6-one-time-code.json: a code from an email', () => {
-  const s = settings({ requestedAt: REQUESTED, account: 'user-a' });
+  const s = settings({ requestedAt: REQUESTED, account: 'user-a' }, { sender: 'no-reply@example.com' });
 
   it('Read new mail is n8n\'s Microsoft Outlook Get Many, off until a person picks a mail account, and lists mail since the request', () => {
     const n = byName(t, 'Read new mail');
@@ -102,7 +102,8 @@ describe('6-one-time-code.json: a code from an email', () => {
     expect(f.filterBy).toBe('filters');
     const $ = () => ({ first: () => ({ json: s }) });
     expect(evaluate(f.filters.receivedAfter, { $ })).toBe(at(-30));
-    expect(evaluate(f.filters.sender, { $ })).toBe('');
+    // No sender filter there: Outlook matches it against the display name too. The address is checked whole after it.
+    expect(Object.keys(f.filters)).toEqual(['receivedAfter']);
     expect(targets(t, 'Read new mail')).toEqual([['Find the code in the mail']]);
   });
 
@@ -113,36 +114,76 @@ describe('6-one-time-code.json: a code from an email', () => {
       outlook({ subject: 'Your sign-in code', body: 'Your code is 333333.', seconds: -20 }),
       outlook({ subject: 'Newsletter', body: 'Order 444444 shipped', seconds: 5 }),
     ];
-    expect(await runCode('Find the code in the mail', mails, s)).toEqual([{ json: { code: '222222' } }]);
+    expect(await runCode('Find the code in the mail', mails, s)).toEqual([{ json: { code: '222222', notFromSender: 0 } }]);
   });
 
-  it('keeps only mail from sender when sender is set', async () => {
+  it('the sender is required: with sender empty the email source stops with one sentence', async () => {
+    const mail = outlook({ subject: 'Your code', body: '666666', seconds: 2 });
+    for (const sender of ['', '  ', ' , ']) {
+      await expect(runCode('Find the code in the mail', [mail], { ...s, sender })).rejects.toThrow('In Settings, set sender to the address the site sends its code mail from.');
+    }
+    expect(settings({}).sender).toBe('');
+  });
+
+  it('takes a mail only from an address in sender, compared whole and without case; a list of a few addresses works', async () => {
     const mails = [
       outlook({ subject: 'Your code', body: '555555', from: 'other@example.net', seconds: 4 }),
-      outlook({ subject: 'Your code', body: '666666', from: 'no-reply@example.com', seconds: 2 }),
+      outlook({ subject: 'Your code', body: '666666', from: 'No-Reply@Example.com', seconds: 2 }),
     ];
-    expect(await runCode('Find the code in the mail', mails, { ...s, sender: 'NO-REPLY@example.com' })).toEqual([{ json: { code: '666666' } }]);
+    expect(await runCode('Find the code in the mail', mails, { ...s, sender: 'NO-REPLY@example.com' })).toEqual([{ json: { code: '666666', notFromSender: 1 } }]);
+    expect(await runCode('Find the code in the mail', mails, { ...s, sender: 'alerts@example.com, other@example.net' })).toEqual([{ json: { code: '555555', notFromSender: 1 } }]);
+  });
+
+  it('refuses a lookalike: a display name or a From text that holds the address, an address that only contains it', async () => {
+    const lookalikes: Record<string, unknown>[] = [
+      // Outlook: the name says the site, the address is another.
+      { subject: 'Your code', bodyPreview: '999999', receivedDateTime: at(3), from: { emailAddress: { name: 'no-reply@example.com', address: 'someone@attacker.example' } } },
+      // A From header whose display name holds the address, in quotes and in angle brackets.
+      { Subject: 'Your code', snippet: '999999', internalDate: String(Date.parse(at(3))), From: '"no-reply@example.com via x" <someone@attacker.example>' },
+      { Subject: 'Your code', snippet: '999999', internalDate: String(Date.parse(at(3))), From: '"<no-reply@example.com>" <someone@attacker.example>' },
+      { Subject: 'Your code', snippet: '999999', internalDate: String(Date.parse(at(3))), From: 'no-reply@example.com <someone@attacker.example>' },
+      // Addresses that contain the address, and a From text with no address of its own.
+      { Subject: 'Your code', Snippet: '999999', Created: at(3), From: { Address: 'no-reply@example.com.attacker.example' } },
+      { Subject: 'Your code', Snippet: '999999', Created: at(3), From: { Address: 'x.no-reply@example.com' } },
+      { Subject: 'Your code', snippet: '999999', internalDate: String(Date.parse(at(3))), From: 'no-reply@example.com via attacker' },
+      // Gmail's full shape with two addresses in From: none is taken.
+      { subject: 'Your code', text: '999999', date: at(3), from: { value: [{ address: 'no-reply@example.com' }, { address: 'someone@attacker.example' }] } },
+    ];
+    for (const mail of lookalikes) expect(await runCode('Find the code in the mail', [mail], s), JSON.stringify(mail)).toEqual([{ json: { code: '', notFromSender: 1 } }]);
+    // The same shapes from the address itself are taken.
+    for (const from of ['Example <no-reply@example.com>', 'no-reply@example.com', '"Example, Inc." <NO-REPLY@example.com>']) {
+      expect(await runCode('Find the code in the mail', [{ Subject: 'Your code', snippet: '424242', internalDate: String(Date.parse(at(3))), From: from }], s), from)
+        .toEqual([{ json: { code: '424242', notFromSender: 0 } }]);
+    }
+    expect(await runCode('Find the code in the mail', [{ subject: 'Your code', text: '434343', date: at(3), from: { value: [{ address: 'no-reply@example.com' }] } }], s))
+      .toEqual([{ json: { code: '434343', notFromSender: 0 } }]);
+  });
+
+  it('ignores a mail from the sender received before the request, less lookBackSeconds', async () => {
+    const old = outlook({ subject: 'Your code', body: '313131', seconds: -31 });
+    expect(await runCode('Find the code in the mail', [old], s)).toEqual([{ json: { code: '', notFromSender: 0 } }]);
+    expect(await runCode('Find the code in the mail', [old, outlook({ subject: 'Your code', body: '323232', seconds: -29 })], s)).toEqual([{ json: { code: '323232', notFromSender: 0 } }]);
   });
 
   it('reads the shapes of Gmail\'s Get Many and of a mail API\'s list too', async () => {
     const gmail = { Subject: 'Your code', snippet: 'Use 777777 to sign in', From: 'Example <no-reply@example.com>', internalDate: String(Date.parse(at(1))) };
-    expect(await runCode('Find the code in the mail', [gmail], s)).toEqual([{ json: { code: '777777' } }]);
+    expect(await runCode('Find the code in the mail', [gmail], s)).toEqual([{ json: { code: '777777', notFromSender: 0 } }]);
     const plain = { Subject: 'Your code', Snippet: 'Use 888888 to sign in', From: { Address: 'no-reply@example.com' }, Created: at(1) };
-    expect(await runCode('Find the code in the mail', [plain], s)).toEqual([{ json: { code: '888888' } }]);
+    expect(await runCode('Find the code in the mail', [plain], s)).toEqual([{ json: { code: '888888', notFromSender: 0 } }]);
     // A mail API's answer through an HTTP Request: one item that lists the mails under messages, or under value (Graph).
-    expect(await runCode('Find the code in the mail', [{ total: 2, messages: [{ ...plain, Created: at(-200) }, plain] }], s)).toEqual([{ json: { code: '888888' } }]);
-    expect(await runCode('Find the code in the mail', [{ value: [outlook({ subject: 'Your code', body: '135790', seconds: 2 })] }], s)).toEqual([{ json: { code: '135790' } }]);
+    expect(await runCode('Find the code in the mail', [{ total: 2, messages: [{ ...plain, Created: at(-200) }, plain] }], s)).toEqual([{ json: { code: '888888', notFromSender: 0 } }]);
+    expect(await runCode('Find the code in the mail', [{ value: [outlook({ subject: 'Your code', body: '135790', seconds: 2 })] }], s)).toEqual([{ json: { code: '135790', notFromSender: 0 } }]);
   });
 
   it('a code in an HTML body, and a pattern with a group: the group is the code', async () => {
     const mail = { ...outlook({ subject: 'Your code', body: '', seconds: 1 }), body: { content: '<p>Code:</p><b>123456</b>' } };
-    expect(await runCode('Find the code in the mail', [mail], s)).toEqual([{ json: { code: '123456' } }]);
+    expect(await runCode('Find the code in the mail', [mail], s)).toEqual([{ json: { code: '123456', notFromSender: 0 } }]);
     const both = outlook({ subject: 'Your code', body: 'Ref 000001 code: 24681357', seconds: 1 });
-    expect(await runCode('Find the code in the mail', [both], { ...s, codePattern: 'code: (\\d{8})' })).toEqual([{ json: { code: '24681357' } }]);
+    expect(await runCode('Find the code in the mail', [both], { ...s, codePattern: 'code: (\\d{8})' })).toEqual([{ json: { code: '24681357', notFromSender: 0 } }]);
   });
 
   it('no fitting mail yet: code is empty, and Mail code found? sends the loop round again', async () => {
-    expect(await runCode('Find the code in the mail', [{}], s)).toEqual([{ json: { code: '' } }]);
+    expect(await runCode('Find the code in the mail', [{}], s)).toEqual([{ json: { code: '', notFromSender: 0 } }]);
     expect(targets(t, 'Mail code found?')).toEqual([['Return the mail code'], ['Wait, then read again']]);
     expect(targets(t, 'Wait, then read again')).toEqual([['Read new mail']]);
   });
@@ -155,8 +196,12 @@ describe('6-one-time-code.json: a code from an email', () => {
     const sleeps: number[] = [];
     expect(await runCode('Wait, then read again', [{ code: '' }], { ...s, startedAt: new Date().toISOString() }, sleeps)).toEqual([{ json: { tryAgain: true } }]);
     expect(sleeps).toEqual([5000]);
-    await expect(runCode('Wait, then read again', [{ code: '' }], { ...s, startedAt: new Date(Date.now() - 101_000).toISOString() })).rejects.toThrow(
-      'No mail with a code came within 100 seconds. Check sender, subjectHas and codePattern in Settings.',
+    const late = { ...s, startedAt: new Date(Date.now() - 101_000).toISOString() };
+    await expect(runCode('Wait, then read again', [{ code: '', notFromSender: 0 }], late)).rejects.toThrow(
+      'No mail with a code came from no-reply@example.com within 100 seconds. Check sender, subjectHas and codePattern in Settings.',
+    );
+    await expect(runCode('Wait, then read again', [{ code: '', notFromSender: 2 }], late)).rejects.toThrow(
+      'No mail with a code came from no-reply@example.com within 100 seconds. Mails from other addresses were left alone. Check sender, subjectHas and codePattern in Settings.',
     );
   });
 });

@@ -104,8 +104,9 @@ With a TOTP Secret the run makes the code itself, and you are done. For the othe
 
 1. Import `packages/n8n-nodes-rpa/templates/6-one-time-code.json` (**RPA: 6 One-time code**).
 2. In its **Settings**, set `source`.
-   - `email`: open **Read new mail**, pick your mail account and turn the node on. Set `sender` and `subjectHas` in
-     **Settings** to the code mail's sender and a word of its subject.
+   - `email`: open **Read new mail**, pick your mail account and turn the node on. In **Settings**, set `sender` to
+     the address the code mail comes from, and `subjectHas` to a word of its subject. The check is by that address, so
+     let this mailbox get these mails only from the site: a rule in your mail system is the stricter way.
    - `app`: copy `docs/samples/authenticator-code.steps.json` and change the window title and control names to your
      app's. Upload it on your import form and approve it. Pick **RPA Desktop Runner** on **Read the code from the
      app**. The runner's policy needs the app and `clipboardRead` ([Steps](../reference/steps.md#desktop-steps)).

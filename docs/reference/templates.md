@@ -246,7 +246,7 @@ Site Login's user name). It returns one item with `code`. **Settings**:
 | Field | Default | Meaning |
 |---|---|---|
 | `source` | `email` | `email`, `app` or `typed`. It may be an expression on `$json.account`, for a source per account |
-| `sender` | empty | Email: keep only mail from this address (empty: any) |
+| `sender` | empty | Email, required: the address the site's code mail comes from, or a few separated by commas. Each is compared whole with the mail's sender address, without case |
 | `subjectHas` | `code` | Email: keep only mail whose subject has this text (empty: any) |
 | `codePattern` | `\b(\d{6})\b` | Email: the code in the subject or text. With a group, the group is the code |
 | `appSteps` | `authenticator-code` | App: the name of the approved desktop steps |
@@ -257,7 +257,9 @@ Site Login's user name). It returns one item with `code`. **Settings**:
 - **Email**: **Read new mail** is n8n's Microsoft Outlook node, **Get Many** messages since the request. It comes
   turned off, so that the workflow publishes without a mail account. Pick yours and turn it on. On Gmail, put Gmail's
   **Get Many** messages in its place. **Find the code in the mail** reads both, and an HTTP Request to a mail API whose
-  answer lists the mails under `messages` or `value`. It reads again every 5 seconds.
+  answer lists the mails under `messages` or `value`. It takes the sender's address itself (Outlook's
+  `from.emailAddress.address`, Gmail's `from.value`, or the address in a From line's `<…>`), never the display name.
+  With `sender` empty it stops and says so. It reads again every 5 seconds.
 - **App**: **Read the code from the app** runs the approved desktop steps `appSteps` on the RPA Desktop Runner, with
   `entryName` set to `appEntry`. The sample `docs/samples/authenticator-code.steps.json` waits for the app's window,
   types the entry into Search, clicks its Copy button and reads the clipboard. Change the window title and the control

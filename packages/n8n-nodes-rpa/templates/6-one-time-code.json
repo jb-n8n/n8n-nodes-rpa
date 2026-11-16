@@ -222,8 +222,7 @@
           "values": {
             "filterBy": "filters",
             "filters": {
-              "receivedAfter": "={{ new Date(Date.parse($('Settings').first().json.requestedAt) - $('Settings').first().json.lookBackSeconds * 1000).toISOString() }}",
-              "sender": "={{ $('Settings').first().json.sender }}"
+              "receivedAfter": "={{ new Date(Date.parse($('Settings').first().json.requestedAt) - $('Settings').first().json.lookBackSeconds * 1000).toISOString() }}"
             }
           }
         },
@@ -243,7 +242,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// One item { code }: the code from the newest mail since the request, or '' when none has come yet.\nconst s = $('Settings').first().json;\nconst items = $input.all().map((item) => item.json);\nif (items.some((m) => m.source !== undefined && m.requestedAt !== undefined)) {\n  throw new Error('Read new mail is off. Open it, pick your mail account and turn it on, or change source in Settings.');\n}\n// One item per mail (Outlook, Gmail), or one answer that lists them under messages or value (a mail API).\nconst mails = items.flatMap((m) => (Array.isArray(m.messages) ? m.messages : Array.isArray(m.value) ? m.value : [m]));\nconst since = Date.parse(s.requestedAt) - Number(s.lookBackSeconds) * 1000;\nconst asText = (v) => (typeof v === 'string' ? v : v && typeof v === 'object' ? JSON.stringify(v) : '');\nconst pattern = new RegExp(s.codePattern);\nconst code = mails\n  .map((m) => {\n    const when = m.receivedDateTime ?? m.date ?? m.internalDate ?? m.Created;\n    const at = /^\\d+$/.test(String(when)) ? Number(when) : Date.parse(when);\n    const subject = String(m.subject ?? m.Subject ?? '');\n    const from = asText(m.from ?? m.From ?? m.sender).toLowerCase();\n    const body = [m.bodyPreview, m.body?.content, m.snippet, m.Snippet, m.text, m.Text]\n      .filter((v) => typeof v === 'string').join('\\n').replace(/<[^>]*>/g, ' ');\n    return { at, subject, from, body };\n  })\n  .filter((m) => m.at >= since)\n  .filter((m) => !s.sender || m.from.includes(String(s.sender).toLowerCase()))\n  .filter((m) => !s.subjectHas || m.subject.toLowerCase().includes(String(s.subjectHas).toLowerCase()))\n  .sort((a, b) => b.at - a.at)\n  .map((m) => { const found = `${m.subject}\\n${m.body}`.match(pattern); return found ? (found[1] ?? found[0]) : ''; })\n  .find((c) => c !== '');\nreturn [{ json: { code: code ?? '' } }];\n"
+        "jsCode": "// One item { code }: the code from the newest mail since the request from a sender in Settings, or '' when none has\n// come yet (notFromSender: how many fitting mails came from another address).\nconst s = $('Settings').first().json;\nconst items = $input.all().map((item) => item.json);\nif (items.some((m) => m.source !== undefined && m.requestedAt !== undefined)) {\n  throw new Error('Read new mail is off. Open it, pick your mail account and turn it on, or change source in Settings.');\n}\n// sender: one address, or a few separated by commas. Compared whole, never as a part of the From text.\nconst senders = String(s.sender ?? '').split(/[\\s,;]+/).map((a) => a.trim().toLowerCase()).filter(Boolean);\nif (!senders.length) throw new Error('In Settings, set sender to the address the site sends its code mail from.');\n// One item per mail (Outlook, Gmail), or one answer that lists them under messages or value (a mail API).\nconst mails = items.flatMap((m) => (Array.isArray(m.messages) ? m.messages : Array.isArray(m.value) ? m.value : [m]));\nconst bare = (v) => (/^[^\\s@<>\"]+@[^\\s@<>\"]+$/.test(v) ? v : '');\n// The sender's address itself: Outlook from.emailAddress.address, Gmail from.value[0].address, a mail API's\n// From.Address, or a From header: the address in its last <...>, else the whole value when it is a bare address.\nconst addressOf = (m) => {\n  const f = m.from ?? m.From;\n  if (f && typeof f === 'object') {\n    const a = f.emailAddress?.address ?? (Array.isArray(f.value) && f.value.length === 1 ? f.value[0]?.address : undefined) ?? f.Address ?? f.address;\n    return typeof a === 'string' ? bare(a.trim().toLowerCase()) : '';\n  }\n  if (typeof f !== 'string') return '';\n  const angle = /<([^<>]*)>\\s*$/.exec(f);\n  return bare((angle ? angle[1] : f).trim().toLowerCase());\n};\nconst since = Date.parse(s.requestedAt) - Number(s.lookBackSeconds) * 1000;\nconst pattern = new RegExp(s.codePattern);\nconst fitting = mails\n  .map((m) => {\n    const when = m.receivedDateTime ?? m.date ?? m.internalDate ?? m.Created;\n    const at = /^\\d+$/.test(String(when)) ? Number(when) : Date.parse(when);\n    const subject = String(m.subject ?? m.Subject ?? '');\n    const body = [m.bodyPreview, m.body?.content, m.snippet, m.Snippet, m.text, m.Text]\n      .filter((v) => typeof v === 'string').join('\\n').replace(/<[^>]*>/g, ' ');\n    return { at, subject, from: addressOf(m), body };\n  })\n  .filter((m) => m.at >= since)\n  .filter((m) => !s.subjectHas || m.subject.toLowerCase().includes(String(s.subjectHas).toLowerCase()));\nconst code = fitting\n  .filter((m) => senders.includes(m.from))\n  .sort((a, b) => b.at - a.at)\n  .map((m) => { const found = `${m.subject}\\n${m.body}`.match(pattern); return found ? (found[1] ?? found[0]) : ''; })\n  .find((c) => c !== '');\nreturn [{ json: { code: code ?? '', notFromSender: fitting.filter((m) => !senders.includes(m.from)).length } }];\n"
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000606",
       "name": "Find the code in the mail",
@@ -253,7 +252,7 @@
         880,
         -240
       ],
-      "notes": "Keeps mails since the request (less lookBackSeconds) from sender, whose subject has subjectHas, and takes codePattern from the newest."
+      "notes": "Keeps mails since the request (less lookBackSeconds) whose sender address is exactly one in sender, and whose subject has subjectHas; takes codePattern from the newest."
     },
     {
       "parameters": {
@@ -315,7 +314,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Up to giveUpSeconds in all: waits 5 seconds, then the loop looks again. No Wait node: it would pause the bot's run.\nconst s = $('Settings').first().json;\nif (Date.now() - Date.parse(s.startedAt) > Number(s.giveUpSeconds) * 1000) {\n  throw new Error(`No mail with a code came within ${s.giveUpSeconds} seconds. Check sender, subjectHas and codePattern in Settings.`);\n}\nawait new Promise((resolve) => setTimeout(resolve, 5000));\nreturn [{ json: { tryAgain: true } }];\n"
+        "jsCode": "// Up to giveUpSeconds in all: waits 5 seconds, then the loop looks again. No Wait node: it would pause the bot's run.\nconst s = $('Settings').first().json;\nif (Date.now() - Date.parse(s.startedAt) > Number(s.giveUpSeconds) * 1000) {\n  throw new Error(`No mail with a code came from ${s.sender} within ${s.giveUpSeconds} seconds.${$input.first().json.notFromSender ? ' Mails from other addresses were left alone.' : ''} Check sender, subjectHas and codePattern in Settings.`);\n}\nawait new Promise((resolve) => setTimeout(resolve, 5000));\nreturn [{ json: { tryAgain: true } }];\n"
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000609",
       "name": "Wait, then read again",
@@ -785,7 +784,7 @@
     },
     {
       "parameters": {
-        "content": "### Set once (green)\n1. In **Settings**, set `source`: `email`, `app` or `typed`.\n2. Email: open **Read new mail**, pick your mail account, turn the node on, and set `sender` and `subjectHas` in **Settings**.\n3. App: upload `docs/samples/authenticator-code.steps.json` on your import form and approve it. Pick **RPA Desktop Runner** on **Read the code from the app**.\n4. Typed: nothing to set. While the bot waits, open the **Type a code** form and type the code.\n5. Publish this workflow.\n6. On the bot's RPA node, choose this workflow in **Options → One-Time Code Workflow**.",
+        "content": "### Set once (green)\n1. In **Settings**, set `source`: `email`, `app` or `typed`.\n2. Email: open **Read new mail**, pick your mail account and turn the node on. In **Settings**, set `sender` to the site's mail address, and `subjectHas`.\n3. App: upload `docs/samples/authenticator-code.steps.json` on your import form and approve it. Pick **RPA Desktop Runner** on **Read the code from the app**.\n4. Typed: nothing to set. While the bot waits, open the **Type a code** form and type the code.\n5. Publish this workflow.\n6. On the bot's RPA node, choose this workflow in **Options → One-Time Code Workflow**.",
         "height": 300,
         "width": 520,
         "color": 4
