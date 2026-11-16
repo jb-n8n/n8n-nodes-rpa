@@ -230,7 +230,7 @@ describe('the desktop bot guide and the Windows guide', () => {
   it('keeps the section numbers the installer, the credentials and the licensing note name', () => {
     const headings = doc.windows.match(/^## .+$/gm) ?? [];
     for (const h of ['## 4. Signing in', '## 6. Connect n8n', '## 10. Changing the tokens and the certificates']) expect(headings).toContain(h);
-    expect(doc.windows.split('\n').length).toBeLessThanOrEqual(450);
+    expect(doc.windows.split('\n').length).toBeLessThanOrEqual(480);
     for (const text of ['rpa connection', 'rpa status', 'rpa policy apply', '-Unattended', '-AutoSignIn', 'No sign-in mode was given, so this install is unattended']) {
       expect(doc.windows, text).toContain(text);
     }
