@@ -124,11 +124,14 @@ describe('6-one-time-code.json: a code from an email', () => {
     expect(await runCode('Find the code in the mail', mails, { ...s, sender: 'NO-REPLY@example.com' })).toEqual([{ json: { code: '666666' } }]);
   });
 
-  it('reads the shapes of Gmail\'s Get Many and of a plain mail list too', async () => {
+  it('reads the shapes of Gmail\'s Get Many and of a mail API\'s list too', async () => {
     const gmail = { Subject: 'Your code', snippet: 'Use 777777 to sign in', From: 'Example <no-reply@example.com>', internalDate: String(Date.parse(at(1))) };
     expect(await runCode('Find the code in the mail', [gmail], s)).toEqual([{ json: { code: '777777' } }]);
     const plain = { Subject: 'Your code', Snippet: 'Use 888888 to sign in', From: { Address: 'no-reply@example.com' }, Created: at(1) };
     expect(await runCode('Find the code in the mail', [plain], s)).toEqual([{ json: { code: '888888' } }]);
+    // A mail API's answer through an HTTP Request: one item that lists the mails under messages, or under value (Graph).
+    expect(await runCode('Find the code in the mail', [{ total: 2, messages: [{ ...plain, Created: at(-200) }, plain] }], s)).toEqual([{ json: { code: '888888' } }]);
+    expect(await runCode('Find the code in the mail', [{ value: [outlook({ subject: 'Your code', body: '135790', seconds: 2 })] }], s)).toEqual([{ json: { code: '135790' } }]);
   });
 
   it('a code in an HTML body, and a pattern with a group: the group is the code', async () => {

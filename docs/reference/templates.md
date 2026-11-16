@@ -256,7 +256,8 @@ Site Login's user name). It returns one item with `code`. **Settings**:
 
 - **Email**: **Read new mail** is n8n's Microsoft Outlook node, **Get Many** messages since the request. It comes
   turned off, so that the workflow publishes without a mail account. Pick yours and turn it on. On Gmail, put Gmail's
-  **Get Many** messages in its place: **Find the code in the mail** reads both. It reads again every 5 seconds.
+  **Get Many** messages in its place. **Find the code in the mail** reads both, and an HTTP Request to a mail API whose
+  answer lists the mails under `messages` or `value`. It reads again every 5 seconds.
 - **App**: **Read the code from the app** runs the approved desktop steps `appSteps` on the RPA Desktop Runner, with
   `entryName` set to `appEntry`. The sample `docs/samples/authenticator-code.steps.json` waits for the app's window,
   types the entry into Search, clicks its Copy button and reads the clipboard. Change the window title and the control
