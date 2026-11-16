@@ -81,7 +81,8 @@ The messages you meet most, word for word:
 | Not signed | `script_untrusted`: `The steps are not signed, or the signature is not valid, and Require Signed Steps is on. To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot's name. Its steps may also have been changed in the Data Table after they were approved: read every step on the form before you approve. Steps used without the form: sign them with Sign Steps first.` Steps signed with an earlier Step Signing key get this too. On **RPA: 5 Import a bot**, the bot's name opens a page with the steps that run now: choose **Sign the approved steps again, unchanged** to sign them again. |
 | Count mismatch | `incomplete`: `Expected 120 rows (the page says "120 results") but found 117. Nothing was marked successful.` |
 | A repair that went in circles | `incomplete`: `the repair went in circles: it did the same action on the same page 4 times without finding anything new. It used 16 chat model calls and 66,827 tokens.` See [A repair that stops](#a-repair-that-stops). |
-| A repair that used its limit | `incomplete`: `the agent ran out of budget: the token budget of 200000 ran out. It used 37 chat model calls and 200,492 tokens.` |
+| A repair that used its limit | `incomplete`: `the agent ran out of budget: the token budget of 200000 ran out. It used 37 chat model calls and 200,492 tokens. The next runs do not try AI Repair again for these steps until the Goal, the steps or AI Repair Reset Key change.` |
+| A repair that already failed | `drift_detected`: the step's own failure, then `(a repair already failed for steps version 3, so AI Repair did not run: change the Goal, approve a new version of the steps, or change AI Repair Reset Key in Options, to let it try again)`. No chat model call. See [A failed repair does not try again](#a-failed-repair-does-not-try-again). |
 | Breaker open | `locked_out`: `A previous login of this account on example.com failed, so no login was tried.` The breaker is kept per account: the item's `account` (and the run log's) says which one. |
 | Breaker open since 0.1.0 | `locked_out`: `A login failure on example.com before the upgrade stopped every account of this Site Login, so no login was tried.` 0.1.0 kept the breaker under the Site Login alone, without a fingerprint of the login: correcting the login does not clear it. Type a new **Login Breaker Reset Key**. |
 | Runner's address gets no answer | `runner_unavailable`: `Could not connect to the desktop runner at wss://...:8765/rpa/v1 (no answer within 10 s). Check, in this order: 1. The address in the Connection Line is one n8n can reach. ...` Nothing answered the connection itself within 10 seconds. When the line's address is a private one (10.x, 172.16.x to 172.31.x, 192.168.x, fc00::/7, fe80::/10), the message says so and gives the whole command that prints the line again with the right address: `& "C:\Program Files\RPA Runner\rpa.cmd" connection -ShowTokens -Address`, followed by the name or address n8n can reach, in an administrator PowerShell. |
@@ -116,7 +117,31 @@ repair that went in circles or used its limit:
 1. Find the data on the site yourself.
 2. Say where it is now in the **Goal** on the RPA node, for example the menu and the section's name. Or change the
    steps on the import form.
-3. Run again. Until then every run tries to repair again: turn **AI Repair** off to stop that.
+3. Run again. The new Goal or the new steps let the repair try again.
+
+### A failed repair does not try again
+
+Each repair can cost up to its **Max LLM Tokens**. So once a repair fails after a chat model call, the bot remembers
+it, and the next runs of the same steps do not call the model: they fail as they would without AI Repair, and the
+message ends `(a repair already failed for steps version 3, so AI Repair did not run: …)`. The failed repair's own
+message ends `The next runs do not try AI Repair again for these steps until the Goal, the steps or AI Repair Reset Key
+change.`
+
+Any failure after a model call counts: going in circles, a limit, data not found, a proof that did not pass (also
+with **Deliver Unconfirmed Rows**, whose rows still arrive that once), or the model's own error. A cancelled run, a
+login the site rejected (the [login breaker](#codes) holds that) and a configuration error do not.
+
+A repair tries again when:
+- a **new version of the steps** is approved (the record is kept per steps name, version and content);
+- the **Goal** changes;
+- **Options → AI Repair Reset Key** changes: type a new value (any text, such as today's date). Type it, not an
+  expression.
+
+The record is kept where the login breaker is kept: in the workflow (its static data) and in n8n's memory, or in Redis
+when the node shares its login breaker across workers (**Share Login Breaker Across Workers (RPA Redis)**, keys
+`playwrightGuard:repair:…`). In queue mode without Redis, each worker remembers its own failures. A repair that worked
+and waits for approval also holds the next repairs in the data feed: the template turns AI Repair off while a version
+waits, until someone decides or the request expires. A failed one holds them until someone acts as above.
 
 ## A control that is not there
 
