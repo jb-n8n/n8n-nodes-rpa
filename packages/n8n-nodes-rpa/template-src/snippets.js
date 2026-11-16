@@ -618,8 +618,10 @@ const LOOKALIKE =
     );
 
 // A Repaired steps item j compared with the version it repairs (COMPARE_STEPS, the import review page's words), or ''
-// for a first version, or when The approved version found no signed row of that name and version (an active one
-// first). Template 3, Email repaired steps and Ask for approval.
+// when there is none to compare with: a first version, or no row of that name and version that was approved (active or
+// superseded, with a signature and Approved By) and whose signature fits (Check the approved version, Check Only, the
+// check a run makes). Never a row nothing verified: an edited, pending, rejected or added row is not compared with.
+// Template 3, Email repaired steps and Ask for approval.
 const COMPARED_WITH_BASE =
   (j) => (
     (row) => (
@@ -628,11 +630,26 @@ const COMPARED_WITH_BASE =
         : ''
     )
   )(
-    typeof j.baseVersion !== 'number'
+    typeof j.baseVersion !== 'number' || !$('The approved version').isExecuted || !$('Check the approved version').isExecuted
       ? undefined
-      : ($('The approved version').isExecuted ? $('The approved version').all().map((x) => x.json) : []).filter(
-        (r) => r.name === j.name && r.version === j.baseVersion && typeof r.steps === 'string' && r.steps !== ''
-      ).sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1))[0]
+      : (
+        (rows, checks) => rows.filter(
+          (r, i) => r.name === j.name
+            && r.version === j.baseVersion
+            && ['active', 'superseded'].includes(r.status)
+            && typeof r.steps === 'string'
+            && r.steps !== ''
+            && typeof r.signature === 'string'
+            && r.signature !== ''
+            && typeof r.approvedBy === 'string'
+            && r.approvedBy !== ''
+            && checks.length === rows.length
+            && checks[i]?.approvedVersion?.signatureFits === true
+        ).sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1))[0]
+      )(
+        $('The approved version').all().map((x) => x.json),
+        $('Check the approved version').all().map((x) => x.json)
+      )
   );
 
 // Whether the description of a change-list entry x of the item j (reviewChanges) is the AI's: the step it names is

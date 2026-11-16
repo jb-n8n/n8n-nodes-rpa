@@ -4,7 +4,8 @@
 //
 // The approval email (send and wait): the version and name, what the import left out, the numbered steps (the whole
 // bot; "the AI describes it as" on a description the chat model wrote), what changed (for a repair, compared with the
-// version it repairs: COMPARED_WITH_BASE), the evidence and safety flags, what Approve and Reject do, the hash and the
+// approved version it repairs when its signature fits: COMPARED_WITH_BASE; otherwise a sentence that it could not be
+// compared, then what the repair reports), the evidence and safety flags, what Approve and Reject do, the hash and the
 // review digest. Every value from the run goes through LOOKALIKE (snippets.js), so a mail program shows it as text and
 // makes no link of it.
 
@@ -82,13 +83,22 @@ Safety flags: {{ (LOOKALIKE)($('Repaired steps received').item.json.safetyLine) 
         ? ''
         : fits && c !== ''
         ? '\nWhat changed: ' + e(c)
-        : '\nWhat changed'
-          + (
-            String(j.evidenceLine ?? '').startsWith('Not replayed:')
-              ? ' (as written; these steps were never run)'
-              : ' (as reported by the run)'
-          )
-          + ':\n'
+        : (
+          fits && typeof j.baseVersion === 'number'
+            ? '\nNot compared: no approved version '
+              + e(j.baseVersion)
+              + ' of '
+              + e(j.name)
+              + ' was found whose signature fits, so these steps could not be compared with an approved version. Read every step.'
+              + '\nWhat the repair reports it changed:\n'
+            : '\nWhat changed'
+              + (
+                String(j.evidenceLine ?? '').startsWith('Not replayed:')
+                  ? ' (as written; these steps were never run)'
+                  : ' (as reported by the run)'
+              )
+              + ':\n'
+        )
           + (
             Array.isArray(j.reviewChanges)
               && Array.isArray(j.changes)
