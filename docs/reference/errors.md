@@ -38,7 +38,7 @@ guidance reading `Check the node parameters and the RPA credentials.` A Sign Ste
 | `browser_unavailable` | The browser could not be reached, refused the token or the certificate. | Check the RPA Browser credential ([Where the browser runs](../../README.md#where-the-browser-runs)). On a Windows machine, run `rpa status` there. |
 | `drift_detected` | A step did not find what it expected: no element, more than one, or one that could not take the action. For a browser control that is not there, the message also says what the page shows instead. | Correct the step, or record it again and approve the new version. Browser steps can repair themselves with AI Repair. |
 | `not_found` | The page or the data was not found. | Check the URL, the Goal and the trace. |
-| `incomplete` | Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled. | Check the trace. Raise **Options → Max Seconds** if runs time out. |
+| `incomplete` | Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled. | Check the trace. Raise **Options → Max Seconds** if runs time out. When self-repair stopped, see [A repair that stops](#a-repair-that-stops). |
 | `script_untrusted` | Nothing ran: the steps are not signed, or the signature does not fit (another Step Signing key, Site Login, name, version or start site), or their row was changed after they were approved. | Approve the steps again after reading every step on the form. If nobody changed the setup, check who edited the `playwright_steps` table. See [Security](security.md#if-the-signing-key-is-lost-or-changed) for a changed key. |
 | `policy_violation` | The run tried something its rules do not allow, and stopped. The message says what: a site that is not allowed, a write, a password field, an app the runner's policy does not allow, or a desktop write that was not marked. | If it was meant, change the rule that refused it where it is kept: in the RPA Site Login, the RPA Secret Variables credential, the node's Options, or the desktop runner's policy. For a desktop step that saves or sends, the rule is its mark as a write, set when its steps are approved. |
 | `locked_out` | No login was tried, because an earlier one with this Site Login failed, or a run changed its password earlier in this execution. | Correct the login in the RPA Site Login or in the data its expressions read, or change the reset key (as for `login_failed`). After a password change, store the new password where the Site Login reads it. |
@@ -80,6 +80,8 @@ The messages you meet most, word for word:
 | Not unique | `drift_detected`: `Visible Text "Submit" matches 3 elements. Use a more specific locator; it must match exactly one.` |
 | Not signed | `script_untrusted`: `The steps are not signed, or the signature is not valid, and Require Signed Steps is on. To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot's name. Its steps may also have been changed in the Data Table after they were approved: read every step on the form before you approve. Steps used without the form: sign them with Sign Steps first.` Steps signed with an earlier Step Signing key get this too. On **RPA: 5 Import a bot**, the bot's name opens a page with the steps that run now: choose **Sign the approved steps again, unchanged** to sign them again. |
 | Count mismatch | `incomplete`: `Expected 120 rows (the page says "120 results") but found 117. Nothing was marked successful.` |
+| A repair that went in circles | `incomplete`: `the repair went in circles: it did the same action on the same page 4 times without finding anything new. It used 16 chat model calls and 66,827 tokens.` See [A repair that stops](#a-repair-that-stops). |
+| A repair that used its limit | `incomplete`: `the agent ran out of budget: the token budget of 200000 ran out. It used 37 chat model calls and 200,492 tokens.` |
 | Breaker open | `locked_out`: `A previous login of this account on example.com failed, so no login was tried.` The breaker is kept per account: the item's `account` (and the run log's) says which one. |
 | Breaker open since 0.1.0 | `locked_out`: `A login failure on example.com before the upgrade stopped every account of this Site Login, so no login was tried.` 0.1.0 kept the breaker under the Site Login alone, without a fingerprint of the login: correcting the login does not clear it. Type a new **Login Breaker Reset Key**. |
 | Runner's address gets no answer | `runner_unavailable`: `Could not connect to the desktop runner at wss://...:8765/rpa/v1 (no answer within 10 s). Check, in this order: 1. The address in the Connection Line is one n8n can reach. ...` Nothing answered the connection itself within 10 seconds. When the line's address is a private one (10.x, 172.16.x to 172.31.x, 192.168.x, fc00::/7, fe80::/10), the message says so and gives the whole command that prints the line again with the right address: `& "C:\Program Files\RPA Runner\rpa.cmd" connection -ShowTokens -Address`, followed by the name or address n8n can reach, in an administrator PowerShell. |
@@ -96,6 +98,25 @@ The messages you meet most, word for word:
 
 Windows-side failures (the supervisor, the installer, the policy tool) are in the
 [Windows guide](../install/windows.md#11-when-something-fails).
+
+## A repair that stops
+
+Self-repair (AI Repair on Run Steps) stops before it finds the data, with `incomplete`, when:
+- **it goes in circles**: the chat model did the same action on the same page a fourth time, and nothing new came of
+  it since the first. The same action is the same tool on the same control, on a page that looks the same as before.
+  Anything new starts the count again: a page not seen before in this repair, new rows, or a file. The third time, the
+  model is told once that it is going in circles. The message starts `the repair went in circles` (`the AI went in
+  circles` when it builds a bot's first steps);
+- it used **Options → Max Agent Actions** (40) or **Max LLM Tokens** (200,000): `the agent ran out of budget: …`;
+- it ran out of time (**Max Seconds**) or the run was cancelled.
+
+Once the chat model was called, every failure of a repair ends with what it used: `It used 16 chat model calls and
+66,827 tokens.` The error item has the same numbers as `details.llmCalls` and `details.llmTokens`. What to do, after a
+repair that went in circles or used its limit:
+1. Find the data on the site yourself.
+2. Say where it is now in the **Goal** on the RPA node, for example the menu and the section's name. Or change the
+   steps on the import form.
+3. Run again. Until then every run tries to repair again: turn **AI Repair** off to stop that.
 
 ## A control that is not there
 
