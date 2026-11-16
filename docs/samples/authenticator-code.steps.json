@@ -10,15 +10,15 @@
       "timeoutMs": 20000
     },
     {
-      "intent": "Type the entry name into Search",
+      "intent": "Type into Search",
       "fill": { "field": { "uia": { "window": { "title": "Authenticator" }, "path": [{ "controlType": "Edit", "name": "Search" }] } }, "value": "{{var.entryName}}" }
     },
     {
-      "intent": "Click Copy on the entry",
+      "intent": "Click Copy {{var.entryName}}",
       "click": { "uia": { "window": { "title": "Authenticator" }, "path": [{ "controlType": "Button", "name": "Copy {{var.entryName}}" }] } }
     },
     {
-      "intent": "Read the copied code from the clipboard",
+      "intent": "Read a value from the app",
       "read": { "clipboard": true, "as": "code" }
     }
   ]
