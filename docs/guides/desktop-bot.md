@@ -93,7 +93,7 @@ such as one printed again with `-Address`. `--verbose` prints every step the com
 **A second Windows machine.** Run the command again with `--windows` and paste that machine's line. As your project has
 an RPA Desktop Runner already, it asks `Is the line for <address>:8765 another Windows machine (a), or a new line for
 "RPA Desktop Runner" (s)? Enter changes nothing:`. `a` makes a credential of its own, named
-`RPA Desktop Runner (<address>)`, and tests it: pick it on the RPA node of each bot that runs there. The first
+`RPA Desktop Runner (<address>)` (with its port when it is not 8765), and tests it: pick it on the RPA node of each bot that runs there. The first
 machine's credential is not touched, so its bots stay on it. `s` is for the same machine at a new address or with new
 tokens: the new line is tested first, and replaces the old one only when the test reaches the machine.
 

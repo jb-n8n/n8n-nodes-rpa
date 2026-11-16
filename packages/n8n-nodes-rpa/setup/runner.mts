@@ -156,8 +156,15 @@ export function closingRunner(test: RunnerTest, ref: Ref, named = false): string
 
 /** The address and port a Connection Line names (the node's own parser, which already took this line). */
 export const lineHost = (line: string) => new URL(parseConnectionLine('runner', line).url).host;
-/** The credential a new Windows machine gets: named for the machine, as its line names it (n8n's names are at most 128). */
-export const machineName = (line: string) => `${RUNNER.name} (${clean(new URL(parseConnectionLine('runner', line).url).hostname).slice(0, 100)})`;
+/**
+ * The credential a new Windows machine gets: named for the machine as its line names it, with the port when it is not
+ * the runner's own 8765 (two machines behind one NAT address differ by port only). n8n's names are at most 128.
+ */
+export function machineName(line: string): string {
+  const url = new URL(parseConnectionLine('runner', line).url);
+  const port = url.port && url.port !== '8765' ? `:${url.port}` : '';
+  return `${RUNNER.name} (${clean(url.hostname).slice(0, 100)}${port})`;
+}
 
 /**
  * A Connection Line comes, and the project has RPA Desktop Runners that are not named for the line's machine: is it

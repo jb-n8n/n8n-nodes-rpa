@@ -2349,6 +2349,12 @@ describe('a second Windows machine (entry 11)', () => {
     expect(runnersOf(fake).map((c) => [c.name, c.data.connectionLine])).toEqual([['RPA Desktop Runner', LINE], ['RPA Desktop Runner (rpa.example.com)', NEW_LINE]]);
   });
 
+  it('two machines behind one address differ by port: each its own credential name', async () => {
+    const { machineName } = await import('../setup/runner.mjs');
+    expect(machineName(NEW_LINE)).toBe('RPA Desktop Runner (rpa.example.com)');
+    expect(machineName(NEW_LINE.replace(':8765/', ':8766/'))).toBe('RPA Desktop Runner (rpa.example.com:8766)');
+  });
+
   it('several: numbered; its number is a new line for that one', async () => {
     const fake = await n8n({ credentials: [MADE, NIGHT] });
     const r = await runAtTerminal(plain(fake.url), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE }, [[/another Windows machine \(a\), or a new line for one of these \(its number\)\? Enter changes nothing: /, '2']]);
