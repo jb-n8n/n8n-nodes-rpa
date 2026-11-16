@@ -130,7 +130,8 @@ a file only its user can read, which is removed right after, never in a command'
   the value it types or chooses. A secret's or a variable's value is never shown. A variable is marked from what the step
   types or chooses, never from its description. A step's description comes from
   whoever wrote the steps. When it says something else than the sentence, it is shown beside it in grey, as `(the
-  author calls it: …)`. It is shown in red, as `(described differently as: …)`, when its first word names another kind
+  author calls it: …)`, or as `(the AI describes it as: …)` on a step the chat model wrote (a step that a repair or a
+  first build from the Goal added or changed, as the change list names it). It is shown in red, as `(described differently as: …)`, when its first word names another kind
   of action than the step does (for example "Read" on a step that clicks), or when it names a site that is not the
   step's own or the start site, or when it states a value that none of the step's own fields holds: a text it puts in
   double quotes, an ISO date, or a number of three or more digits (for example `"2026-09-30"` on a step that types

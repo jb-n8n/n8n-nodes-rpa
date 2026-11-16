@@ -175,6 +175,12 @@ export interface ReviewStep {
    * it quietly, as the author's words. Absent, a description is shown as a warning.
    */
   quiet?: true;
+  /**
+   * Set beside `describedAs` when the step came from the chat model (an AI repair or a first build from the Goal): the
+   * review page and the emails then label the description as the AI's, not the author's (modelSteps). Not a judgement:
+   * the red mark's rule is the same.
+   */
+  byAi?: true;
   marks: string[]; added?: true; each?: ReviewStep[];
 }
 /** A step's sentence and, when it says something else, the author's description. */
@@ -567,9 +573,11 @@ export function reviewSteps(
       desktop: false; shownUrl: (url: string) => string; secretVariables?: undefined; startValues?: undefined; added?: undefined;
       /** The steps' start address: a description may name its host (describedQuietly). */
       startUrl?: string;
+      /** The steps the chat model wrote (modelSteps): their description is labelled as the AI's. */
+      byAi?: ReadonlySet<string>;
     },
 ): ReviewStep[] {
-  const review = (raw: unknown, j: number): ReviewStep => {
+  const review = (raw: unknown, j: number, at: string): ReviewStep => {
     const s = asJson(raw);
     // A paginate's own marks leave out its body: each step of the body is listed under it with its own.
     const body = s.paginate !== undefined && Array.isArray(asJson(s.paginate).each) ? (asJson(s.paginate).each as unknown[]) : undefined;
@@ -586,12 +594,13 @@ export function reviewSteps(
     ];
     const said = o.desktop ? desktopSentence(s) : browserSentence(s, o.shownUrl);
     return {
-      ...said, ...(said.describedAs !== undefined && describedQuietly(s, said.describedAs, o.startUrl) ? { quiet: true as const } : {}), marks,
+      ...said, ...(said.describedAs !== undefined && describedQuietly(s, said.describedAs, o.startUrl) ? { quiet: true as const } : {}),
+      ...(said.describedAs !== undefined && !o.desktop && o.byAi?.has(at) ? { byAi: true as const } : {}), marks,
       ...((o.added ?? []).includes(j + 1) ? { added: true as const } : {}),
-      ...(body?.length ? { each: body.map((b) => review(b, -1)) } : {}),
+      ...(body?.length ? { each: body.map((b, k) => review(b, -1, `${at}.${k + 1}`)) } : {}),
     };
   };
-  return steps.map(review);
+  return steps.map((s, j) => review(s, j, String(j + 1)));
 }
 
 /** For the review page only: a desktop step list's candidate writes (desktopWriteCandidates), each with its intent on one line. */
@@ -619,10 +628,13 @@ const ALSO_CHANGED_SUFFIX = / \(also changed: [\w.]+(?:, [\w.]+)*\)$/;
  * An entry names a step when it is that step's engine description (describeStep, the also-changed suffix aside); the first
  * such step is taken. A pure function of the steps and the change list, so Sign Steps builds the same list again.
  */
-export function reviewChanges(
-  engine: Pick<Engine, 'describeStep'>, steps: readonly unknown[], changes: readonly { was: string | null; now: string | null }[],
-  o: { shownUrl: (url: string) => string; startUrl?: string },
-): ReviewChange[] {
+type Located = { step: number; key: string; raw: unknown; inner: boolean; said: string | undefined };
+
+/**
+ * Every step with its engine description (describeStep), a paginate's inner steps after it: `key` is `n` for step n and
+ * `n.k` for the k-th step it runs on each page.
+ */
+function locate(engine: Pick<Engine, 'describeStep'>, steps: readonly unknown[]): Located[] {
   const describe = (s: unknown): string | undefined => {
     try {
       return engine.describeStep(s as Step);
@@ -630,18 +642,44 @@ export function reviewChanges(
       return undefined;
     }
   };
-  const located: { step: number; raw: unknown; inner: boolean; said: string | undefined }[] = [];
+  const located: Located[] = [];
   steps.forEach((s, i) => {
-    located.push({ step: i + 1, raw: s, inner: false, said: describe(s) });
+    located.push({ step: i + 1, key: String(i + 1), raw: s, inner: false, said: describe(s) });
     const each = asJson(asJson(s).paginate).each;
-    if (Array.isArray(each)) for (const b of each) located.push({ step: i + 1, raw: b, inner: true, said: describe(b) });
+    if (Array.isArray(each)) each.forEach((b, k) => located.push({ step: i + 1, key: `${i + 1}.${k + 1}`, raw: b, inner: true, said: describe(b) }));
   });
+  return located;
+}
+
+/** The step a change-list entry names: the first whose engine description is the entry's (the also-changed suffix aside). */
+const named = (located: readonly Located[], now: string): Located | undefined => {
+  const said = now.replace(ALSO_CHANGED_SUFFIX, '');
+  return located.find((l) => l.said !== undefined && l.said === said);
+};
+
+/**
+ * The steps the chat model wrote, for steps a model built or repaired (Run Steps' agent lane, an import's draft the
+ * model repaired): every step an entry of the change list names as added or changed, as reviewChanges finds it (keys as
+ * in locate). A step kept from the approved version is named by no entry. From the steps and the change list alone, so
+ * Sign Steps finds the same steps again; it does not depend on any description's words.
+ */
+export function modelSteps(
+  engine: Pick<Engine, 'describeStep'>, steps: readonly unknown[], changes: readonly { was: string | null; now: string | null }[],
+): Set<string> {
+  const located = locate(engine, steps);
+  return new Set(changes.flatMap((c) => (c.now === null ? [] : [named(located, c.now)?.key ?? '']).filter((k) => k !== '')));
+}
+
+export function reviewChanges(
+  engine: Pick<Engine, 'describeStep'>, steps: readonly unknown[], changes: readonly { was: string | null; now: string | null }[],
+  o: { shownUrl: (url: string) => string; startUrl?: string },
+): ReviewChange[] {
+  const located = locate(engine, steps);
   return changes.map((c) => {
     const change = c.was !== null && c.now !== null ? 'Changed' : c.now !== null ? 'Added' : 'Removed';
     const was = c.was !== null ? { was: oneLine(c.was) } : {};
     if (c.now === null) return { change, ...was };
-    const now = c.now.replace(ALSO_CHANGED_SUFFIX, '');
-    const at = located.find((l) => l.said !== undefined && l.said === now);
+    const at = named(located, c.now);
     if (!at) return { change, text: oneLine(c.now), ...was };
     // The step's own sentence: a paginate's inner lines are entries of their own.
     const [r] = reviewSteps([at.raw], { desktop: false, ...o });

@@ -259,7 +259,7 @@ describe('the templates\' RPA nodes are version 2, and that changes nothing they
   });
 
   it('every RPA node of every template is version 2; Import steps keeps Browser and desktop apps, typed', () => {
-    expect(rpaNodes.length).toBe(7);
+    expect(rpaNodes.length).toBe(8);
     for (const { file, node } of rpaNodes) expect(node.typeVersion, `${file} ${node.name}`).toBe(2);
     const imp = rpaNodes.find(({ node }) => node.parameters.operation === 'importSteps')!.node;
     expect(imp.parameters.runsOn).toBe('browserAndDesktop');

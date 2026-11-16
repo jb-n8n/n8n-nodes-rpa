@@ -125,6 +125,12 @@ describe('every Data Table read and write uses the Settings name', () => {
   it.each(['2-data-feed.json', '3-approve-steps.json'])('%s', (file) => {
     const t = load(file);
     expect(rowNodes(t).length).toBeGreaterThan(0);
-    for (const n of rowNodes(t)) expect(JSON.stringify({ filters: table(n).filters, values: table(n).columns?.value }), n.name).toContain(SETTINGS_NAME);
+    for (const n of rowNodes(t)) {
+      // A row written as the item it gets (autoMapInputData) is shaped by the node before it, which must use the name.
+      const shaped = table(n).columns?.mappingMode === 'autoMapInputData'
+        ? Object.entries(t.connections).filter(([, o]) => o.main?.some((out) => out.some((c) => c.node === n.name))).map(([from]) => JSON.stringify(byName(t, from).parameters)).join('')
+        : JSON.stringify({ filters: table(n).filters, values: table(n).columns?.value });
+      expect(shaped, n.name).toContain(SETTINGS_NAME);
+    }
   });
 });

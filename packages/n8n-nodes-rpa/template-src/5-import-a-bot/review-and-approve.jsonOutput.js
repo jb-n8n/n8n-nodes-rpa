@@ -363,7 +363,7 @@
                         typeof r.describedAs === 'string'
                           ? (
                             r.quiet === true
-                              ? ' <em>(the author calls it: ' + e(r.describedAs) + ')</em>'
+                              ? ' <em>(' + (r.byAi === true ? 'the AI describes it as: ' : 'the author calls it: ') + e(r.describedAs) + ')</em>'
                               : ' <strong>(described differently as: ' + e(r.describedAs) + ')</strong>'
                           )
                           : ''
@@ -380,7 +380,7 @@
                               typeof x.describedAs === 'string'
                                 ? (
                                   x.quiet === true
-                                    ? ' <em>(the author calls it: ' + e(x.describedAs) + ')</em>'
+                                    ? ' <em>(' + (x.byAi === true ? 'the AI describes it as: ' : 'the author calls it: ') + e(x.describedAs) + ')</em>'
                                     : ' <strong>(described differently as: ' + e(x.describedAs) + ')</strong>'
                                 )
                                 : ''

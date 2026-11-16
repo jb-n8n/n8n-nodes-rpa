@@ -616,3 +616,85 @@ const LOOKALIKE =
       /\b[a-z][a-z0-9+.-]*:\/\/[^\s\u2039\u203a]*|\b(?:[a-z0-9-]+\.)+(?!(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)\b)[a-z]{2,}\b[^\s\u2039\u203a]*/gi,
       (u) => u.split('://').join(':\u200b//').split('.').join('.\u200b')
     );
+
+// A Repaired steps item compared with the version it repairs (COMPARE_STEPS, the import review page's words), or ''
+// when there is none to compare with: a first version, or no row of that name and version that was approved (active or
+// superseded, with a signature and Approved By) and whose signature fits (Check the approved version, Check Only, the
+// check a run makes). Never a row nothing verified: an edited, pending, rejected or added row is not compared with.
+// Template 3, Email repaired steps and Ask for approval. No optional chaining on an indexed value (`list[n]?.field`):
+// in n8n 2.45, in the same expression as COMPARE_STEPS, it gave undefined, so the comparison was never shown (seen
+// live; the same text in plain JavaScript showed it).
+const COMPARED_WITH_BASE =
+  (repaired) => (
+    (approvedRow) => (
+      approvedRow
+        ? (COMPARE_STEPS)(
+          { found: true, name: repaired.name, version: approvedRow.version, steps: approvedRow.steps },
+          JSON.stringify(repaired.steps)
+        ).compared
+        : ''
+    )
+  )(
+    typeof repaired.baseVersion !== 'number' || !$('The approved version').isExecuted || !$('Check the approved version').isExecuted
+      ? undefined
+      : (
+        (storedRows, signatureChecks) => storedRows.filter(
+          (stored, at) => stored.name === repaired.name
+            && stored.version === repaired.baseVersion
+            && ['active', 'superseded'].includes(stored.status)
+            && typeof stored.steps === 'string'
+            && stored.steps !== ''
+            && typeof stored.signature === 'string'
+            && stored.signature !== ''
+            && typeof stored.approvedBy === 'string'
+            && stored.approvedBy !== ''
+            && signatureChecks.length === storedRows.length
+            && ((check) => Boolean(check && check.approvedVersion && check.approvedVersion.signatureFits === true))(signatureChecks[at])
+        ).sort(
+          (first, second) => (first.status === 'active' ? 0 : 1) - (second.status === 'active' ? 0 : 1)
+        )[0]
+      )(
+        $('The approved version').all().map((found) => found.json),
+        $('Check the approved version').all().map((checked) => checked.json)
+      )
+  );
+
+// Whether the description of a change-list entry x of the item j (reviewChanges) is the AI's: the step it names is
+// labelled so in j's reviewSteps (byAi). Template 3, Email repaired steps and Ask for approval.
+const CHANGE_BY_AI =
+  (j, x) => (
+    (r) => (
+      r !== null && typeof r === 'object'
+        && (
+          x.onEachPage
+            ? (Array.isArray(r.each) ? r.each : []).some((y) => y.byAi === true && y.text === x.text)
+            : r.byAi === true
+        )
+    )
+  )(Array.isArray(j.reviewSteps) && typeof x.step === 'number' ? j.reviewSteps[x.step - 1] ?? null : null);
+
+// The sentence Stop and Error ends a failed run with, from a run log row r (code, name, message, guidance), exactly as
+// the workflow the import form hands over words it (import/workflow.ts STOP_MESSAGE). Template 2, Stop and Error.
+const STOP_SENTENCE =
+  (r) => 'The run failed: ' + (r.code || 'config_error') + ' on ' + (r.name || 'the steps') + '.' + (r.message ? ' ' + String(r.message).charAt(0).toUpperCase() + String(r.message).slice(1) + (/[.!?…]$/.test(String(r.message)) ? '' : '.') : '') + (r.guidance ? ' What to do: ' + r.guidance : '') + (r.message || r.guidance ? '' : ' Run steps in this execution has the message.');
+
+// The steps of this feed's name that wait for approval (an unexpired pending row, the rows Get pending found, as Run
+// steps' AI Repair reads them), as one sentence: the newest version, why AI Repair is off and how to approve it; ''
+// when none waits. Template 2, Alert on failure and Stop and Error.
+const REPAIR_WAITING =
+  (
+    (rows) => (
+      rows.length
+        ? 'Steps version '
+          + Math.max(...rows.map((r) => Number(r.version) || 0))
+          + ' for '
+          + $('Settings').first().json.name
+          + ' are waiting for approval, so AI Repair is off until they are approved, rejected or expire.'
+          + ' To approve them, open the approval email that RPA: 3 Approve steps sent and click Approve; the next run uses them.'
+        : ''
+    )
+  )(
+    $('Get pending').isExecuted
+      ? $('Get pending').all().map((i) => i.json).filter((r) => r.hash && DateTime.fromISO(r.expiresAt) > $now)
+      : []
+  );

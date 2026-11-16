@@ -111,6 +111,8 @@ export interface FailureDetails extends IDataObject {
   durationMs: number;
   /** Chat model tokens the run used (agent lane); 0 when the engine reports none. */
   llmTokens: number;
+  /** Chat model calls the run made (agent lane), beside llmTokens as on the Data item; 0 when the engine reports none. */
+  llmCalls?: number;
   log: IDataObject[];
   submitted: boolean;
   /** Present (true) when the sign-in set a new password before the run failed: the workflow must store it. */

@@ -4,7 +4,7 @@ import type { NodeContext } from './context.js';
 import type { Compiled, LaneSuccess } from './operations/quick/shared.js';
 import type { Engine } from './engine.js';
 import { CONFIG_GUIDANCE, errorJson, guidanceFor, shownMessage, type FailureDetails } from './errors.js';
-import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, leftOutList, NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, safetyLine } from './format.js';
+import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, leftOutList, modelSteps, NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, reviewSteps, safetyLine } from './format.js';
 
 /** A file-name-safe form of a name (lowercase, dashes), 'rpa' when nothing is left. */
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'rpa';
@@ -93,7 +93,7 @@ export async function dataItem(
  * steps replayed alone, for the reviewer to step through in a Trace Viewer. `attachmentNames` names only the screenshots.
  * Never uses the word "proposal".
  */
-export async function repairedStepsItem(ctx: NodeContext, engine: Engine, p: Proposal): Promise<INodeExecutionData> {
+export async function repairedStepsItem(ctx: NodeContext, engine: Engine, p: Proposal, o: { byModel?: boolean } = {}): Promise<INodeExecutionData> {
   const binary: IBinaryKeyData = {};
   const names: string[] = [];
   for (const [which, version] of [['before', p.baseVersion ?? 0], ['after', p.version]] as const) {
@@ -103,7 +103,7 @@ export async function repairedStepsItem(ctx: NodeContext, engine: Engine, p: Pro
     names.push(which);
   }
   if (p.trace) binary.trace = await ctx.helpers.prepareBinaryData(p.trace, `${slug(p.name)}-v${p.version}-proof-trace.zip`, 'application/zip');
-  return { json: repairedStepsJson(engine, p, names.join(',')), ...(Object.keys(binary).length ? { binary } : {}) };
+  return { json: repairedStepsJson(engine, p, names.join(','), o), ...(Object.keys(binary).length ? { binary } : {}) };
 }
 
 /**
@@ -111,9 +111,11 @@ export async function repairedStepsItem(ctx: NodeContext, engine: Engine, p: Pro
  * download, not only the new ones the engine flags), and the digest is computed over that list. Sign Steps recomputes
  * the same list and refuses an item that carries another one. `notReplayed`: browser steps that go to approval without
  * a replay (engine notReplayedProposal): no page was read, so there is no count-unverified flag, the flags also name each secret fill and password change,
- * and the evidence line is NOT_REPLAYED_EVIDENCE_LINE.
+ * and the evidence line is NOT_REPLAYED_EVIDENCE_LINE. `reviewSteps`: the steps as the review page and the emails list
+ * them (format.ts reviewSteps; shown only, outside the digest: Sign Steps builds them again). `byModel`: the chat model
+ * built or repaired these steps, so a description on a step it wrote is labelled as the AI's (modelSteps).
  */
-export function repairedStepsJson(engine: Engine, proposal: Proposal, attachmentNames = '', o: { notReplayed?: boolean } = {}): IDataObject {
+export function repairedStepsJson(engine: Engine, proposal: Proposal, attachmentNames = '', o: { notReplayed?: boolean; byModel?: boolean } = {}): IDataObject {
   const safetyFlags = fullSafetyFlags(engine, engine.parseScript(proposal.steps), o.notReplayed
     ? { unverifiedCount: false, fieldsDropped: false, notReplayed: true }
     : { unverifiedCount: proposal.safetyFlags.includes(engine.UNVERIFIED_COUNT_FLAG), fieldsDropped: proposal.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
@@ -140,6 +142,9 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
     ...(p.changes.some((c) => c.was !== null)
       ? { reviewChanges: reviewChanges(engine, p.steps.steps, p.changes, { shownUrl: engine.shownUrl, startUrl: p.steps.startUrl }) as unknown as IDataObject[] }
       : {}),
+    reviewSteps: reviewSteps(p.steps.steps, {
+      desktop: false, shownUrl: engine.shownUrl, startUrl: p.steps.startUrl, ...(o.byModel ? { byAi: modelSteps(engine, p.steps.steps, p.changes) } : {}),
+    }) as unknown as IDataObject[],
     attachmentNames,
   };
 }
@@ -207,6 +212,7 @@ export async function failureItem(
     traceRef: binary?.trace ? 'trace' : null,
     durationMs: full?.durationMs ?? 0,
     llmTokens: full?.tokens ?? 0,
+    llmCalls: full?.llmCalls ?? 0,
     log: full ? shownLog(full.log) : [],
     submitted: full?.submitted === true,
     ...(f.passwordChanged ? { passwordChanged: true as const } : {}),

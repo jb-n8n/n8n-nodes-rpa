@@ -43,14 +43,16 @@ describe('3-approve-steps.json', () => {
     for (const field of ['evidenceLine', 'changeList', 'safetyLine', 'hash']) expect(String(email.html)).toMatch(new RegExp(`(\\$json|\\bj)\\.${field}\\b`));
     expect(String(email.html)).toContain('color:#b00020');
   });
-  it('trigger → Settings → (first) the tables and Mark pending, (then) Desktop steps? → one desktop email, or the review email and Ask for approval → Timed out? → Sign steps', () => {
+  it('trigger → Settings → (first) the tables, Mark pending, The approved version and its check, (then) Desktop steps? → one desktop email, or the review email and Ask for approval → Timed out? → Sign steps', () => {
     expect(targets(t, 'Repaired steps received')).toEqual([['Settings']]);
     // v1 order runs the topmost child's branch first: the tables exist and the row is pending before an email goes out.
     expect(targets(t, 'Settings')).toEqual([['Create steps table', 'Desktop steps?']]);
     expect(byName(t, 'Create steps table').position[1]).toBeLessThan(byName(t, 'Desktop steps?').position[1]);
     expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
     expect(targets(t, 'Create run log table')).toEqual([['Mark pending']]);
-    expect(targets(t, 'Mark pending')).toEqual([]);
+    expect(targets(t, 'Mark pending')).toEqual([['The approved version']]);
+    expect(targets(t, 'The approved version')).toEqual([['Check the approved version']]);
+    expect(targets(t, 'Check the approved version')).toEqual([]);
     // Desktop steps: one email (its form asks for the writes). Browser steps: the review email with the screenshots, then Approve / Reject.
     expect(targets(t, 'Desktop steps?')).toEqual([['Ask for approval (desktop steps)'], ['Email repaired steps']]);
     expect(targets(t, 'Email repaired steps')).toEqual([['Ask for approval']]);
@@ -579,7 +581,9 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
       { change: 'Changed', step: 2, text: 'Click Delete', describedAs: 'Read the total', was: 'Click Export (click role "button" name "Export")' },
       { change: 'Added', step: 3, text: 'Open a.example/list', describedAs: 'Open the list', quiet: true },
     ]);
-    expect(render(html, { $json: repair })).toContain('<b>What changed (as reported by the run):</b><br>'
+    // Without the version it repairs in playwright_steps (The approved version found no signed row), the run's change list.
+    const noBase = { $json: repair, $: () => ({ isExecuted: true, all: () => [{ json: {} }] }) };
+    expect(render(html, noBase)).toContain('<b>What changed (as reported by the run):</b><br>'
       + 'Changed: step 2, Click Delete <b style="color:#b00020">(described differently as: Read the total)</b> <i style="color:#7e8186">(was: Click Export (click role "button" name "Export"))</i><br>'
       + `Added: step 3, Open ${unlinked('a.example/list')} <i style="color:#7e8186">(the author calls it: Open the list)</i></p>`);
     expect(ask(repair)).toContain('\nWhat changed (as reported by the run):\n'
@@ -632,5 +636,183 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
 
   it('Sign Steps checks the sentences the emails showed: the item goes to Sign steps whole, reviewSteps included', () => {
     expect(byName(t3, 'Repaired steps to sign').parameters.jsonOutput).toBe("={{ $('Repaired steps received').item.json }}");
+  });
+});
+
+describe('template 3 emails of a repair: the whole repaired bot, and what changed from the approved version, only when its signature fits', () => {
+  const t3 = load('3-approve-steps.json');
+  const html = String(byName(t3, 'Email repaired steps').parameters.html);
+  const message = String(byName(t3, 'Ask for approval').parameters.message);
+  const engine = fakeEngine(() => {
+    throw new Error('no run');
+  });
+  const KEY = 'template-3-signing-key-0123456789abcdef';
+  const SITE = 'site-login-1';
+  // Version 1 as approved, and the model's repair: a pop-up dismissed first, then the section under its new name.
+  const base: Script = {
+    name: 'notices', version: 1, startUrl: 'https://a.example/',
+    steps: [
+      { intent: 'Open the portal', goto: 'https://a.example/' },
+      { intent: 'Open Service', click: { role: 'link', name: 'Service' } },
+      { intent: 'Read the notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}' } },
+    ],
+  };
+  const now: Script = {
+    ...base, version: 2,
+    steps: [base.steps[0], { intent: 'Dismiss Remind me later', click: { role: 'button', name: 'Remind me later' } }, { intent: 'Open Resources', click: { role: 'link', name: 'Resources' } }, base.steps[2]],
+  };
+  const proposal: Proposal = {
+    name: 'notices', baseVersion: 1, version: 2, steps: now, hash: scriptHash(now), evidence: { count: 7, total: 7, diff: { missing: [], extra: [] } },
+    changes: stepChanges(parseScript(base), parseScript(now)), safetyFlags: [], screenshots: {},
+  };
+  const item = repairedStepsJson(engine, proposal, 'before,after', { byModel: true });
+  const credentials = { playwrightScriptSigningApi: { secretKey: KEY }, playwrightSiteLoginApi: { loginUrl: 'https://a.example/login', username: 'u-1', password: 'p-1' } };
+  /** Version 1 signed by Sign steps (approved, with this Site Login), as Save signed steps writes it to playwright_steps. */
+  const approvedRow = async (): Promise<IDataObject> => {
+    const first = { ...proposal, baseVersion: null, version: 1, steps: base, hash: scriptHash(base), changes: stepChanges(undefined, parseScript(base)) };
+    const out = await executeSignSteps(harness({
+      params: { operation: 'signSteps', approved: true, approverId: APPROVER, approverAllowlist: APPROVER }, items: [{ json: repairedStepsJson(engine, first) }],
+      credentials, credentialIds: { playwrightSiteLoginApi: SITE }, continueOnFail: true,
+    }), engine);
+    expect(out[0][0].json.status, String(out[0][0].json.message)).toBe('active');
+    return { id: 3, ...out[0][0].json };
+  };
+  /** What Check the approved version (Sign Steps, Check Only, the node's own parameters) gives for the rows found. */
+  const checked = async (rows: IDataObject[]): Promise<IDataObject[]> => {
+    const out = await executeSignSteps(harness({
+      params: byName(t3, 'Check the approved version').parameters, items: rows.map((json) => ({ json })), credentials,
+      credentialIds: { playwrightSiteLoginApi: SITE }, continueOnFail: true,
+    }), engine);
+    return out[0].map((o) => o.json);
+  };
+  /** The scope both emails get: the item, the rows The approved version found and what Check the approved version said. */
+  const scope = async (json: IDataObject, rows: IDataObject[]) => {
+    const checks = await checked(rows);
+    return {
+      $json: json,
+      $: (name: string) => (name === 'The approved version'
+        ? { isExecuted: true, all: () => rows.map((r) => ({ json: r })) }
+        : name === 'Check the approved version'
+        ? { isExecuted: true, all: () => checks.map((r) => ({ json: r })) }
+        : { item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : json } }),
+    };
+  };
+  const COMPARED = 'notices: changed from the approved version 1: added: step 3; step 2: description "Open Service" → "Dismiss Remind me later", role "link" → "button", control name "Service" → "Remind me later". 4 steps now, 3 in the approved version.';
+  const NOT_COMPARED = 'Not compared: no approved version 1 of notices was found whose signature fits, so these steps could not be compared with an approved version. Read every step.';
+
+  it('The approved version reads only an approved, signed row of the version the repair started from; Check the approved version checks its signature and signs nothing', () => {
+    const n = byName(t3, 'The approved version');
+    expect(n).toMatchObject({ type: 'n8n-nodes-base.dataTable', alwaysOutputData: true });
+    expect(table(n)).toMatchObject({ resource: 'row', operation: 'get', dataTableId: { value: STEPS_TABLE }, matchType: 'allConditions', returnAll: true });
+    expect(table(n).filters?.conditions).toEqual([
+      { keyName: 'name', condition: 'eq', keyValue: `={{ ${SETTINGS_NAME} }}` },
+      { keyName: 'version', condition: 'eq', keyValue: "={{ $('Repaired steps received').item.json.baseVersion ?? 0 }}" },
+      { keyName: 'status', condition: 'neq', keyValue: 'pending' },
+      { keyName: 'status', condition: 'neq', keyValue: 'rejected' },
+      { keyName: 'status', condition: 'neq', keyValue: 'expired' },
+      { keyName: 'signature', condition: 'neq', keyValue: '' },
+      { keyName: 'approvedBy', condition: 'neq', keyValue: '' },
+    ]);
+    expect(targets(t3, 'The approved version')).toEqual([['Check the approved version']]);
+    expect(targets(t3, 'Check the approved version')).toEqual([]);
+    expect(byName(t3, 'Check the approved version')).toMatchObject({
+      type: NODE_TYPE, onError: 'continueRegularOutput', parameters: { operation: 'signSteps', checkOnly: true },
+    });
+    expect(sticky(t3, 'Set once').content).toContain('Pick **RPA Step Signing** and **RPA Site Login** on **Sign steps** and **Check the approved version** (the ones Run steps uses).');
+  });
+
+  it('a verified row: the review email lists every step, labels the model\'s descriptions as the AI\'s, and says what changed as the review page does', async () => {
+    const out = render(html, await scope(item, [await approvedRow()]));
+    expect(out).toContain('<ol><li>Open a.​example <i style="color:#7e8186">(the author calls it: Open the portal)</i></li>'
+      + '<li>Click Remind me later <i style="color:#7e8186">(the AI describes it as: Dismiss Remind me later)</i></li>'
+      + '<li>Click Resources <i style="color:#7e8186">(the AI describes it as: Open Resources)</i></li>'
+      + '<li>Read the notices</li></ol>');
+    expect(out).toContain(`<p><b>What changed:</b> ${COMPARED}</p>`);
+    expect(out).not.toContain('Not compared');
+    expect(out).not.toContain('reports it changed');
+  });
+
+  it('a verified row: the approval email, the same list and the same words', async () => {
+    const out = render(message, await scope(item, [await approvedRow()]));
+    expect(out).toContain('\nThe steps (what each one does, built from the step):\n'
+      + '1. Open a.​example (the author calls it: Open the portal)\n'
+      + '2. Click Remind me later (the AI describes it as: Dismiss Remind me later)\n'
+      + '3. Click Resources (the AI describes it as: Open Resources)\n'
+      + '4. Read the notices\nEvidence (as reported by the run): Proven in a fresh browser: 7 of 7 rows\n');
+    expect(out).toContain(`\nWhat changed: ${COMPARED}\n\nApprove: `);
+  });
+
+  it('no comparison from a row nothing verified: an edited row, a rejected or pending row, a row with no signature, no row, no check', async () => {
+    const row = await approvedRow();
+    // An edit that makes the repair look small: the stored version 1 already "has" the new steps.
+    const edited = { ...row, steps: JSON.stringify({ ...base, steps: now.steps }) };
+    const cases: [string, IDataObject[]][] = [
+      ['edited steps', [edited]], ['edited approver', [{ ...row, approvedBy: 'someone@example.com' }]],
+      ['rejected', [{ ...row, status: 'rejected' }]], ['pending', [{ ...row, status: 'pending' }]], ['expired', [{ ...row, status: 'expired' }]],
+      ['no signature', [{ ...row, signature: '' }]], ['another version', [{ ...row, version: 3 }]], ['another name', [{ ...row, name: 'other' }]],
+      ['no row', [{}]], ['nothing', []],
+    ];
+    for (const [what, rows] of cases) {
+      const s = await scope(item, rows);
+      const page = render(html, s);
+      const text = render(message, s);
+      expect(page, what).toContain(`<p><b>${NOT_COMPARED.replace('Not compared:', 'Not compared:</b>')}</p><p><b>What the repair reports it changed:</b><br>`);
+      expect(text, what).toContain(`\n${NOT_COMPARED}\nWhat the repair reports it changed:\nChanged: step 2, Click Remind me later (the AI describes it as: Dismiss Remind me later)`);
+      // The whole bot is still listed, and nothing says "changed from" or "unchanged from" an approved version.
+      for (const out of [page, text]) {
+        expect(out, what).toContain('Click Resources');
+        expect(out, what).not.toMatch(/(?:changed|unchanged) from the approved version/);
+      }
+    }
+    // A check that did not run (the node errored and gave nothing), or a check of other rows: no comparison either.
+    const unchecked = { $json: item, $: (name: string) => (name === 'The approved version' ? { isExecuted: true, all: () => [{ json: row }] } : name === 'Check the approved version' ? { isExecuted: false, all: () => [] } : { item: { json: item } }) };
+    expect(render(html, unchecked)).toContain('Not compared:');
+    // A verified row next to an edited one: the verified one is compared with.
+    expect(render(message, await scope(item, [edited, row]))).toContain(`\nWhat changed: ${COMPARED}`);
+    // The superseded row of that version counts when its signature fits.
+    expect(render(message, await scope(item, [{ ...row, status: 'superseded' }]))).toContain(`\nWhat changed: ${COMPARED}`);
+  });
+
+  it('a step that moved and changed is named with both numbers', async () => {
+    const moved: Script = { ...base, version: 2, steps: [base.steps[0], base.steps[2], { ...base.steps[1], click: { role: 'link', name: 'Services' } }] };
+    const json = repairedStepsJson(engine, { ...proposal, steps: moved, hash: scriptHash(moved), changes: stepChanges(parseScript(base), parseScript(moved)) }, '', { byModel: true });
+    const out = render(message, await scope(json, [await approvedRow()]));
+    expect(out).toMatch(/\nWhat changed: notices: changed from the approved version 1: .*step 2 \(now step 3\): control name "Service" → "Services"/);
+  });
+
+  it('text from the steps and the stored row goes through the email\'s one function: look-alikes, no links', async () => {
+    const odd: Script = { ...now, steps: [now.steps[0], { intent: 'Open <b>x</b> & http://evil.example/', click: { role: 'button', name: 'Go <i>' } }, now.steps[3]] };
+    const json = repairedStepsJson(engine, { ...proposal, steps: odd, hash: scriptHash(odd), changes: stepChanges(parseScript(base), parseScript(odd)) }, '', { byModel: true });
+    const s = await scope(json, [await approvedRow()]);
+    for (const out of [render(html, s), render(message, s)]) {
+      const compared = out.split('What changed:')[1] ?? '';
+      expect(compared).toContain('‹i›');
+      expect(compared).not.toMatch(/<i>|<b>x|evil\.example|:\/\//);
+    }
+  });
+
+  it('an item made before reviewSteps shows the run\'s change list as before; Sign steps never reads the stored row', async () => {
+    const { reviewSteps: _r, ...older } = item;
+    const s = await scope(older, [await approvedRow()]);
+    expect(render(html, s)).toContain('<b>What changed (as reported by the run):</b><br>');
+    expect(render(html, s)).not.toContain('The steps');
+    // Sign steps signs the item as it arrived; nothing it reads comes from The approved version or its check.
+    expect(byName(t3, 'Repaired steps to sign').parameters.jsonOutput).toBe("={{ $('Repaired steps received').item.json }}");
+    expect(JSON.stringify(byName(t3, 'Sign steps').parameters)).not.toMatch(/approved version/i);
+  });
+});
+
+describe('the comparison runs in n8n as it runs here', () => {
+  it('no expression that holds COMPARE_STEPS uses optional chaining on an indexed value (n8n 2.45 gave undefined there, live)', () => {
+    let blocks = 0;
+    for (const file of ['3-approve-steps.json', '5-import-a-bot.json']) {
+      const text = JSON.stringify(load(file).nodes.map((n) => n.parameters));
+      for (const m of JSON.parse(`[${JSON.stringify(text)}]`)[0].matchAll(/\{\{([\s\S]*?)\}\}/g)) {
+        if (!m[1].includes('const canon')) continue;
+        blocks += 1;
+        expect(m[1], file).not.toMatch(/\]\?\./);
+      }
+    }
+    expect(blocks).toBeGreaterThanOrEqual(4);
   });
 });

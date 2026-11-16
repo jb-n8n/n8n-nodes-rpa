@@ -198,7 +198,11 @@ with no model call.
   Repaired steps item, which goes to approval. Nothing reads the site's data until version 1 is approved. Each such run
   signs in and spends model tokens.
 - **Outputs**: Data goes to **Log run** and **Send data to destination** (a placeholder: replace it). Repaired Steps
-  goes to **Approve steps**. The error output goes to **Alert on failure** and **Log failed run**.
+  goes to **Approve steps**. The error output goes to **Alert on failure**, then **Log failed run** and **Write failed
+  run row** (the run row, with the message and what to do), then **Stop and Error**, so a failed run shows as failed
+  under **Executions**, with the message and what to do.
+- **While steps wait for approval**, a failed run's message and its alert email name the version that waits and say
+  to approve it from the approval email; AI Repair stays off until it is approved, rejected or expires.
 - **A new site**: copy the feed and change `name`, the Site Login, the **Goal** and the **ID Pattern**. With another
   Site Login, copy workflow 3 too and pick the new Site Login on its **Sign steps**.
 
@@ -212,10 +216,18 @@ after `approvalTimeoutHours` (72), then:
   and **Reject**. The steps show when the item carries them (an import's step lists do): Sign Steps builds them again
   and refuses to sign when they differ.
   The emails show every value as text, with look-alikes for `<`, `>` and `&`, and an invisible space in each address so that mail programs do not link it. The safety flags are the full list: every host, form submission, download and pop-up handler the steps have.
+  A repair's item carries its steps too, so the emails list the whole repaired bot. A description the chat model wrote
+  reads `(the AI describes it as: …)`, on the review page too; the red mark is the same whoever wrote it.
+  **What changed**: for a repair, **The approved version** reads the approved row (active or superseded, signed) of
+  the version it started from, and **Check the approved version** (Sign Steps with **Check Only**, with the same RPA
+  Step Signing and RPA Site Login as **Sign steps**) checks its signature as a run does. When it fits, the emails say
+  what changed from it in the import review page's words (removed, added, moved, and each changed step with its old
+  and new number). When no such row fits (none, or one edited in the table), they say the steps could not be compared
+  with an approved version, so every step must be read, and show the change list the repair reports about itself.
   The change list compares the steps themselves, not their intents, so a step that clicks another element is listed
   even when its intent reads the same. For an import, where every entry is a step added, the emails leave it out: it
-  would repeat the steps. For a repair, each entry names its step by number, with the sentence built from the step and
-  the description marked as above. Sign Steps builds that list again and refuses to sign when it differs.
+  would repeat the steps. Sign Steps builds the steps and that list again and refuses to sign when they differ; it
+  never reads the stored row the emails compare with.
 - **Desktop steps**: one email, `Approve desktop steps v<version> for <name>?`, with the numbered steps and a
   **Review and decide** button, to a form with **Decision** and the candidate writes as tick boxes, none ticked to start.
 - Approve: **Sign steps** signs, the row becomes `active`, older `active` rows of the name become `superseded`, and
@@ -268,5 +280,7 @@ The workflow the import form hands over writes the columns the table has. A `pla
 version keeps its columns, and a run never fails on it: the newer columns are left out of its rows. To have them, add
 them to the table in n8n (**Data tables** → `playwright_runs` → add a column, with the name and type above), or delete
 the table and its rows: the next run makes it again. Rows are written by column name, so a table made in the earlier
-order (`name`, `lane`, `version`, …) gets its rows as before. The data feed writes only the ten columns every table
-has: `name`, `lane`, `version`, `hash`, `confirmed`, `rowCount`, `durationMs`, `llmTokens`, `code`, `executionId`.
+order (`name`, `lane`, `version`, …) gets its rows as before. The data feed writes a successful run's row with the ten
+columns every table has (`name`, `lane`, `version`, `hash`, `confirmed`, `rowCount`, `durationMs`, `llmTokens`,
+`code`, `executionId`), and a failed run's row with the columns the table has, as the handed-over workflow does. Model
+calls are not a column: Run Steps' Data item and error item carry `llmCalls` beside `llmTokens`.
