@@ -4249,6 +4249,51 @@ Describe 'Show-RpaConnection.ps1' {
       $script:StateFile = Join-Path $script:SupervisorDir 'supervisor-state.json'
       $file = Join-Path $script:MadeUpInstall 'install.json'
       $install = $script:InstallJson | ConvertFrom-Json
+    # The installer's ending runs this with -Short: the lines, what is wrong with them and where their address comes
+    # from; none of the values for the separate fields, no token line, and nothing about the mode.
+    It 'with -Short prints the line, the hint and the address only, with nothing about the mode' {
+      $file = Join-Path $script:MadeUpInstall 'install.json'
+      $short = $script:InstallJson | ConvertFrom-Json
+      $short.browser = $false
+      $short | Add-Member -NotePropertyName mode -NotePropertyValue 'unattended'
+      $short | Add-Member -NotePropertyName idleSeconds -NotePropertyValue 15
+      $short | Add-Member -NotePropertyName address -NotePropertyValue 'rpa.example'
+      Set-Content -LiteralPath $file -Value ($short | ConvertTo-Json) -Encoding UTF8
+      try {
+        $output = @(& $script:ShowScript -Short)
+        $LASTEXITCODE | Should -Be 0
+        $output | Should -BeExactly @(
+          'Runner connection line, for the setup command or the RPA Desktop Runner credential:'
+          ('rpa-runner://rpa.example:{0}/rpa/v1#token={1}&fingerprint={2}' -f $script:RunnerPort, $script:Hidden, $script:RunnerFingerprint.Replace(':', '').ToLowerInvariant())
+          ('The token is hidden in the line (token={0}). For the line to paste, run as an administrator: {1}' -f $script:Hidden, $script:Hint)
+          "The line's address is rpa.example, the one the installer was given (with -Address or at its question). To use another, run this again with -Address <that name or address>."
+        )
+      } finally {
+        Set-Content -LiteralPath $file -Value $script:InstallJson -Encoding UTF8
+      }
+    }
+
+    It 'with -Short still says that a program is not listening' {
+      $output = @(& $script:ShowScript -Short -Address 203.0.113.10)
+      $output | Should -Contain ("Browser: not listening yet. It starts within a minute of the bot user's sign-in: run this again. If it stays like this, read {0}" -f (Join-Path $script:LogDir 'browser.err.log'))
+      ($output -join "`n") | Should -Not -Match 'URL:|fingerprint:|token:'
+    }
+
+    It 'with -Short writes no token line: the token is in the line only' {
+      $source = (Get-Content -Raw -LiteralPath $script:ShowScript) -replace "`r`n", "`n"
+      $short = $source.IndexOf('if ($Short) {')
+      $short | Should -BeGreaterThan $source.IndexOf('if ($ShowTokens) { $Host.UI.WriteLine($made.Line) } else { Write-Output $made.Line }')
+      $short | Should -BeLessThan $source.IndexOf('if ($ShowTokens) { $Host.UI.WriteLine((Get-TokenLine $service.Name $service.Token)) }')
+    }
+
+    It 'with -Short -ShowTokens prints the lines with their tokens and no token line, in the output of powershell.exe' -Skip:($env:OS -ne 'Windows_NT') {
+      $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:ShowScript -Short -ShowTokens -Address 203.0.113.10)
+      $LASTEXITCODE | Should -Be 0
+      $output | Should -Contain ('rpa-runner://203.0.113.10:{0}/rpa/v1#token={1}&fingerprint={2}' -f $script:RunnerPort, $script:RunnerToken, $script:RunnerFingerprint.Replace(':', '').ToLowerInvariant())
+      @($output | Where-Object { $_ -like '*token: *' }).Count | Should -Be 0
+      ($output -join "`n") | Should -Not -Match 'tokens are hidden'
+    }
+
       $install | Add-Member -NotePropertyName mode -NotePropertyValue 'unattended'
       $install | Add-Member -NotePropertyName idleSeconds -NotePropertyValue 15
       Set-Content -LiteralPath $file -Value ($install | ConvertTo-Json) -Encoding UTF8
