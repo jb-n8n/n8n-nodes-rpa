@@ -3,7 +3,7 @@
 import { Buffer } from 'node:buffer';
 import { CREDENTIALS } from '../nodes/Playwright/config.js';
 import { clean, type Client } from './n8n-api.mjs';
-import { ask, interactive, say, Stop } from './io.mjs';
+import { ask, detail, interactive, say, Stop } from './io.mjs';
 import { EMAIL } from './options.mjs';
 
 const MAX_PROJECT_LOOKUPS = 50;
@@ -122,6 +122,9 @@ export async function useFound(found: { kind: string; name: string; id: string }
 
 export interface Ref { id: string; name: string }
 
+/** What this run made and changed, by name, for the one line that says so at the end. */
+export const record = { made: [] as string[], changed: [] as string[] };
+
 /**
  * The credentials of this name: the one this run's project owns (mine), and those it leaves alone (others: another
  * project or user, or an owner n8n does not tell), each said in one line. Stops on a same-name credential of another
@@ -207,7 +210,7 @@ export function leftAlone(kind: string, item: any, typeOrNothing: string, home: 
     : owner === home ? 'the API key does not say whose it is, so this run could not tell it was yours before it made a new one'
       : owner ? 'it belongs to another project or user' : 'n8n does not say whose it is';
   const id = clean(item.id);
-  say(`left alone ${kind} "${clean(item.name, id)}"${typeOrNothing ? ` (${typeOrNothing}, id ${id})` : ` (id ${id})`}: ${why}, so it is not used`);
+  detail(`left alone ${kind} "${clean(item.name, id)}"${typeOrNothing ? ` (${typeOrNothing}, id ${id})` : ` (id ${id})`}: ${why}, so it is not used`);
 }
 
 /** The credential this run uses: the one found (mine, when the run uses what it found), else one made in the project. */
@@ -216,13 +219,14 @@ export async function credential(client: Client, found: { mine?: any; others: an
   if (mine) {
     // By its own name: one found by its type may have any name ("RPA Step Signing account").
     const name = String(mine.name ?? spec.name);
-    say(`reused   credential "${clean(name, mine.id)}" (id ${clean(mine.id)}): ${keptNote}`);
+    detail(`reused   credential "${clean(name, mine.id)}" (id ${clean(mine.id)}): ${keptNote}`);
     return { ref: { id: String(mine.id), name }, created: false };
   }
   const r = await client.api('POST', '/credentials', { name: spec.name, type: spec.type, data: data(), ...(projectId ? { projectId } : {}) });
   if ((r.status !== 200 && r.status !== 201) || !r.json?.id) throw new Stop(`Could not create the credential "${spec.name}" (${client.reason(r)}).`);
   const id = clean(r.json.id);
-  say(`created  credential "${spec.name}" (id ${id})`);
+  detail(`created  credential "${spec.name}" (id ${id})`);
+  record.made.push(`"${clean(spec.name)}"`);
   const same = others.filter((o) => o?.name === spec.name);
   if (same.length) say(`         n8n now has more than one credential named "${spec.name}": this run's is id ${id}. Do not pick ids ${same.map((o) => clean(o.id)).join(', ')}.`);
   return { ref: { id: String(r.json.id), name: spec.name }, created: true };
@@ -232,4 +236,5 @@ export async function credential(client: Client, found: { mine?: any; others: an
 export async function replaceData(client: Client, ref: Ref, type: string, data: Record<string, unknown>) {
   const r = await client.api('PATCH', `/credentials/${encodeURIComponent(ref.id)}`, { name: ref.name, type, data });
   if (r.status !== 200) throw new Stop(`Could not change the credential "${ref.name}" (${client.reason(r)}). Nothing else was changed.`);
+  record.changed.push(`"${clean(ref.name, ref.id)}"`);
 }

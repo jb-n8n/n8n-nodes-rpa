@@ -13,8 +13,28 @@ export const FORM = { name: 'RPA import form', type: 'httpBasicAuth', user: 'rpa
 export const SIGNING = { name: 'RPA Step Signing', type: CREDENTIALS.signing };
 export const RUNNER = { name: 'RPA Desktop Runner', type: CREDENTIALS.desktopRunner };
 export const BROWSER = { name: 'RPA Browser', type: CREDENTIALS.browser };
+/**
+ * --sample-site: the RPA Site Login of the compose stack's sample site (the sandbox), with the sample values the browser
+ * guide lists: its public demo account, its two password pages and the one post its SAP pages make to show a screen. Sample
+ * data, never a real secret (sandbox/portal/testing.js SANDBOX; a test pins the two). Only for the sandbox, whose name
+ * `sandbox` exists only inside the compose stack: a real site's Site Login is made by a person in n8n.
+ */
+export const SAMPLE_SITE = {
+  name: 'RPA Site Login (sample site)',
+  type: CREDENTIALS.siteLogin,
+  data: {
+    loginUrl: 'http://sandbox:8080/acme/login',
+    username: 'summit-ops',
+    password: 'demo-password',
+    totpSecret: 'JBSWY3DPEHPK3PXP',
+    login: 'sandbox:8080/acme/login\nsandbox:8080/acme/mfa',
+    readPosts: 'POST sandbox:8080/sap*/bc/gui/sap/its/webgui',
+  },
+};
 // The names of what this command makes: --site-login names a credential it only picks, never one of these.
 const OWN_NAMES = [FORM.name, SIGNING.name, RUNNER.name, BROWSER.name];
+/** The prompt line that says where the Connection Line comes from (--windows at a terminal). */
+export const WHERE_LINE = 'The installer offers the Connection Line at its end. Or, on the Windows machine, in an administrator PowerShell: & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens';
 
 export const WHERE_KEYS = 'Make an API key in n8n: Settings → n8n API → Create API key (as the owner or an admin), with Scopes All and the shortest expiry, and revoke it when the setup is done.';
 /** The stricter key: only the scopes this command uses, as n8n names them under Scopes → Custom. */
@@ -46,11 +66,17 @@ export const USAGE = [
   '  --new-form-password    with --form-login basic: give the form a new password and print it (n8n never shows the old one again).',
   '  --browser-url <ws-url> the browser service for browser bots: creates the RPA Browser credential, with the token from',
   '                         RPA_BROWSER_TOKEN, and sets it on Import steps.',
+  '  --sample-site          for the compose stack\'s sample site: makes the RPA Site Login "RPA Site Login (sample site)" with',
+  '                         the sample values of the browser guide, picks it as --site-login does, and turns on Allow Private',
+  '                         Network. Only for the sample site: make a real site\'s Site Login in n8n, and give --site-login.',
   '  --site-login <name>    the RPA Site Login of the site your bots open, made in n8n before this runs: picks it by its name',
   '                         on Import steps and Sign steps. It is never made, read or changed here.',
   '                         With --new-workflow: a form of its own for that Site Login, beside the first one, which is not',
   '                         touched. Its name and title name the Site Login, its address is /form/rpa-import-<its name>, and',
   '                         it signs with the same RPA Step Signing key.',
+  '  --windows              connect a Windows machine: asks for its Connection Line at a terminal (not shown as you paste it),',
+  '                         and tests the machine. A line for a machine your project has no credential for asks whether it',
+  '                         is another machine (a credential of its own) or a new line for one it has.',
   '  --desktop-runner <name>  the RPA Desktop Runner to pick on Import steps when your project has several. Without it and',
   '                         without a Connection Line, the only one your project has is picked. It is never read. With a',
   '                         Connection Line, it asks at a terminal whether to replace that credential\'s line.',
@@ -59,14 +85,15 @@ export const USAGE = [
   '                         project owns is reused.',
   '  --reuse-project-credentials  in a shared project, use the credentials and the workflow of these names found there',
   '                         without asking (anyone in the project could have made them).',
+  '  --verbose              print every step: what was found, reused, made, published and tested.',
   `  --new-workflow         leave a "${WORKFLOW_NAME}" that differs from the template alone and make a fresh one, with the date in its name.`,
   '                         With --site-login: a second form for that Site Login (see --site-login).',
   '',
   'Secrets never go in flags. The command asks for them, or reads them from the environment:',
   `  N8N_API_KEY            the n8n API key (the API key way only). ${WHERE_KEYS}`,
   `                         The stricter way, Scopes Custom with only: ${SCOPES}`,
-  '  RPA_CONNECTION_LINE    the rpa-runner:// line of a Windows machine (optional): creates the RPA Desktop Runner credential,',
-  '                         or, for one your project has (that name, or --desktop-runner), asks whether to replace its line.',
+  '  RPA_CONNECTION_LINE    the rpa-runner:// line of a Windows machine (optional, as --windows asks for it): creates the RPA',
+  '                         Desktop Runner credential; with one your project has, it asks as --windows says.',
   '  RPA_BROWSER_TOKEN      the browser service token, with --browser-url.',
 ].join('\n');
 
@@ -84,6 +111,12 @@ export interface Options {
   browserUrl?: string;
   /** The name of an RPA Site Login of the project, picked on Import steps and Sign steps. */
   siteLogin?: string;
+  /** --sample-site: the sample site's Site Login is made (or reused) and picked; Allow Private Network is on. */
+  sampleSite: boolean;
+  /** --windows: a Windows setup: the Connection Line is asked for at a terminal, and the machine tested. */
+  windows: boolean;
+  /** --verbose: every progress line, not only what a person acts on. */
+  verbose: boolean;
   /** The name of an RPA Desktop Runner of the project, picked on Import steps. */
   desktopRunner?: string;
   allowPrivateNetwork: boolean;
@@ -107,7 +140,7 @@ export function readOptions(argv: string[]): Options | 'help' {
         'new-form-password': { type: 'boolean' }, 'browser-url': { type: 'string' }, 'project-id': { type: 'string' },
         'site-login': { type: 'string' }, 'desktop-runner': { type: 'string' }, 'allow-private-network': { type: 'boolean' },
         'new-workflow': { type: 'boolean' }, 'reuse-project-credentials': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
-        'api-key': { type: 'boolean' }, 'no-api-key': { type: 'boolean' },
+        'api-key': { type: 'boolean' }, 'no-api-key': { type: 'boolean' }, 'sample-site': { type: 'boolean' }, windows: { type: 'boolean' }, verbose: { type: 'boolean' },
       },
       strict: true,
       allowPositionals: true,
@@ -128,13 +161,15 @@ export function readOptions(argv: string[]): Options | 'help' {
   const formLogin = values['form-login'] ?? 'n8n';
   if (formLogin !== 'n8n' && formLogin !== 'basic') throw new Stop("--form-login must be n8n (the default: n8n's own sign-in) or basic (a user name and password).", 2);
   if (values['new-form-password'] && formLogin !== 'basic') throw new Stop("--new-form-password applies only with --form-login basic: with n8n's sign-in the form has no password.", 2);
-  const siteLogin = values['site-login'];
+  const sampleSite = values['sample-site'] === true;
+  if (sampleSite && values['site-login'] !== undefined) throw new Stop('Give --sample-site or --site-login, not both: --sample-site picks the sample site\'s own Site Login.', 2);
+  const siteLogin = sampleSite ? SAMPLE_SITE.name : values['site-login'];
   // n8n's credential names are 3 to 128 characters. A control character could change what a printed line looks like.
   const badName = (name: string) => !name.trim() || name.length > 128 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(name);
   if (siteLogin !== undefined && badName(siteLogin)) {
     throw new Stop('--site-login must be the name of an RPA Site Login as n8n shows it, such as "RPA Site Login account".', 2);
   }
-  if (siteLogin !== undefined && OWN_NAMES.includes(siteLogin)) throw new Stop(`--site-login names a credential this command makes ("${siteLogin}"): give the name of your RPA Site Login.`, 2);
+  if (!sampleSite && siteLogin !== undefined && OWN_NAMES.includes(siteLogin)) throw new Stop(`--site-login names a credential this command makes ("${siteLogin}"): give the name of your RPA Site Login.`, 2);
   const desktopRunner = values['desktop-runner'];
   // "RPA Desktop Runner" is allowed: the one an earlier run made from a Connection Line.
   if (desktopRunner !== undefined && (badName(desktopRunner) || (desktopRunner !== RUNNER.name && OWN_NAMES.includes(desktopRunner)))) {
@@ -157,7 +192,11 @@ export function readOptions(argv: string[]): Options | 'help' {
     browserUrl: values['browser-url'],
     siteLogin,
     desktopRunner,
-    allowPrivateNetwork: values['allow-private-network'] === true,
+    // The sample site is on the stack's own network: --sample-site turns it on, as the guide's command did.
+    allowPrivateNetwork: values['allow-private-network'] === true || sampleSite,
+    sampleSite,
+    windows: values.windows === true,
+    verbose: values.verbose === true,
     projectId: values['project-id'],
     newWorkflow: values['new-workflow'] === true,
     reuseProject: values['reuse-project-credentials'] === true,
