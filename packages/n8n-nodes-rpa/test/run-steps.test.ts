@@ -793,7 +793,7 @@ describe('AI repair', () => {
     const withheld = 'the repaired steps did not pass the proof, so the rows were not delivered (turn on Options → Deliver Unconfirmed Rows to receive them). Reason: 2 rows missing';
     const engine = fakeEngine(() => taskFail('incomplete', withheld, { lane: 'agent', llmCalls: 3 }));
     const [data] = await executeRunSteps(ctx({ model: STUB_MODEL, continueOnFail: true, params: repairParams() }), engine);
-    expect(errorOf(data[0])).toBe(`incomplete: ${withheld}`);
+    expect(errorOf(data[0])).toBe(`incomplete: ${withheld}. The next runs do not try AI Repair again for these steps until the Goal, the steps or AI Repair Reset Key change.`);
     expect(details(data[0])).toMatchObject({ lane: 'agent', submitted: false });
   });
   it('AI Repair on without a model: drift says to connect one, and empty steps are a configuration error', async () => {
@@ -814,6 +814,176 @@ describe('AI repair', () => {
       error: 'AI repair needs an ID Pattern and an extract step.', message: 'AI repair needs an ID Pattern and an extract step.',
       details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: false, guidance: CONFIG_GUIDANCE },
     });
+  });
+});
+
+describe('a repair that failed does not try again until a person acts', () => {
+  const NOT_AGAIN = 'The next runs do not try AI Repair again for these steps until the Goal, the steps or AI Repair Reset Key change.';
+  const HELD_V3 = 'a repair already failed for steps version 3, so AI Repair did not run: change the Goal, approve a new version of the steps, or change AI Repair Reset Key in Options, to let it try again';
+  const HELD_GUIDANCE = 'A repair of these steps already failed, so this run did not call the chat model. Find the data on the site yourself, then say where it is now in the Goal on the RPA node, or change the steps on the import form: either one lets it try again. To let it try again unchanged, type a new value (any text) in Options → AI Repair Reset Key.';
+  const OUT_OF_TOKENS = 'the agent ran out of budget: the token budget of 1000 ran out. It used 1 chat model call and 3,210 tokens.';
+  const DRIFT = 'Read the items: no element matches';
+  /** The engine as it answers: a held repair reports the drift with the reason; otherwise `first` (a repair's result). */
+  const engineThat = (first: Parameters<typeof fakeEngine>[0]) => fakeEngine((input, call) => {
+    if (input.repair?.held) return taskFail('drift_detected', `${DRIFT} (${input.repair.held})`);
+    return first(input, call);
+  });
+  const failing = () => engineThat(() => taskFail('incomplete', OUT_OF_TOKENS, { lane: 'agent', llmCalls: 1, tokens: 3210 }));
+  const run = (engine: ReturnType<typeof fakeEngine>, over: Partial<HarnessOptions> = {}, deps: Parameters<typeof executeRunSteps>[2] = {}) =>
+    executeRunSteps(ctx({ model: STUB_MODEL, continueOnFail: true, params: repairParams(), ...over }), engine, deps);
+  const held = (engine: ReturnType<typeof fakeEngine>) => engine.calls.map((c) => c.repair?.held);
+
+  it('a repair that fails after a model call is remembered: the next run does not call the model and says why, in one sentence', async () => {
+    const staticData: IDataObject = {};
+    const engine = failing();
+    const [first] = await run(engine, { staticData });
+    expect(errorOf(first[0])).toBe(`incomplete: ${OUT_OF_TOKENS} ${NOT_AGAIN}`);
+    // The record holds no message, no step, no site data: when, the reset key, the version, the code and what it used.
+    const records = staticData.playwrightRepairStops as Record<string, IDataObject>;
+    expect(Object.values(records)).toEqual([{ at: expect.any(String), resetKey: '', version: 3, code: 'incomplete', llmCalls: 1, tokens: 3210 }]);
+    expect(Object.keys(records)[0]).toMatch(/^repair:[0-9a-f]{24}$/);
+    const [second] = await run(engine, { staticData });
+    expect(held(engine)).toEqual([undefined, HELD_V3]);
+    expect(errorOf(second[0])).toBe(`drift_detected: ${DRIFT} (${HELD_V3})`);
+    expect(details(second[0]).guidance).toBe(HELD_GUIDANCE);
+  });
+
+  it('a first build that failed holds the next first build, with its own words', async () => {
+    const engine = failing();
+    const first = repairParams({ steps: '', signature: '', approvedBy: '' });
+    await run(engine, { params: first });
+    await run(engine, { params: first });
+    expect(held(engine)).toEqual([undefined,
+      'a repair already failed for the first version of these steps, so AI Repair did not run: change the Goal, approve a new version of the steps, or change AI Repair Reset Key in Options, to let it try again']);
+  });
+
+  it('a new version of the steps, a new Goal or another workflow tries again', async () => {
+    const engine = failing();
+    await run(engine);
+    await run(engine, { params: repairParams({ steps: { ...STEPS, version: 4 } }, { expectedVersion: '4' }) });
+    await run(engine, { params: repairParams({ goal: `${GOAL} They are under Reports now.` }) });
+    await run(engine, { workflowId: 'wf-2' });
+    expect(held(engine)).toEqual([undefined, undefined, undefined, undefined]);
+  });
+
+  it('a new AI Repair Reset Key lets it try again and clears the record; a repair that fails again is held under the new key', async () => {
+    const staticData: IDataObject = {};
+    const engine = failing();
+    await run(engine, { staticData });
+    const withKey = (k: string) => repairParams({}, { repairResetKey: k });
+    await run(engine, { staticData, params: withKey(' 2026-11-16 ') });
+    expect(held(engine)).toEqual([undefined, undefined]);
+    // It failed again under the new key: held while the key stays, whatever spaces surround it.
+    await run(engine, { staticData, params: withKey('2026-11-16') });
+    expect(held(engine)[2]).toBe(HELD_V3);
+    expect(Object.values(staticData.playwrightRepairStops as IDataObject)).toEqual([expect.objectContaining({ resetKey: '2026-11-16' })]);
+    // Back to empty is a change too.
+    await run(engine, { staticData, params: withKey('') });
+    expect(held(engine)[3]).toBeUndefined();
+  });
+
+  it('AI Repair Reset Key is typed, never an expression', async () => {
+    const engine = failing();
+    const [data] = await run(engine, { params: repairParams({}, { repairResetKey: '={{ $now }}' }) });
+    expect(errorOf(data[0])).toMatch(/AI Repair Reset Key/);
+    expect(engine.calls).toHaveLength(0);
+  });
+
+  it('kept across a restart in static data, and written back to static data when only this process knows it', async () => {
+    const staticData: IDataObject = {};
+    const engine = failing();
+    await run(engine, { staticData });
+    resetGuardsForTests(); // n8n restarted: only static data remembers
+    await run(engine, { staticData });
+    // A manual run whose static data n8n did not save: this process remembers, and writes it back.
+    const fresh: IDataObject = {};
+    await run(engine, { staticData: fresh });
+    expect(held(engine)).toEqual([undefined, HELD_V3, HELD_V3]);
+    expect(Object.keys(fresh.playwrightRepairStops as IDataObject)).toHaveLength(1);
+  });
+
+  it('which failures are remembered: any after a model call, and rows without proven steps; not a cancel, a login, a configuration error or no model call', async () => {
+    const remembered = [
+      taskFail('not_found', 'the agent did not find the data: gone. It used 4 chat model calls and 9,000 tokens.', { lane: 'agent', llmCalls: 4 }),
+      taskFail('incomplete', 'model unavailable: overloaded. It used 2 chat model calls and 5,000 tokens.', { lane: 'agent', llmCalls: 2 }),
+      agentOk({ llmCalls: 3 }), // Deliver Unconfirmed Rows: rows, but no proven steps
+    ];
+    for (const result of remembered) {
+      resetGuardsForTests();
+      const engine = engineThat(() => result);
+      await run(engine);
+      await run(engine);
+      expect(held(engine)[1]).toBe(HELD_V3);
+    }
+    const controller = new AbortController();
+    controller.abort();
+    const forgotten: [Parameters<typeof fakeEngine>[0], Partial<HarnessOptions>][] = [
+      [() => taskFail('incomplete', 'run cancelled. It used 2 chat model calls and 4,000 tokens.', { lane: 'agent', llmCalls: 2 }), { signal: controller.signal }],
+      [() => taskFail('login_failed', "the site rejected the agent's sign-in: wrong. It used 2 chat model calls and 4,000 tokens.", { lane: 'agent', llmCalls: 2 }), { credentials: BROWSER_ONLY, params: repairParams({ requireSignedSteps: false, signature: '', approvedBy: '', startUrl: 'https://example.com/list' }) }],
+      [() => taskFail('policy_violation', 'AI repair needs an ID Pattern and an extract step.', { lane: 'agent', configError: true, llmCalls: 1 }), {}],
+      [() => taskFail('site_down', 'HTTP 503 at https://example.com/list', { lane: 'agent', llmCalls: 0 }), {}],
+      [() => taskFail('drift_detected', DRIFT), {}],
+      [() => agentOk({ llmCalls: 3, proposal: PROPOSAL }), {}],
+    ];
+    for (const [result, over] of forgotten) {
+      resetGuardsForTests();
+      const engine = engineThat(result);
+      await run(engine, over);
+      await run(engine, { ...over, signal: undefined });
+      expect(held(engine)).toEqual([undefined, undefined]);
+    }
+  });
+
+  it('AI Repair off, or no model: nothing is read or written', async () => {
+    const staticData: IDataObject = {};
+    const engine = failing();
+    await run(engine, { staticData });
+    const off = fakeEngine(() => taskFail('drift_detected', DRIFT));
+    const [data] = await executeRunSteps(ctx({ continueOnFail: true, staticData, params: params() }), off);
+    expect(errorOf(data[0])).toBe(`drift_detected: ${DRIFT}`);
+    expect(off.calls[0].repair).toBeUndefined();
+  });
+
+  it('with RPA Redis shared across workers: kept in Redis, not static data, and another worker is held', async () => {
+    const base = memoryGuardStore();
+    let opened = 0;
+    let closed = 0;
+    const redis = async (): Promise<GuardStore> => { opened++; return { ...base, shared: true, close: async () => { closed++; } }; };
+    const withRedis = { credentials: { ...BROWSER_ONLY, playwrightRedisApi: REDIS_CRED }, credentialIds: { ...IDS, playwrightRedisApi: 'redis-1' }, typeVersion: 2 };
+    const p = repairParams({ shareAcrossWorkers: true, requireSignedSteps: false, signature: '', approvedBy: '', startUrl: 'https://example.com/list' });
+    const staticData: IDataObject = {};
+    const engine = failing();
+    await run(engine, { ...withRedis, staticData, params: p }, { redis, executionsMode: 'queue' });
+    expect(staticData).toEqual({});
+    await run(engine, { ...withRedis, staticData: {}, params: p }, { redis, executionsMode: 'queue' });
+    expect(held(engine)).toEqual([undefined, HELD_V3]);
+    expect(closed).toBe(opened);
+  });
+
+  it('a Redis that cannot be read holds the repair (no model call) and says why; the run still runs its steps', async () => {
+    const redis = async (): Promise<GuardStore> => { throw new ConfigError('The Redis server could not be reached (ECONNREFUSED), so no login was tried.'); };
+    const withRedis = { credentials: { ...BROWSER_ONLY, playwrightRedisApi: REDIS_CRED }, credentialIds: { ...IDS, playwrightRedisApi: 'redis-1' } };
+    const p = repairParams({ requireSignedSteps: false, signature: '', approvedBy: '', startUrl: 'https://example.com/list' });
+    const engine = failing();
+    await run(engine, { ...withRedis, params: p }, { redis });
+    expect(held(engine)).toEqual(['AI Repair did not run: whether a repair of these steps already failed could not be checked (The Redis server could not be reached (ECONNREFUSED))']);
+  });
+
+  it('queue mode without Redis and without a Site Login: no configuration error, static data untouched, this process remembers', async () => {
+    const p = repairParams({ requireSignedSteps: false, signature: '', approvedBy: '', startUrl: 'https://example.com/list' });
+    const staticData: IDataObject = {};
+    const engine = failing();
+    await run(engine, { credentials: BROWSER_ONLY, staticData, params: p }, { executionsMode: 'queue' });
+    await run(engine, { credentials: BROWSER_ONLY, staticData, params: p }, { executionsMode: 'queue' });
+    expect(staticData).toEqual({});
+    expect(held(engine)).toEqual([undefined, HELD_V3]);
+  });
+
+  it('one repair per execution still has its own words; the record is not consulted then', async () => {
+    const engine = engineThat((input, call) => (call === 0 ? taskFail('incomplete', OUT_OF_TOKENS, { lane: 'agent', llmCalls: 1 }) : taskFail('drift_detected', `${DRIFT} (AI repair already ran in this execution)`)));
+    const [data] = await run(engine, { items: many(2) });
+    expect(engine.calls.map((c) => [c.repair?.alreadyRan, c.repair?.held])).toEqual([[false, undefined], [true, undefined]]);
+    expect(errorOf(data[1])).toBe(`drift_detected: ${DRIFT} (AI repair already ran in this execution)`);
   });
 });
 

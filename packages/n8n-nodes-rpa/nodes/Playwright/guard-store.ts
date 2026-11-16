@@ -11,6 +11,11 @@ export type LoginFingerprint = { salt: string; hash: string };
 /** `login` only on a login_failed record made since the fingerprint was added: a corrected login then gets one try. */
 export type BreakerRecord = { code: BreakerCode; at: string; resetKey: string; message: string; login?: LoginFingerprint };
 export type Lock = { token: string; expiresAt: number };
+/**
+ * A repair that failed (repair-stop.ts): when, with which AI Repair Reset Key, the steps version, the failure's code and
+ * what the chat model used. Nothing from the site or the model's words.
+ */
+export type RepairStop = { at: string; resetKey: string; version: number | null; code: string; llmCalls: number; tokens: number };
 
 /** Field-by-field equality of two breaker records. */
 export function sameRecord(a: BreakerRecord | undefined, b: BreakerRecord | undefined): boolean {
@@ -30,6 +35,9 @@ export interface GuardStore {
   setBreaker(key: string, record: BreakerRecord): Promise<void>;
   /** Deletes only if the stored record still equals `expected` (field by field). */
   deleteBreaker(key: string, expected: BreakerRecord): Promise<void>;
+  getRepairStop(key: string): Promise<RepairStop | undefined>;
+  setRepairStop(key: string, record: RepairStop): Promise<void>;
+  deleteRepairStop(key: string): Promise<void>;
   /** Null when another holder has an unexpired lock. */
   acquireLock(key: string, ttlMs: number): Promise<Lock | null>;
   /** Releases only if `lock.token` still holds it. */
@@ -41,6 +49,7 @@ export interface GuardStore {
 // ends, so it cannot serialize overlapping executions (locks) and is not saved for manual runs (breakers).
 const breakers = new Map<string, BreakerRecord>();
 const locks = new Map<string, Lock>();
+const repairStops = new Map<string, RepairStop>();
 
 const memoryStore: GuardStore = {
   shared: false,
@@ -52,6 +61,15 @@ const memoryStore: GuardStore = {
   },
   async deleteBreaker(key, expected) {
     if (sameRecord(breakers.get(key), expected)) breakers.delete(key);
+  },
+  async getRepairStop(key) {
+    return repairStops.get(key);
+  },
+  async setRepairStop(key, record) {
+    repairStops.set(key, record);
+  },
+  async deleteRepairStop(key) {
+    repairStops.delete(key);
   },
   async acquireLock(key, ttlMs) {
     const now = performance.now();
@@ -75,6 +93,7 @@ export function memoryGuardStore(): GuardStore {
 export function resetMemoryGuardStoreForTests(): void {
   breakers.clear();
   locks.clear();
+  repairStops.clear();
 }
 
 export const QUEUE_NEEDS_REDIS =

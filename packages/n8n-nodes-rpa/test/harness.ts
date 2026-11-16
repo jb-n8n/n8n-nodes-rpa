@@ -27,6 +27,8 @@ export interface HarnessOptions {
   /** Credential names by credential type (default `<type> credential`), as n8n gives them on getNode().credentials. */
   credentialNames?: Record<string, string>;
   staticData?: IDataObject;
+  /** getWorkflow().id. Default 'wf-1'. */
+  workflowId?: string;
   /** What getInputConnectionData returns. Leave undefined for "no model sub-node connected". */
   model?: unknown;
   modelDisabled?: boolean;
@@ -150,6 +152,7 @@ export function harness(o: HarnessOptions): Harness {
     getExecutionCancelSignal: () => o.signal,
     continueOnFail: () => o.continueOnFail ?? false,
     getExecutionId: () => 'exec-1',
+    getWorkflow: () => ({ id: o.workflowId ?? 'wf-1' }),
     evaluateExpression(expression: string, itemIndex: number): unknown {
       if (!o.evaluateExpression) throw new Error('evaluateExpression is not set up in this test');
       return o.evaluateExpression(expression, itemIndex);

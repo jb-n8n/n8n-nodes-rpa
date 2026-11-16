@@ -11,13 +11,14 @@ import { INPUTS_EXPRESSION, nodeInputs, nodeOutputs, OUTPUTS_EXPRESSION } from '
 import { OPERATIONS, properties, SUBTITLE, URL_HINT } from '../nodes/Playwright/description/index.js';
 import { ALL_OPERATIONS, ID_PATTERN_OPTION, QUICK_OPERATIONS } from '../nodes/Playwright/description/options.js';
 import { STEPS_PLACEHOLDER, UNSIGNED_NOTICE } from '../nodes/Playwright/description/runSteps.js';
-import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOCKED_BEFORE_UPGRADE_GUIDANCE, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, REPAIR_STOPPED_GUIDANCE, REPAIR_STOPPED_WORDS, SAYS_WHAT_TO_DO, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOCKED_BEFORE_UPGRADE_GUIDANCE, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, REPAIR_HELD_GUIDANCE, REPAIR_HELD_WORDS, REPAIR_STOPPED_GUIDANCE, REPAIR_STOPPED_WORDS, SAYS_WHAT_TO_DO, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
 import { runnerAppNotAllowed, secretAppNotListed, secretHostNotListed } from '../../engine/src/messages.js';
 import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut, siteLoginLockedOutBeforeUpgrade } from '../nodes/Playwright/execute.js';
 import { COMPILERS, quickFieldNames, type QuickOp } from '../nodes/Playwright/operations/quick.js';
 import { executeRunSteps, STEPS_EMPTY_NEEDS_REPAIR } from '../nodes/Playwright/operations/runSteps.js';
 import { readRunStepsParams } from '../nodes/Playwright/operations/runStepsParams.js';
 import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
+import { repairHeld } from '../nodes/Playwright/repair-stop.js';
 import { fakeEngine } from './fake-engine.js';
 import { harness } from './harness.js';
 
@@ -202,10 +203,10 @@ describe('Run Steps and Sign Steps fields', () => {
     const forRunOrSign = optionEntries.filter((o) => (o.displayOptions?.show?.['/operation'] ?? []).some((op) => op === 'runSteps' || op === 'signSteps'));
     expect(forRunOrSign.map((o) => o.name)).toEqual([
       'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'idPattern', 'totalPattern', 'requiredFields', 'emptyPattern',
-      'variables', 'name', 'expectedVersion', 'allowUnsignedWrites', 'deliverUnconfirmed', 'maxActions', 'maxTokens', 'codeWorkflowId', 'codeTimeout', 'breakerResetKey', 'saveTrace',
-      'maxItems',
+      'variables', 'name', 'expectedVersion', 'allowUnsignedWrites', 'deliverUnconfirmed', 'maxActions', 'maxTokens', 'repairResetKey', 'codeWorkflowId', 'codeTimeout', 'breakerResetKey',
+      'saveTrace', 'maxItems',
     ]);
-    for (const name of ['deliverUnconfirmed', 'maxActions', 'maxTokens']) expect(option(name).displayOptions?.show).toEqual({ '/operation': ['runSteps'], '/aiRepair': [true] });
+    for (const name of ['deliverUnconfirmed', 'maxActions', 'maxTokens', 'repairResetKey']) expect(option(name).displayOptions?.show).toEqual({ '/operation': ['runSteps'], '/aiRepair': [true] });
     expect(option('maxItems').displayOptions?.show).toEqual({ '/operation': ALL_OPERATIONS }); // every operation, quick ones included
     expect(option('timeout')).toMatchObject({ displayName: 'Timeout (Seconds)', default: 30 });
     expect(option('maxSeconds')).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 600 } });
@@ -216,6 +217,7 @@ describe('Run Steps and Sign Steps fields', () => {
     expect(option('variables').hint).toBe('Not n8n expressions; {{var.name}} is replaced inside steps.');
     expect(option('maxActions')).toMatchObject({ default: 40, typeOptions: { minValue: 1, maxValue: 200 } });
     expect(option('maxTokens')).toMatchObject({ default: 200000, typeOptions: { minValue: 1000, maxValue: 1000000 } });
+    expect(option('repairResetKey')).toMatchObject({ displayName: 'AI Repair Reset Key', type: 'string', default: '', noDataExpression: true });
     expect(option('saveTrace')).toMatchObject({ displayName: 'Debug Trace', default: 'onFailure' });
     expect(option('maxItems')).toMatchObject({ default: 100, typeOptions: { minValue: 1 } });
   });
@@ -448,7 +450,7 @@ describe('wording and guidance', () => {
     // The engine's words, copied in errors.ts: the node never loads the engine to read a constant.
     expect(REPAIR_STOPPED_WORDS).toEqual([` ${WENT_IN_CIRCLES}: `, `${AGENT_OUT_OF_BUDGET}: the token budget`, `${AGENT_OUT_OF_BUDGET}: the action budget`]);
     expect(REPAIR_STOPPED_GUIDANCE).toBe(
-      "Self-repair did not find the data and stopped; the message says why and what it used. Find the data on the site yourself, then say where it is now in the Goal on the RPA node (for example the menu and the section's name), or change the steps on the import form. Until then every run tries again: turn AI Repair off to stop that.",
+      "Self-repair did not find the data and stopped; the message says why and what it used. The next runs do not try again until you act. Find the data on the site yourself, then say where it is now in the Goal on the RPA node (for example the menu and the section's name), or change the steps on the import form: either one lets it try again. To let it try again unchanged, type a new value (any text) in Options → AI Repair Reset Key.",
     );
     const circles = 'the repair went in circles: it did the same action on the same page 4 times without finding anything new. It used 16 chat model calls and 66,827 tokens.';
     expect(guidanceFor('incomplete', circles)).toBe(REPAIR_STOPPED_GUIDANCE);
@@ -459,6 +461,23 @@ describe('wording and guidance', () => {
     expect(guidanceFor('incomplete', 'the agent ran out of budget: the run was cancelled')).toBe(GUIDANCE.incomplete);
     expect(guidanceFor('not_found', circles)).toBe(GUIDANCE.not_found);
     expect(REPAIR_STOPPED_GUIDANCE).not.toMatch(/[<>]|\d+\.\d+\.\d+/);
+  });
+  it('a run whose repair was held (a repair of these steps already failed) gets its own guidance, by the words of its sentence', () => {
+    expect(REPAIR_HELD_GUIDANCE).toBe(
+      'A repair of these steps already failed, so this run did not call the chat model. Find the data on the site yourself, then say where it is now in the Goal on the RPA node, or change the steps on the import form: either one lets it try again. To let it try again unchanged, type a new value (any text) in Options → AI Repair Reset Key.',
+    );
+    for (const [version, first] of [[3, false], [null, false], [null, true]] as const) {
+      const held = repairHeld(version, first);
+      expect(held).toContain(REPAIR_HELD_WORDS);
+      expect(guidanceFor('drift_detected', `Read the items: not found (${held})`)).toBe(REPAIR_HELD_GUIDANCE);
+    }
+    expect(repairHeld(3, false)).toBe(
+      'a repair already failed for steps version 3, so AI Repair did not run: change the Goal, approve a new version of the steps, or change AI Repair Reset Key in Options, to let it try again',
+    );
+    expect(repairHeld(null, true)).toBe(
+      'a repair already failed for the first version of these steps, so AI Repair did not run: change the Goal, approve a new version of the steps, or change AI Repair Reset Key in Options, to let it try again',
+    );
+    expect(guidanceFor('incomplete', repairHeld(3, false))).toBe(GUIDANCE.incomplete);
   });
 });
 

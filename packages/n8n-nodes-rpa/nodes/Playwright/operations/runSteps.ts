@@ -7,6 +7,7 @@ import type { Engine } from '../engine.js';
 import { configNodeError, stepsRunError, type FailureDetails } from '../errors.js';
 import { noteRepairRan, repairAlreadyRan, runOne, siteLoginGuard, type GuardSpec, type RunOneResult } from '../execute.js';
 import { openGuardStore, type GuardStore, type GuardStoreDeps } from '../guard-store.js';
+import { heldRepair, noteRepairFailed, REPAIR_NOT_AGAIN, repairFailed, repairHeld, repairStopKey, repairUnchecked } from '../repair-stop.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, dataItem, failureItem, OUTPUT_NOT_BUILT, repairedStepsItem } from '../output.js';
 import { codeSettingsFor } from './codeWorkflow.js';
@@ -129,6 +130,14 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     const refused = engine.repairPrecondition(p.steps.kind === 'steps' ? p.steps.raw : null, p.output, { name: p.name, ...(download ? { download } : {}) });
     if (refused !== undefined) return configError(refused, id.name);
   }
+  // A repair that failed for these steps and Goal is not tried again until a person acts (repair-stop.ts).
+  const stopKey = repair ? repairStopKey(ctx.getWorkflow?.().id ?? '', id, p.goal) : undefined;
+  let held: string | undefined;
+  if (repair && stopKey && !repair.alreadyRan) {
+    const found = await heldRepair(ctx, i, deps, stopKey, p.repairResetKey);
+    if (found) held = 'unreadable' in found ? repairUnchecked(found.unreadable) : repairHeld(id.version, p.steps.kind === 'empty');
+  }
+  const runRepair: TaskInput['repair'] = repair && held ? { ...repair, held } : repair;
   const signal = ctx.getExecutionCancelSignal();
   const input = (): TaskInput => ({
     script: p.steps.kind === 'steps' ? p.steps.raw : null,
@@ -146,7 +155,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     viewport: p.common.viewport,
     saveTrace: p.common.saveTrace,
     ...(signal ? { signal } : {}),
-    ...(repair ? { repair } : {}),
+    ...(runRepair ? { repair: runRepair } : {}),
   });
 
   let ran: RunOneResult;
@@ -162,10 +171,17 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
   // The repair is used up only by model effort: a model call, or repaired steps. Refusals before any model call
   // (field extraction, no browser, start page down, cancelled early, configuration errors) leave it for a later item.
   if (repair && r.lane === 'agent' && ((r.llmCalls ?? 0) > 0 || (r.ok && r.proposal !== undefined))) noteRepairRan(ctx);
+  const failedRepair = !!repair && !!stopKey && !held && repairFailed(r, signal?.aborted === true);
+  if (failedRepair && stopKey && r.lane === 'agent') {
+    await noteRepairFailed(ctx, i, deps, stopKey, {
+      at: new Date().toISOString(), resetKey: p.repairResetKey.trim(), version: id.version, code: r.ok ? 'unconfirmed' : r.code, llmCalls: r.llmCalls ?? 0, tokens: r.tokens ?? 0,
+    });
+  }
   if (!r.ok) {
     if (r.configError) return configError(r.message, id.name, r.submitted === true);
     const hint = r.code === 'drift_detected' && p.aiRepair && !modelConnected ? ` (${NO_MODEL})` : '';
-    return failure({ ...r, message: `${withVariableHint(r.message)}${hint}` });
+    const message = `${withVariableHint(r.message)}${hint}`;
+    return failure({ ...r, message: failedRepair ? `${message}${/[.!?]$/.test(message) ? '' : '.'} ${REPAIR_NOT_AGAIN}` : message });
   }
   try {
     const repaired = r.lane === 'agent' && r.proposal ? { ...(await repairedStepsItem(ctx, engine, r.proposal, { byModel: true })), pairedItem: paired } : undefined;

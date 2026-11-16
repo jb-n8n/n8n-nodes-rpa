@@ -195,7 +195,7 @@ describe('version 2: a new node shows less', () => {
     expect(SHARE_ACROSS_WORKERS_PROPERTY).toMatchObject({
       displayName: 'Share Login Breaker Across Workers (RPA Redis)', name: 'shareAcrossWorkers', type: 'boolean', default: false, noDataExpression: true,
     });
-    expect(SHARE_ACROSS_WORKERS_PROPERTY.description).toMatch(/^Whether the login breaker and the run lock are kept in Redis/);
+    expect(SHARE_ACROSS_WORKERS_PROPERTY.description).toMatch(/^Whether the login breaker, the run lock and the record of a failed AI repair are kept in Redis/);
     expect(SHARE_ACROSS_WORKERS_PROPERTY.description).toContain('queue mode');
     expect(String(SHARE_ACROSS_WORKERS_PROPERTY.description)).not.toMatch(/secure|safe|guarantee|[<>]/i);
     expect(QUEUE_NEEDS_REDIS_V2).toContain('Turn on Share Login Breaker Across Workers (RPA Redis)');
