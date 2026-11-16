@@ -413,7 +413,8 @@ describe('runTask', () => {
     const ac = new AbortController();
     const model = fakeModel([() => { ac.abort(); return { name: 'look', args: {} }; }, use('look'), done()]);
     const during = await runTask(task({ model, signal: ac.signal }));
-    expect(during).toMatchObject({ ok: false, code: 'incomplete', message: 'run cancelled', lane: 'agent' });
+    // Once the model was called, the message ends with what it used.
+    expect(during).toMatchObject({ ok: false, code: 'incomplete', message: 'run cancelled. It used 1 chat model call and 110 tokens.', lane: 'agent' });
   });
   it('a download run without an output spec returns the file (was: file output with an empty MIME list)', async () => {
     const r = await runTask(task({ vars: { from: '2000-01-01' }, output: undefined }, reportScript(portal.url)));
@@ -469,7 +470,7 @@ describe('runTask', () => {
     try {
       const r = await runTask(firstRun({ model, signal: ac.signal }));
       expect(proveCalls).toHaveLength(1);
-      expect(r).toMatchObject({ ok: false, code: 'incomplete', message: 'run cancelled', lane: 'agent' });
+      expect(r).toMatchObject({ ok: false, code: 'incomplete', message: 'run cancelled. It used 5 chat model calls and 550 tokens.', lane: 'agent' });
     } finally {
       clearInterval(watch);
     }
@@ -589,7 +590,7 @@ describe('runTask', () => {
       ]);
       const r = await runTask(task({ model }));
       if (r.ok) throw new Error(JSON.stringify(r).slice(0, 500));
-      expect(r).toMatchObject({ code: 'policy_violation', lane: 'agent', message: 'a blocked request was attempted during the run' });
+      expect(r).toMatchObject({ code: 'policy_violation', lane: 'agent', message: 'a blocked request was attempted during the run. It used 3 chat model calls and 330 tokens.' });
       expect(r.violations).toContainEqual(expect.objectContaining({ kind: 'host', fatal: true, url: 'https://evil.example/late' }));
       expect(proveCalls).toHaveLength(0);
       expect(r.trace?.length).toBeGreaterThan(1000); // the healing trace
@@ -651,8 +652,10 @@ describe('runTask', () => {
       const broken: ChatModel = { bindTools: () => ({ invoke: async () => { throw new Error(err); } }) };
       const r = await runTask(task({ model: broken }));
       if (r.ok) throw new Error('expected failure');
-      expect(r.message).toMatch(/^model unavailable: 401 invalid x-api-key \[redacted\]\?\[redacted\] \[redacted\] for \[secret\] z+$/);
-      expect(r.message.length).toBeLessThanOrEqual('model unavailable: '.length + 200);
+      // The call that failed still counts (it may have been billed); the provider reported no tokens for it.
+      const used = '. It used 1 chat model call and 0 tokens.';
+      expect(r.message).toMatch(/^model unavailable: 401 invalid x-api-key \[redacted\]\?\[redacted\] \[redacted\] for \[secret\] z+\. It used 1 chat model call and 0 tokens\.$/);
+      expect(r.message.length).toBeLessThanOrEqual('model unavailable: '.length + 200 + used.length);
       expect(JSON.stringify(r)).not.toMatch(/SECRETKEYVALUE|QWERTY|abc\.def/);
     });
   });
@@ -907,13 +910,26 @@ describe('repair rules', () => {
     }
   });
 
+  it('a repair that goes in circles stops early, and its message says what the model used', async () => {
+    // The section moved under Resources; the model goes round Compliance → Programs → Service, as in the recorded run.
+    portal.setState({ label: 'Field Actions', parent: 'resources' });
+    const cycle = ['Compliance', 'Programs', 'Service'];
+    const r = await runTask(task({ model: fakeModel(Array.from({ length: 40 }, (_, i) => clickNamed(cycle[i % 3]))) }));
+    expect(r).toMatchObject({ ok: false, code: 'incomplete', lane: 'agent', llmCalls: 12, tokens: 1320 });
+    if (!r.ok) {
+      expect(r.message).toBe(
+        'the repair went in circles: it did the same action on the same page 4 times without finding anything new. It used 12 chat model calls and 1,320 tokens.',
+      );
+    }
+  });
+
   it('agent-lane messages never show a URL query string: model notes and withheld-row reasons', async () => {
     portal.setState({ label: 'Field Actions' });
     const note = 'looked at http://x.example/list?token=abc#frag';
     const nf = await runTask(task({ model: fakeModel([done('not_found', note), done('not_found', note)]) }));
     expect(nf).toMatchObject({ ok: false, code: 'not_found', lane: 'agent' });
     if (!nf.ok) {
-      expect(nf.message).toBe('the agent did not find the data: looked at http://x.example/list');
+      expect(nf.message).toBe('the agent did not find the data: looked at http://x.example/list. It used 2 chat model calls and 220 tokens.');
       expect(JSON.stringify(nf.agentLog)).not.toMatch(/token=abc|#frag/);
     }
     portal.reset();
@@ -922,7 +938,7 @@ describe('repair rules', () => {
     const withheld = await runTask(task({ model: fakeModel(HEAL()), deliverUnconfirmed: false }));
     expect(withheld).toMatchObject({ ok: false, code: 'incomplete', lane: 'agent' });
     if (!withheld.ok) {
-      expect(withheld.message).toBe(`${ROWS_WITHHELD}. Reason: Open the report: page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:1/report`);
+      expect(withheld.message).toBe(`${ROWS_WITHHELD}. Reason: Open the report: page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:1/report. It used 3 chat model calls and 330 tokens.`);
     }
   });
 
@@ -994,11 +1010,13 @@ describe('repair rules', () => {
     expect(clampAgentBudget({ maxActions: Number.NaN, maxTokens: Number.POSITIVE_INFINITY })).toEqual({ maxActions: 40, maxTokens: 200_000 });
     expect(clampAgentBudget(undefined)).toEqual({ maxActions: 40, maxTokens: 200_000 });
     expect([MAX_AGENT_ACTIONS, MAX_AGENT_TOKENS]).toEqual([200, 1_000_000]);
-    // Through runTask, a 10-token budget behaves as 1,000: at 110 tokens per fake call, the tenth call crosses it.
-    const looks = fakeModel(Array.from({ length: 30 }, () => use('look')));
+    // Through runTask, a 10-token budget behaves as 1,000: at 340 tokens per fake call, the third call crosses it
+    // (before the circle guard, which stops the fourth look at one page).
+    const looks = fakeModel(Array.from({ length: 30 }, () => use('look')), { tokensPerCall: 330 });
     const floor = await runTask(firstRun({ model: looks, agentBudget: { maxTokens: 10 } }));
-    expect(floor).toMatchObject({ ok: false, code: 'incomplete', lane: 'agent', llmCalls: 10 });
-    expect(looks.invocations).toHaveLength(10);
+    expect(floor).toMatchObject({ ok: false, code: 'incomplete', lane: 'agent', llmCalls: 3 });
+    expect(looks.invocations).toHaveLength(3);
+    if (!floor.ok) expect(floor.message).toBe('the agent ran out of budget: the token budget of 1000 ran out. It used 3 chat model calls and 1,020 tokens.');
     // …and 10,000 actions reach the agent loop as 200.
     loopBudgets.length = 0;
     await runTask(firstRun({ model: fakeModel([done('not_found', 'nothing')]), agentBudget: { maxActions: 10_000, maxTokens: 5_000_000 } }));
@@ -1060,7 +1078,7 @@ describe('file repairs', () => {
     const r = await runTask(fileTask({ model, deliverUnconfirmed: true }));
     expect(proveCalls).toHaveLength(1);
     expect(proveCalls[0]!.input.expectFile).toBe(true);
-    expect(r).toMatchObject({ ok: false, code: 'incomplete', lane: 'agent', message: `${FILE_WITHHELD}. Reason: the proof downloaded no file` });
+    expect(r).toMatchObject({ ok: false, code: 'incomplete', lane: 'agent', message: `${FILE_WITHHELD}. Reason: the proof downloaded no file. It used 2 chat model calls and 220 tokens.` });
     expect(r).not.toHaveProperty('files');
     expect(r).not.toHaveProperty('proposal');
     expect(model.invocations).toHaveLength(2);
@@ -1071,7 +1089,7 @@ describe('file repairs', () => {
     const file = { fileName: 'report.csv', mimeType: 'text/csv', bytes: 20, columns: ['code', 'name'], rows: 1 };
     proveRewrite.next = (r) => ({ ...r, ok: true, reasons: [], file });
     const r = await runTask(fileTask({ model: fakeModel(HEAL_FILE()), deliverUnconfirmed: false }));
-    expect(r).toMatchObject({ ok: false, code: 'incomplete', lane: 'agent', message: FILE_NOT_DELIVERABLE });
+    expect(r).toMatchObject({ ok: false, code: 'incomplete', lane: 'agent', message: `${FILE_NOT_DELIVERABLE}. It used 2 chat model calls and 220 tokens.` });
     expect(r).not.toHaveProperty('files');
     expect(FILE_NOT_DELIVERABLE).toBe('the proof passed but there is no downloaded file to deliver, so nothing was delivered');
   });

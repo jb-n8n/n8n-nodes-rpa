@@ -10,6 +10,20 @@ import { AGENT_TOOLS, FILE_AGENT_TOOLS, AgentTools, MAX_TYPED, neutralize, type 
 export const DEFAULT_MAX_ACTIONS = 40;
 export const DEFAULT_MAX_TOKENS = 200_000;
 const MAX_IDLE_TURNS = 3;
+/**
+ * The circle guard (AgentTools.lastRepeat): the same action on the same page, with nothing new since (no page not seen
+ * before, no new rows, no file). The third time the model is told once; the fourth time the run stops.
+ */
+export const CIRCLE_NUDGE = 3;
+export const CIRCLE_STOP = 4;
+export const CIRCLE_NUDGE_TEXT =
+  `You have now done this same action on this same page ${CIRCLE_NUDGE} times, and nothing new came of it: you are going in circles. `
+  + 'The run stops if you keep repeating. Open a link, tab or section you have not tried yet, or call done with not_found.';
+/** The engine's note before the first page block of a tool result (or at its end when there is none). */
+export function withNote(text: string, note: string): string {
+  const at = text.indexOf('<page_content>');
+  return at < 0 ? `${text}\n${note}` : `${text.slice(0, at)}${note}\n${text.slice(at)}`;
+}
 /** Tool results keep their page snapshot only for this many latest results; older ones are elided. */
 const KEEP_PAGES = 2;
 const PAGE_BLOCK = /<page_content>[\s\S]*<\/page_content>/;
@@ -44,8 +58,11 @@ export interface AgentLoopInput {
   signal?: AbortSignal;
 }
 export interface AgentLoopResult {
-  /** 'budget': a cap or the deadline/cancellation stopped the run. 'error': infrastructure failed (model call failed, model silent, page unreadable); this says nothing about the site. */
-  outcome: DoneOutcome | 'budget' | 'error';
+  /**
+   * 'budget': a cap or the deadline/cancellation stopped the run. 'circling': the circle guard stopped it. 'error':
+   * infrastructure failed (model call failed, model silent, page unreadable); this says nothing about the site.
+   */
+  outcome: DoneOutcome | 'budget' | 'circling' | 'error';
   actions: AgentAction[];
   tokens: number;
   llmCalls: number;
@@ -153,6 +170,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
   let llmCalls = 0;
   let used = 0;
   let idle = 0;
+  let nudged = false;
   const maskArgs = (args: Record<string, unknown>) => JSON.parse(masker.mask(JSON.stringify(args))) as Record<string, unknown>;
   const finish = (outcome: AgentLoopResult['outcome'], note: string): AgentLoopResult => ({
     outcome, actions: tools.actions, tokens, llmCalls, note: masker.mask(note).slice(0, 500),
@@ -224,10 +242,16 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
     if (ctx.violations.some((v) => v.fatal)) return finish('blocked', BLOCKED_STOP);
     const out = await tools.run(first);
     used++;
-    messages.push({ role: 'tool', tool_call_id: first.id, content: out.text, status: out.error ? 'error' : 'success' });
+    const nudge = !out.done && !nudged && tools.lastRepeat >= CIRCLE_NUDGE && tools.lastRepeat < CIRCLE_STOP;
+    if (nudge) nudged = true;
+    const content = nudge ? withNote(out.text, CIRCLE_NUDGE_TEXT) : out.text;
+    messages.push({ role: 'tool', tool_call_id: first.id, content, status: out.error ? 'error' : 'success' });
     // Every call gets its result (providers require the pairing); the extra ones say plainly that they did not run.
     const notRun = `ERROR: not run: only the first tool call of a turn runs (only the ${echoedToolName(first.name)} call was run; read its result).`;
     for (const c of extra) messages.push({ role: 'tool', tool_call_id: c.id, content: notRun, status: 'error' });
     if (out.done) return finish(out.done.outcome, out.done.note);
+    if (tools.lastRepeat >= CIRCLE_STOP) {
+      return finish('circling', `it did the same action on the same page ${tools.lastRepeat} times without finding anything new`);
+    }
   }
 }

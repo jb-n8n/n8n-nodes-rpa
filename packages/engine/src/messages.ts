@@ -17,6 +17,18 @@ export const secretInLocation = (location: string) => `${location} contains a cr
 /** renderVars: a rendered {{var.x}} value contains a secret. */
 export const INPUT_CONTAINS_SECRET = 'an input value contains a credential secret';
 
+// Agent lane: a repair (or a first build) that stopped before it found the data. The node's guidance matches these words.
+export const AGENT_OUT_OF_BUDGET = 'the agent ran out of budget';
+/** The circle guard stopped the agent: `the repair went in circles: …` (`the AI …` on a first build). */
+export const WENT_IN_CIRCLES = 'went in circles';
+/** An agent-lane failure once the model was called: the message ends with what it used. */
+export function withCost(message: string, llmCalls: number, tokens: number): string {
+  if (llmCalls <= 0) return message;
+  const n = (x: number) => x.toLocaleString('en-US');
+  const used = `It used ${n(llmCalls)} chat model ${llmCalls === 1 ? 'call' : 'calls'} and ${n(tokens)} tokens.`;
+  return `${message}${/[.!?]$/.test(message) ? '' : '.'} ${used}`;
+}
+
 // Agent lane: the run ended on a login outcome after the agent's own sign_in.
 export const agentSignInLocked = (note: string) => `the site says the account is locked after the agent's sign-in: ${note}`;
 export const agentSignInRejected = (note: string) => `the site rejected the agent's sign-in: ${note}`;
