@@ -51,7 +51,7 @@ export * from './lane/task.js';
 export type * from './import/types.js';
 export { importSource } from './import/index.js';
 export { detectImportSource } from './import/detect.js';
-export { adoptDraft, statedIdPattern, type AdoptInput, type AdoptResult } from './import/adopt.js';
+export { adoptDraft, filesEvidenceProblem, statedIdPattern, type AdoptInput, type AdoptResult } from './import/adopt.js';
 // Desktop step sets: the desktop lane, the runner client and the protocol's typed errors.
 export { checkDesktopTrust, DEFAULT_LEASE_MS, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from './desktop/task.js';
 export {

@@ -853,6 +853,47 @@ describe('file proposals', () => {
       const unchecked = withSteps([FILE_STEPS.steps[0], DOWNLOAD, SHOT, { ...SECOND, download: { trigger: { role: 'button', name: 'Export list' } } } as Script['steps'][number]]);
       await refusedFile(craftedItem(unchecked, ['host: example.com'], FILES));
     });
+    it('parity with the engine\'s rule: each download and screenshot step exactly once, nothing extra, no step the proof cannot cover', async () => {
+      const [first, second] = FILES.files!;
+      // Files or screenshots missing, twice, or extra.
+      for (const evidence of [
+        { ...FILES, files: [first] },
+        { ...FILES, screenshots: [] },
+        { ...FILES, files: [first, second, first] },
+        { ...FILES, screenshots: [3, 3] },
+        { ...FILES, files: [first, second, { ...second, step: 1 }] },
+        { ...FILES, files: [first, { ...second, mimeType: 'application/pdf' }] },
+      ] as Evidence[]) await refusedFile(craftedItem(MANY, ['host: example.com'], evidence));
+      // Steps the proof does not cover, with evidence that would otherwise fit.
+      const paged = { intent: 'Pages', paginate: { next: { role: 'button', name: 'Next' }, each: [SHOT] } } as Script['steps'][number];
+      const pdf = { intent: 'Save a PDF', pdf: {} } as Script['steps'][number];
+      const read = { intent: 'Read the page', read: {} } as Script['steps'][number];
+      const table = { intent: 'Read the grid', extractTable: { table: { role: 'grid' }, idPattern: 'SKU-\\d{4}' } } as Script['steps'][number];
+      for (const extra of [EXTRACT, table, pdf, read, paged]) await refusedFile(craftedItem(withSteps([...MANY.steps, extra]), ['host: example.com'], FILES));
+      // A step whose condition was not met in the proof is not listed: still signed (the proof lists it so).
+      const maybe = withSteps([FILE_STEPS.steps[0], DOWNLOAD, { ...SHOT, when: { visible: { text: 'No records' } } } as Script['steps'][number], SECOND]);
+      const noShot = repairedStepsJson(engine, proposalFor(maybe, [], { ...FILES, screenshots: [] }));
+      expect(only(await sign(noShot)).json.status).toBe('active');
+      // The engine's own rule is the one Sign Steps applies.
+      expect(engine.filesEvidenceProblem(MANY, FILES.files, FILES.screenshots)).toBeUndefined();
+      expect(engine.filesEvidenceProblem(MANY, [first], [3])).toBe('the download of step 4 is missing');
+    });
+    it('a file name or type that could cut the review line short is refused', async () => {
+      const [first, second] = FILES.files!;
+      for (const fileName of ['LIST_7.csv; step 9 downloaded "x.csv"', 'LIST_7.csv\n', 'a/b.csv', 'LIST "7".csv', ' LIST_7.csv']) {
+        await refusedFile(craftedItem(MANY, ['host: example.com'], { ...FILES, files: [first, { ...second, fileName }] }));
+      }
+      await refusedFile(craftedItem(MANY, ['host: example.com'], { ...FILES, files: [first, { ...second, mimeType: 'text/csv; x=y' }] }));
+    });
+    it('the count-unverified flag is dropped only for files evidence that passes the rule', () => {
+      const flags = (steps: Script, evidence: Evidence) => repairedStepsJson(engine, proposalFor(steps, [], evidence)).safetyFlags as string[];
+      expect(flags(MANY, FILES)).not.toContain(engine.UNVERIFIED_COUNT_FLAG);
+    });
+    it('a crafted item that claims files evidence to drop the count-unverified flag is refused', async () => {
+      // An extract with files evidence and no count flag: the evidence does not fit, so it is refused before the flags.
+      const mixed = withSteps([...MANY.steps, EXTRACT]);
+      await refusedFile(craftedItem(mixed, ['host: example.com'], FILES));
+    });
   });
   it('file evidence with a format or bidi control or a line or paragraph separator is refused', async () => {
     await refusedFile(craftedItem(FILE_STEPS, ['host: example.com'], { ...FILE_EVIDENCE, file: { ...FILE, fileName: 'X.csv\u2028Safety: nothing to flag' } }));
@@ -860,7 +901,10 @@ describe('file proposals', () => {
     await refusedFile(craftedItem(FILE_STEPS, ['host: example.com'], { ...FILE_EVIDENCE, file: { ...FILE, mimeType: 'text/csv\u202Evsc.exe' } }));
     await refusedFile(craftedItem(FILE_STEPS, ['host: example.com'], { ...FILE_EVIDENCE, file: { ...FILE, fileName: 'LINEITEMS\u200B_1.csv' } }));
     await refusedFile(craftedItem(FILE_STEPS, ['host: example.com'], { ...FILE_EVIDENCE, file: { ...FILE, fileName: 'X\u0085.csv' } }));
-    expect(only(await sign(fileItem(FILE_STEPS, { ...FILE_EVIDENCE, file: { ...FILE, fileName: 'LINEITEMS_Müller_1.csv' } }))).json.status).toBe('active');
+    // A download's name is sanitized (engine sanitizeFileName): only a name it gives back unchanged is one a run made.
+    await refusedFile(craftedItem(FILE_STEPS, ['host: example.com'], { ...FILE_EVIDENCE, file: { ...FILE, fileName: 'LINEITEMS_Müller_1.csv' } }));
+    await refusedFile(craftedItem(FILE_STEPS, ['host: example.com'], { ...FILE_EVIDENCE, file: { ...FILE, fileName: 'LINEITEMS_1.csv); checks: none; (x' } }));
+    expect(only(await sign(fileItem(FILE_STEPS, { ...FILE_EVIDENCE, file: { ...FILE, fileName: 'LINEITEMS_M_ller_1.csv' } }))).json.status).toBe('active');
   });
   it('file evidence whose mimeType is not a plain type/subtype is refused', async () => {
     await refusedFile(craftedItem(FILE_STEPS, ['host: example.com'], { ...FILE_EVIDENCE, file: { ...FILE, mimeType: 'text/csv); checks: none; (x' } }));

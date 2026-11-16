@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startPortal, SANDBOX } from 'n8n-rpa-sandbox/testing.js';
 import { openSession } from '../src/browser/session.js';
 import { openReusedSession } from '../src/prove/entry.js';
+import { filesEvidenceProblem } from '../src/import/adopt.js';
 import { proveScript, type ProveInput } from '../src/prove/prove.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { installInterrupts } from '../src/steps/interrupts.js';
@@ -335,7 +336,10 @@ describe('file proofs', () => {
     const zip = { intent: 'Download the archive', download: { trigger: { css: '#zip' }, mime: ['application/zip'], check: { name: '^archive' } } } as Step;
     const shot = { intent: 'Keep a screenshot', screenshot: { capture: 'viewport' } } as Step;
     it('passes with each checked file and the screenshot, each with its step number', async () => {
-      const r = await proveFiles({ ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, csv, shot, zip] });
+      const script: Script = { ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, csv, shot, zip] };
+      const r = await proveFiles(script);
+      // What a real proof gives is what Sign Steps takes: the one rule (filesEvidenceProblem).
+      expect(filesEvidenceProblem(script, r.files, r.screenshots)).toBeUndefined();
       expect(r.reasons).toEqual([]);
       expect(r.ok).toBe(true);
       expect(r.files?.map((f) => [f.step, f.fileName])).toEqual([[2, 'report.csv'], [4, 'archive.zip']]);
@@ -345,7 +349,9 @@ describe('file proofs', () => {
     });
     it('a step its condition skipped is not listed; an optional download that brought no file fails the proof', async () => {
       const skipped = { ...zip, when: { visible: { text: 'No such text' } } } as Step;
-      const ok = await proveFiles({ ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, csv, skipped] });
+      const withSkip: Script = { ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, csv, skipped] };
+      const ok = await proveFiles(withSkip);
+      expect(filesEvidenceProblem(withSkip, ok.files, ok.screenshots)).toBeUndefined();
       expect(ok.reasons).toEqual([]);
       expect(ok.files?.map((f) => f.step)).toEqual([2]);
       const missing = { intent: 'Download a missing file', optional: true, timeoutMs: 500, download: { trigger: { css: '#none' }, check: { name: '^x' } } } as Step;

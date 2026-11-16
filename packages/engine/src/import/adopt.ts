@@ -8,6 +8,7 @@ import { buildProposal, proposalDigest, stepChanges, type Proposal } from '../pr
 import { proveScript } from '../prove/prove.js';
 import { scriptHash } from '../sign.js';
 import { parseScript } from '../steps/parse.js';
+import { DEFAULT_MIME, sanitizeFileName } from '../steps/handlers/files.js';
 import { shownMessage } from '../steps/urls.js';
 import type { ErrorCode, OutputSpec, Script, Step } from '../types.js';
 import { CANCELLED, clampBudget, codeSettings, laneFailure, laneMasker, traceOn } from '../lane/script-lane.js';
@@ -92,6 +93,68 @@ export function adoptableKind(script: Script, output: OutputSpec | undefined): {
     return cannot(`the download in ${at(unchecked)} has no check that names the file or its columns (check.name or check.columns), so the replay cannot tell the right file from a wrong one`);
   }
   return downloads.length === 1 && shots.length === 0 ? { kind: 'file' } : { kind: 'files' };
+}
+
+/** A MIME type as sniffMime writes it: type/subtype of lowercase letters, digits, dot, plus and hyphen. */
+const MIME_SHAPE = /^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/;
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const whole = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+
+/**
+ * Why evidence of several files or a screenshot (`files`, `screenshots`: untrusted, as an item carries them) does not
+ * go with the steps `raw`, or undefined when it does. One rule for the import's proof (adoptDraft checks its own result
+ * with it) and for Sign Steps, which signs only what this accepts:
+ * - the steps are of the kind such a proof covers (adoptableKind 'files': no extract, table, PDF or read step, no
+ *   download or screenshot inside paginate, every download with a check that names its file or columns, and several
+ *   downloads or a screenshot);
+ * - each file comes from a distinct top-level download step and each screenshot from a distinct top-level screenshot
+ *   step; nothing extra, nothing twice, at least one of either;
+ * - every download step without `when` has its file, and every screenshot step without `when` that is not optional has
+ *   its screenshot (a step whose condition was not met proves nothing and is not listed, as the proof lists it);
+ * - each file is shaped as a download makes it: its name is a sanitized file name (sanitizeFileName gives it back
+ *   unchanged, so it holds no "; ", quote, line break or path), its type a MIME type the step allows (`mime`, else the
+ *   default list), whole bytes and rows, columns a list of text or null.
+ */
+export function filesEvidenceProblem(raw: unknown, files: unknown, screenshots: unknown): string | undefined {
+  let script: Script;
+  try {
+    script = parseScript(structuredClone(raw), { defaultStartUrl: 'https://steps.invalid/' });
+  } catch {
+    return 'the steps do not parse';
+  }
+  const kind = adoptableKind(script, undefined);
+  if (!('kind' in kind) || kind.kind !== 'files') return 'the steps are not ones a proof of several files or a screenshot covers';
+  if (!Array.isArray(files) || !Array.isArray(screenshots)) return 'files and screenshots must both be lists';
+  if (files.length + screenshots.length === 0) return 'the proof lists no file and no screenshot';
+  const top = script.steps;
+  const stepOf = (n: unknown): Step | undefined => (typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= top.length ? top[n - 1] : undefined);
+  const withFile = new Set<number>();
+  for (const f of files) {
+    if (!isRecord(f)) return 'a file is not an object';
+    const step = stepOf(f.step);
+    if (!step || !('download' in step)) return 'a file names no download step';
+    if (withFile.has(f.step as number)) return `step ${f.step as number} is listed twice`;
+    withFile.add(f.step as number);
+    if (typeof f.fileName !== 'string' || sanitizeFileName(f.fileName) !== f.fileName) return `the file of step ${f.step as number} has a name no download gets`;
+    if (typeof f.mimeType !== 'string' || !MIME_SHAPE.test(f.mimeType) || !(step.download.mime ?? DEFAULT_MIME).includes(f.mimeType)) {
+      return `the file of step ${f.step as number} has a type its step does not allow`;
+    }
+    if (!whole(f.bytes) || !(f.rows === null || whole(f.rows)) || !(f.columns === null || (Array.isArray(f.columns) && f.columns.every((c) => typeof c === 'string')))) {
+      return `the file of step ${f.step as number} is not shaped as a download makes it`;
+    }
+  }
+  const shot = new Set<number>();
+  for (const n of screenshots) {
+    const step = stepOf(n);
+    if (!step || !('screenshot' in step)) return 'a screenshot names no screenshot step';
+    if (shot.has(n as number)) return `step ${n as number} is listed twice`;
+    shot.add(n as number);
+  }
+  for (const [i, step] of top.entries()) {
+    if ('download' in step && !step.when && !withFile.has(i + 1)) return `the download of step ${i + 1} is missing`;
+    if ('screenshot' in step && !step.when && !step.optional && !shot.has(i + 1)) return `the screenshot of step ${i + 1} is missing`;
+  }
+  return undefined;
 }
 
 /**
@@ -202,6 +265,9 @@ export async function adoptDraft(input: AdoptInput): Promise<AdoptResult> {
       ...(prove.screenshot ? { screenshot: prove.screenshot } : {}), ...(prove.trace ? { trace: prove.trace } : {}),
     });
   }
+  // A proof of several files or a screenshot passes only when Sign Steps would take its evidence: the one rule for both.
+  const unfit = kind === 'files' ? filesEvidenceProblem(script, prove.files, prove.screenshots) : undefined;
+  if (unfit) return fail('incomplete', `${IMPORT_PROOF_FAILED}. Reason: ${unfit}`);
   // The proof is the only run whose rows are judged: there are no agent rows to compare with, so no ID list is shown.
   const proposal = buildProposal({
     script, prove: { ...prove, diff: { missing: [], extra: [] } },
