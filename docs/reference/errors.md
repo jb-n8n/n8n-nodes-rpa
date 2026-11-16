@@ -48,7 +48,7 @@ guidance reading `Check the node parameters and the RPA credentials.` A Sign Ste
 
 **The login breaker.** With a Site Login, one failed login stops every further login with it and the same username, so
 a wrong password does not lock the account. Other accounts of the same Site Login keep running. A changed username, password or TOTP Secret gets one try. In other cases, change **Options →
-Login Breaker Reset Key**. A breaker that opened in version 0.2.0 or earlier needs a new reset key in every case. In
+Login Breaker Reset Key**. A breaker that opened in version 0.1.0 needs a new reset key in every case. In
 queue mode with an RPA Redis credential the breaker is kept in Redis ([Operator guide](operator.md#login-breaker-and-run-lock)).
 
 ## Messages
