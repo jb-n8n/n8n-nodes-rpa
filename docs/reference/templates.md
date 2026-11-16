@@ -32,7 +32,8 @@ first, before anything reads or writes them.
   again or change values with the box empty or holding the approved steps unchanged (compared as JSON), or change as
   JSON with text in it; any other answer goes back through **Page answered?** to **Change or sign again**, which then
   says at its top what to correct and keeps the choice and the pasted text. A page not answered in time ends on
-  **Choice and box differ**, and nothing is imported or signed.
+  **Choice and box differ**, and nothing is imported or signed. The change page, the values page, the question below
+  and the review page wait 10 minutes for an answer, and say so; the other pages wait an hour.
 - **Change values** (after **Change values?**) is the values page. **The bot to change** lists, in step order, the
   text a step types and the option it chooses (browser and desktop) and the address a browser step opens, each with
   its step's number and the review page's words (`4. Type into To: typed value`). Each gets a text field holding the
@@ -115,7 +116,7 @@ first, before anything reads or writes them.
   approved one always falls back to the rule, a value changed on the values page included; when that moves its tick
   or number, the page names the step (`Step 6 changed since the approved version, so whether it may save or send
   starts from the rule: check it.`). The
-  **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
+  **Decision** is **Approve and sign** or **Reject**. A page left unanswered for 10 minutes
   signs nothing. Once it is answered, **Versions now** reads the steps table again and **Still the next version?**
   checks that no row of a name on the page has that version or a higher one: another review page of the same bot,
   open at the same time, may have been answered first. Then nothing is signed or rejected, and **Approved meanwhile**

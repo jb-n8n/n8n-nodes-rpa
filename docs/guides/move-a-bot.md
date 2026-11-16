@@ -176,7 +176,7 @@ key, and the old row is superseded: the bot's workflow runs the new version as i
 happened, says `Signed again: <name> version 2, unchanged.`, or `Changed: <name> version 2 is now the version that
 runs, replacing version 1.` Desktop steps signed again with other write ticks say which: `Signed again: <name> version
 2, steps unchanged; write marks changed from version 1: added step 9 (Click Post).` (marks are compared only with an
-approved version whose signature fits this form; otherwise it says `steps unchanged` and lists the marks signed). Rejected, or not answered within an hour, the old version keeps running, and the last page says `Nothing
+approved version whose signature fits this form; otherwise it says `steps unchanged` and lists the marks signed). Rejected, or not answered within 10 minutes, the old version keeps running, and the last page says `Nothing
 changed: <name> version 1 keeps running.` This path offers no workflow file. A name the form does not find ends on a page that lists the approved
 bots.
 

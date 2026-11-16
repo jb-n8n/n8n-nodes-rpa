@@ -116,8 +116,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ]);
     expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual(Array(15).fill(2.5));
     // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
+    // A page that waits for a person and holds no work (the change page, the values page, the question and the review page)
+    // stops after 10 minutes and says so; the others keep an hour.
+    const TEN = ['Change or sign again', 'Change values', 'Approved on another form?', REVIEW];
     for (const n of t.nodes.filter((x) => x.type === COMPLETION)) {
-      expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours' });
+      const ten = TEN.includes(n.name);
+      expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: ten ? 10 : 1, resumeUnit: ten ? 'minutes' : 'hours' });
+      if (ten) expect(String((n.parameters.options as IDataObject).formDescription), n.name).toMatch(/ Answer within 10 minutes: after that, nothing (changes|is signed)\.$/);
+      if (ten) expect(n.notes, n.name).toContain('at most 10 minutes');
     }
     // Credentials slots stay empty: nothing in the file names a credential.
     for (const n of t.nodes) expect(n, n.name).not.toHaveProperty('credentials');
@@ -453,7 +459,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // A short top: the name and version as the page's title, two sentences.
     const options = review.parameters.options as IDataObject;
     expect(render(String(options.formTitle), { $: nodesRan(ran) })).toBe(`${String(item.name)}, version 1`);
-    expect(options.formDescription).toBe('Approve and sign: these steps are signed and run under this name. Reject: nothing is signed.');
+    expect(options.formDescription).toBe('Approve and sign: these steps are signed and run under this name. Reject: nothing is signed. Answer within 10 minutes: after that, nothing is signed.');
     expect(options.buttonLabel).toBe('Submit');
     // What it does besides reading, in short lines, then one short sentence per step: its verb, the value it types or
     // chooses and its field, as the recorder's bar words it; a secret variable never shows a value.

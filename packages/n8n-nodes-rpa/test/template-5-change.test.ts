@@ -365,7 +365,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const page = byName(t, 'Change values');
     expect(page).toMatchObject({
       type: COMPLETION, typeVersion: 2.5,
-      parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours', options: { buttonLabel: 'Review', formDescription: 'Nothing changes until you approve on the next page.' } },
+      parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 10, resumeUnit: 'minutes', options: { buttonLabel: 'Review', formDescription: 'Nothing changes until you approve on the review page. Answer within 10 minutes: after that, nothing changes.' } },
     });
     // jsonFormFields checks that the expression holds no "{{" or "}}" and that no "$" reaches n8n's String.replace.
     const fields = valuesFields(rows, 'line-items <b>');
@@ -669,7 +669,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   it('Change or sign again shows the active steps to read in a block of the page, a required choice of three (two when no value fits a field), one empty box, and short sentences', () => {
     const doc = { startUrl: `${SITE.url}/a`, name: 'feed <b>', version: 1, steps: [{ intent: 'Type $& and $$ <b>Tom & Jerry</b> café', goto: '/b?x=$1&y=<2>' }] };
     const page = byName(t, 'Change or sign again');
-    expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours', options: { buttonLabel: 'Review', formDescription: 'Nothing changes until you approve on the next page.' } } });
+    expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 10, resumeUnit: 'minutes', options: { buttonLabel: 'Review', formDescription: 'Nothing changes until you approve on the review page. Answer within 10 minutes: after that, nothing changes.' } } });
     const rows = [{ id: 3, name: 'feed <b>', version: 1, steps: JSON.stringify(doc), status: 'active' }];
     // With n8n's sign-in, a later page needs a signed-in n8n user; with Basic Auth (or none) it needs only its address.
     const ANYONE = 'Anyone who has the address of this page can read these steps, so do not share it.';
@@ -1041,7 +1041,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // The question names what the form cannot tell apart and shows no step: two answers, none chosen, one required.
     const misfit = await before(row(KEY, 'site-b'), KEY, SHOP);
     const page = byName(t, 'Approved on another form?');
-    expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, resumeAmount: 1, resumeUnit: 'hours', options: { buttonLabel: 'Next' } } });
+    expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, resumeAmount: 10, resumeUnit: 'minutes', options: { buttonLabel: 'Next', formDescription: 'Nothing is shown, imported or signed until you answer. Answer within 10 minutes: after that, nothing changes.' } } });
     expect(render(String((page.parameters.options as IDataObject).formTitle), { $: nodesRan(misfit) })).toBe('Before you change feed');
     const asked = jsonFormFields(String(page.parameters.jsonOutput), { $: nodesRan(misfit) });
     expect(asked).toEqual([
