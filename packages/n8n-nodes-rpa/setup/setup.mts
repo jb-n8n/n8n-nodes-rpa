@@ -253,7 +253,7 @@ interface Update { changes: Changes; made010?: { hand?: Changes; toN8nSignIn: bo
  * Says how a form this command (or RPA 0.1.0) made differs from this version's template and asks whether to update it.
  * Default no; without a terminal it asks nothing and changes nothing.
  */
-async function askUpdate(workflow: any, { changes, made010 }: Update): Promise<boolean> {
+async function askUpdate(workflow: any, { changes, made010 }: Update, key?: Ref): Promise<boolean> {
   const what = nameAndId(workflow);
   say(made010 ? `The form ${what} was made by RPA 0.1.0, from its template "${WORKFLOW_NAME}", and differs from this version's template:`
     : `The form ${what} was made by this command, and differs from this version's template:`);
@@ -272,7 +272,7 @@ async function askUpdate(workflow: any, { changes, made010 }: Update): Promise<b
     if (hand.connections) say('    Connected by hand:       the links between its nodes');
   }
   if (made010) {
-    say(`An update gives it this version's nodes and connections, with the new node "${NODE.signSteps}": imports are then approved and signed on this form, with your project's RPA Step Signing key. It keeps the form's address and title, the credentials picked on its nodes (the Site Login on "${NODE.importSteps}" goes on "${NODE.signSteps}" too), Allow Private Network, the workflow picked on Approve steps, and the workflow's name and id.${hand ? ' What was changed by hand is lost.' : ''}`);
+    say(`An update gives it this version's nodes and connections, with the new node "${NODE.signSteps}": imports are then approved and signed on this form, with ${key ? `your project's RPA Step Signing key, ${nameAndId(key)}` : 'a new RPA Step Signing key this run makes'}. It keeps the form's address and title, the credentials picked on its nodes (the Site Login on "${NODE.importSteps}" goes on "${NODE.signSteps}" too), Allow Private Network, the workflow picked on Approve steps, and the workflow's name and id.${hand ? ' What was changed by hand is lost.' : ''}`);
     say(made010.toN8nSignIn
       ? "  Its sign-in becomes n8n's sign-in, as this run sets up: people open the form with their n8n login, and its Basic Auth login is no longer used. To keep Basic Auth, answer n and run this again with --form-login basic."
       : `  It keeps its sign-in${formAuthentication(workflow) === FORM_AUTH.basic ? ', Basic Auth, with its login' : ", n8n's sign-in"}.`);
@@ -701,7 +701,8 @@ async function run(inputs: Inputs): Promise<number> {
   const made010 = updating?.made010 !== undefined;
   // A form this command made that differs from this version's template: brought up to date only when the person says
   // yes at a terminal. Otherwise it stays exactly as it is, and nothing else is made or changed.
-  if (workflow && updating && !(await askUpdate(workflow, updating))) {
+  const keyFound = found.get(SIGNING.name)?.mine;
+  if (workflow && updating && !(await askUpdate(workflow, updating, keyFound ? { id: String(keyFound.id), name: String(keyFound.name) } : undefined))) {
     await closeUnchanged(workflow, inputs);
     return 0;
   }

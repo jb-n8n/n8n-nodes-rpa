@@ -1927,6 +1927,7 @@ describe('a form RPA 0.1.0 made is brought up to date, never blamed on the perso
     expect(r.out).toContain('  Changed by hand since:     nothing. It is the form 0.1.0 made, with what you set in it.');
     expect(r.out).toContain('  At an older node version:  "Import a bot", "Import steps"');
     expect(r.out).toContain('  Lost with it: the node "Chat model", which the template does not have.');
+    expect(r.out).toContain('imports are then approved and signed on this form, with your project\'s RPA Step Signing key, "RPA Step Signing account" (id c-010). It keeps');
     expect(r.out).toContain('Not updated: without a terminal this command does not ask. To update it, run this command again at a terminal and answer y.');
     expect(r.out).not.toMatch(/undo that change|differs from the template:/);
     expect(JSON.stringify(fake.state.workflows)).toBe(before);
