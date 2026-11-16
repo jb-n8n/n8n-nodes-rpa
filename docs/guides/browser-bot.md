@@ -245,6 +245,9 @@ Create these credentials:
    version 2 (a description the model wrote reads "the AI describes it as") and what changed from version 1, in the
    words of the import's review page. After you approve it, the next run uses it. A run while version 2 waits fails,
    and its message names version 2 and says to approve it from the approval email.
+   A repair that does not find the data stops: when it goes in circles, or at its limits (**Max Agent Actions**, **Max
+   LLM Tokens**). Its message says how many chat model calls and tokens it used
+   ([A repair that stops](../reference/errors.md#a-repair-that-stops)).
 
 To run the feed every 6 hours, **Publish** it. Replace **Send data to destination** with where the data should go, such
 as a spreadsheet or a database node. To let the first bot repair itself too, its RPA node's note lists the three

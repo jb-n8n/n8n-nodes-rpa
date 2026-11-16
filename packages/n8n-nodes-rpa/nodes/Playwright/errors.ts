@@ -62,6 +62,17 @@ export const LOCKED_BEFORE_UPGRADE_GUIDANCE =
 export const PASSWORD_CHANGED_GUIDANCE =
   'A run changed this Site Login\'s password earlier in this execution. Store the new password where the Site Login reads it, then run again.';
 
+/** incomplete because self-repair stopped before it found the data: it went in circles, or used its actions or tokens. */
+export const REPAIR_STOPPED_GUIDANCE =
+  'Self-repair did not find the data and stopped; the message says why and what it used. Find the data on the site yourself, then say where it is now in the Goal on the RPA node (for example the menu and the section\'s name), or change the steps on the import form. Until then every run tries again: turn AI Repair off to stop that.';
+/**
+ * The engine's words for that stop: the circle guard, or Max Agent Actions or Max LLM Tokens used up. Copies of the
+ * engine's WENT_IN_CIRCLES and AGENT_OUT_OF_BUDGET (this module may not load the engine); description.test.ts pins them.
+ */
+export const REPAIR_STOPPED_WORDS = [' went in circles: ', 'the agent ran out of budget: the token budget', 'the agent ran out of budget: the action budget'];
+export const repairStopped = (code: ErrorCode, message: string): boolean =>
+  code === 'incomplete' && REPAIR_STOPPED_WORDS.some((w) => message.includes(w));
+
 /**
  * A sign-in that failed on its one-time code: every failure of a code from the One-Time Code Workflow (`detected:mfa_code: …`,
  * a code the site rejected twice included), or no TOTP Secret for a code the site asked for (`detected:mfa_totp: …`).
@@ -85,6 +96,7 @@ export function guidanceFor(code: ErrorCode, message: string): string {
   if (code === 'site_down' && /net::ERR_(NAME_NOT_RESOLVED|CONNECTION_REFUSED|CERT_|SSL_)/.test(message)) return SITE_ADDRESS_GUIDANCE;
   if (code === 'locked_out' && message.includes('was changed earlier in this execution')) return PASSWORD_CHANGED_GUIDANCE;
   if (code === 'locked_out' && message.includes('before the upgrade stopped every account')) return LOCKED_BEFORE_UPGRADE_GUIDANCE;
+  if (repairStopped(code, message)) return REPAIR_STOPPED_GUIDANCE;
   return GUIDANCE[code];
 }
 

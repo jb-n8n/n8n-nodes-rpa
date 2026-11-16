@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
  * list in the same commit. Type-only exports (interfaces, types) do not exist at runtime and are not listed.
  */
 const EXPORTS = [
-  'AGENT_TOOLS', 'ALSO_CHANGED', 'AgentTools', 'BROWSER_CERT_NOT_TRUSTED', 'BROWSER_CERT_NOT_TRUSTED_CDP', 'BROWSER_FINGERPRINT_INVALID',
-  'BROWSER_FINGERPRINT_MISMATCH', 'BROWSER_FINGERPRINT_NEEDS_WSS', 'BrowserUnavailableError', 'CANCELLED', 'CONDITION_NOT_MET', 'CONNECT_TIMEOUT_MS',
+  'AGENT_OUT_OF_BUDGET', 'AGENT_TOOLS', 'ALSO_CHANGED', 'AgentTools', 'BROWSER_CERT_NOT_TRUSTED', 'BROWSER_CERT_NOT_TRUSTED_CDP', 'BROWSER_FINGERPRINT_INVALID',
+  'BROWSER_FINGERPRINT_MISMATCH', 'BROWSER_FINGERPRINT_NEEDS_WSS', 'BrowserUnavailableError', 'CANCELLED', 'CIRCLE_NUDGE_TEXT', 'CONDITION_NOT_MET', 'CONNECT_TIMEOUT_MS',
   'CompileError', 'DEFAULT_BUDGET_MS', 'DEFAULT_CODE_TIMEOUT_MS', 'DEFAULT_LEASE_MS', 'DEFAULT_MAX_ACTIONS', 'DEFAULT_MAX_BYTES',
   'DEFAULT_MAX_TOKENS', 'DEFAULT_MIME', 'DEFAULT_RUNNER_PORT', 'DENYLIST', 'DESKTOP_CHANGES_MISMATCH', 'DESKTOP_EVIDENCE_INVALID',
   'DESKTOP_FLAGS_INCOMPLETE', 'DESKTOP_NEEDS_FIRST_VERSION', 'DESKTOP_VERBS', 'DESKTOP_WRITES_PRESET', 'DETECTED_PREFIX',
@@ -21,7 +21,7 @@ const EXPORTS = [
   'PolicyError', 'PolicyRefusedError', 'PrivateNetworkError', 'REF_ATTR', 'RUNNER_CONNECT_TIMEOUT_MS', 'RUNNER_ERROR_CODES', 'RUNNER_PATH',
   'RunnerBusyError', 'RunnerClient', 'RunnerConnectError', 'RunnerDisconnectedError', 'RunnerError', 'RunnerTimeoutError',
   'RunnerTokenRefusedError', 'SECRET_FILL_VALUE', 'SESSION_WAIT_MS', 'SHOWN_PREFIXES', 'STEPS_HASH_MISMATCH', 'STEP_VERBS',
-  'ScriptShapeError', 'SignInPolicyError', 'UNVERIFIED_COUNT_FLAG', 'USE_CASE_WORDS', 'VALUE_NOT_TAKEN', 'WORKFLOW_CODE', 'WRITE_STEPS_INVALID',
+  'ScriptShapeError', 'SignInPolicyError', 'UNVERIFIED_COUNT_FLAG', 'USE_CASE_WORDS', 'VALUE_NOT_TAKEN', 'WENT_IN_CIRCLES', 'WORKFLOW_CODE', 'WRITE_STEPS_INVALID',
   'absoluteHttpUrl', 'adoptDraft', 'agentSystemPrompt', 'binaryName', 'build', 'buildProposal', 'candidatesFor', 'candidatesOf',
   'canonicalize', 'changeListMatches', 'checkDesktopTrust', 'checkFile', 'checkRequest', 'checkTrust', 'clampBudget', 'classifyFailure',
   'codeWorkflowFailed', 'compileProposal', 'connectRunner', 'createAddressGuard', 'createMasker', 'currentIdentity', 'declareWrites',

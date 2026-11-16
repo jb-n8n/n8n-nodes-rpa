@@ -5,7 +5,7 @@ import { classifyFailure, stripShownPrefix } from '../classify/classify.js';
 import { runBinaryProblem } from '../steps/limits.js';
 import type { DownloadTemplate } from '../steps/file-check.js';
 import { CompileError, compileProposal, type CompileResult } from '../compile/compile.js';
-import { AGENT_SIGN_IN_UNFINISHED, agentSignInLocked, agentSignInRejected, FILE_NOT_DELIVERABLE, FILE_WITHHELD, ROWS_WITHHELD } from '../messages.js';
+import { AGENT_OUT_OF_BUDGET, AGENT_SIGN_IN_UNFINISHED, agentSignInLocked, agentSignInRejected, FILE_NOT_DELIVERABLE, FILE_WITHHELD, ROWS_WITHHELD, WENT_IN_CIRCLES, withCost } from '../messages.js';
 import { noWritePolicy } from '../policy/derive.js';
 import { flattenSteps, loginBlockEnd } from '../policy/validate.js';
 import { buildProposal, proposalDigest, type Proposal } from '../proposal/proposal.js';
@@ -277,8 +277,9 @@ async function agentLaneBody(input: TaskInput, repair: RepairInput, h: Handoff, 
   const extra = { lane: 'agent' as const, agentLog, tokens, llmCalls, transcript };
   const scriptFailure = h.failure ? { failure: { ...h.failure, intent: masker.mask(h.failure.intent), message: masker.mask(h.failure.message) } } : {};
   // Messages carry model notes, prove reasons and compile issues: every URL in them is shown without query string.
+  // Once the model was called, the message ends with what it used (calls and tokens), where a person reads it.
   const fail = (code: ErrorCode, message: string, more: Violation[] = []): TaskFailure => ({
-    ...laneFailure(h.t0, masker, code, shownMessage(message, masker), {
+    ...laneFailure(h.t0, masker, code, withCost(shownMessage(message, masker), llmCalls, tokens), {
       violations: [...session.violations, ...more], blockedRequests: session.blockedRequests, log, ...scriptFailure,
       ...(h.version !== undefined ? { version: h.version } : {}), ...(h.hash ? { hash: h.hash } : {}),
     }),
@@ -300,7 +301,8 @@ async function agentLaneBody(input: TaskInput, repair: RepairInput, h: Handoff, 
   }
   if (loop.outcome === 'blocked') return fail('auth_blocked', `the agent could not continue: ${loop.note}`);
   if (loop.outcome === 'not_found') return fail('not_found', `the agent did not find the data: ${loop.note}`);
-  if (loop.outcome === 'budget') return fail('incomplete', `the agent ran out of budget: ${loop.note}`);
+  if (loop.outcome === 'budget') return fail('incomplete', `${AGENT_OUT_OF_BUDGET}: ${loop.note}`);
+  if (loop.outcome === 'circling') return fail('incomplete', `${h.base ? 'the repair' : 'the AI'} ${WENT_IN_CIRCLES}: ${loop.note}`);
   if (loop.outcome === 'error') {
     // 'error' is infrastructure: the model failed or went silent (or, rarely, the page could not be read at all).
     if (loop.note.startsWith(PAGE_UNREADABLE)) return fail('incomplete', `the agent could not continue: ${loop.note}`);

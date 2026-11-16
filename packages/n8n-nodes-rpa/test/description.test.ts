@@ -6,12 +6,12 @@ import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import {
   NodeHelpers, Workflow, type INodeCredentialDescription, type INodeParameters, type INodeProperties, type INodePropertyOptions, type INodeType, type INodeTypes,
 } from 'n8n-workflow';
-import { networkSentence, parseScript, VALUE_NOT_TAKEN, valueNotTaken } from 'n8n-rpa-engine';
+import { AGENT_OUT_OF_BUDGET, networkSentence, parseScript, VALUE_NOT_TAKEN, valueNotTaken, WENT_IN_CIRCLES } from 'n8n-rpa-engine';
 import { INPUTS_EXPRESSION, nodeInputs, nodeOutputs, OUTPUTS_EXPRESSION } from '../nodes/Playwright/description/io.js';
 import { OPERATIONS, properties, SUBTITLE, URL_HINT } from '../nodes/Playwright/description/index.js';
 import { ALL_OPERATIONS, ID_PATTERN_OPTION, QUICK_OPERATIONS } from '../nodes/Playwright/description/options.js';
 import { STEPS_PLACEHOLDER, UNSIGNED_NOTICE } from '../nodes/Playwright/description/runSteps.js';
-import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOCKED_BEFORE_UPGRADE_GUIDANCE, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, SAYS_WHAT_TO_DO, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOCKED_BEFORE_UPGRADE_GUIDANCE, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, REPAIR_STOPPED_GUIDANCE, REPAIR_STOPPED_WORDS, SAYS_WHAT_TO_DO, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
 import { runnerAppNotAllowed, secretAppNotListed, secretHostNotListed } from '../../engine/src/messages.js';
 import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut, siteLoginLockedOutBeforeUpgrade } from '../nodes/Playwright/execute.js';
 import { COMPILERS, quickFieldNames, type QuickOp } from '../nodes/Playwright/operations/quick.js';
@@ -443,6 +443,22 @@ describe('wording and guidance', () => {
     for (const text of [...Object.values(GUIDANCE), CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, LOGIN_PAGE_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, LOCKED_BEFORE_UPGRADE_GUIDANCE, siteLoginLockedOutBeforeUpgrade('example.com')]) {
       expect(text, text).not.toMatch(/\d+\.\d+\.\d+/);
     }
+  });
+  it('a self-repair that stopped (in circles, or out of actions or tokens) gets its own guidance', () => {
+    // The engine's words, copied in errors.ts: the node never loads the engine to read a constant.
+    expect(REPAIR_STOPPED_WORDS).toEqual([` ${WENT_IN_CIRCLES}: `, `${AGENT_OUT_OF_BUDGET}: the token budget`, `${AGENT_OUT_OF_BUDGET}: the action budget`]);
+    expect(REPAIR_STOPPED_GUIDANCE).toBe(
+      "Self-repair did not find the data and stopped; the message says why and what it used. Find the data on the site yourself, then say where it is now in the Goal on the RPA node (for example the menu and the section's name), or change the steps on the import form. Until then every run tries again: turn AI Repair off to stop that.",
+    );
+    const circles = 'the repair went in circles: it did the same action on the same page 4 times without finding anything new. It used 16 chat model calls and 66,827 tokens.';
+    expect(guidanceFor('incomplete', circles)).toBe(REPAIR_STOPPED_GUIDANCE);
+    expect(guidanceFor('incomplete', 'the agent ran out of budget: the token budget of 200000 ran out. It used 37 chat model calls and 200,492 tokens.')).toBe(REPAIR_STOPPED_GUIDANCE);
+    expect(guidanceFor('incomplete', 'the agent ran out of budget: the action budget of 40 ran out. It used 40 chat model calls and 90,000 tokens.')).toBe(REPAIR_STOPPED_GUIDANCE);
+    // Time and cancellation keep the general guidance (Max Seconds); so does any other code.
+    expect(guidanceFor('incomplete', 'the agent ran out of budget: the time budget ran out. It used 3 chat model calls and 9,000 tokens.')).toBe(GUIDANCE.incomplete);
+    expect(guidanceFor('incomplete', 'the agent ran out of budget: the run was cancelled')).toBe(GUIDANCE.incomplete);
+    expect(guidanceFor('not_found', circles)).toBe(GUIDANCE.not_found);
+    expect(REPAIR_STOPPED_GUIDANCE).not.toMatch(/[<>]|\d+\.\d+\.\d+/);
   });
 });
 
