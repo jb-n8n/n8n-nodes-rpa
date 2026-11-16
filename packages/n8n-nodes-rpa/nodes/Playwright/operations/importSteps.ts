@@ -11,7 +11,7 @@ import {
   DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, reviewSteps, reviewWrites,
 } from '../format.js';
 import { isQueueMode, openGuardStore, queueNeedsRedis, redisAttached, type GuardStoreDeps } from '../guard-store.js';
-import { nonSecretStart, secretTypedInto, stepVariables, workflowFile, type CredentialRef, type PassedOn } from '../import/workflow.js';
+import { nonSecretStart, passwordChangeVariables, secretTypedInto, stepVariables, workflowFile, type CredentialRef, type PassedOn } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, desktopRepairedStepsJson, plain, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
 import { codeSettingsFor, codeWorkflowOptions } from './codeWorkflow.js';
@@ -99,6 +99,8 @@ interface ImportParams {
   approvedBeforeHandOver: boolean;
   /** Options → Import Form Name and Import Form Address: the form the workflow file's notes name. */
   importForm: { name: string; address: string };
+  /** Options → Hand Over a Place for Accounts: the workflow file reads the accounts in a Get accounts node. */
+  accounts: boolean;
   common: CommonOptions;
 }
 
@@ -132,6 +134,7 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
     version,
     approvedBeforeHandOver: asBoolean(ctx.getNodeParameter('options.approvedBeforeHandOver', i, false), false),
     importForm: { name: asString(ctx.getNodeParameter('options.importFormName', i, '')).trim(), address: asString(ctx.getNodeParameter('options.importFormAddress', i, '')).trim() },
+    accounts: asBoolean(ctx.getNodeParameter('options.handOverAccounts', i, false), false),
     ...codeWorkflowOptions(ctx, (option) => field(ctx.getNodeParameter('options', i, {}), option)),
     common,
   };
@@ -307,7 +310,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   if (flow) {
     try {
       const file = workflowFile(flow, imported.drafts, {
-        name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)), approvedBeforeHandOver: p.approvedBeforeHandOver, importForm: p.importForm,
+        name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)), approvedBeforeHandOver: p.approvedBeforeHandOver, importForm: p.importForm, accounts: p.accounts,
         ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
         run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork, idPatterns },
       });
@@ -406,6 +409,8 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     const why = withheld ? (reason ? `${reason} ${STEPS_WITHHELD}` : STEPS_WITHHELD) : reason;
     // The variables a secret fill or a password change types, and the start site's host, for the last page's copy block.
     const secret = stepVariables(o.draft.script).secret;
+    // A many-accounts bot: a password change's new password is each account's own, read from its item, not a secret to copy.
+    const perAccount = p.accounts ? passwordChangeVariables(o.draft.script) : [];
     return {
       name: o.draft.name,
       steps: withheld ? null : (plain(o.draft.script) as unknown as IDataObject),
@@ -415,6 +420,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       ...(why !== undefined ? { reason: why } : {}),
       ...(traceRefs.has(k) ? { traceRef: traceRefs.get(k) } : {}),
       ...(secret.length ? { secretVariables: secret, mayBeTypedInto: secretTypedInto(o.draft.script, false) } : {}),
+      ...(perAccount.length ? { accountVariables: perAccount } : {}),
     };
   });
   entries.push(...desktopOut.map((o) => o.entry));

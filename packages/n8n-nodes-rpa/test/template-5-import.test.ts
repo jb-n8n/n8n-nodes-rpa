@@ -566,6 +566,22 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(odd).toContain('\n\na&lt;b types a secret.');
     expect(odd).toContain('\nName: <code>pin</code>\nMay Be Typed Into: <code>erp.example.com</code>\n');
     expect(odd.match(/types a secret/g)).toHaveLength(1);
+    // A many-accounts bot's new password (accountVariables, from a Site Login's own form) is each account's own: no copy
+    // block for it, a sentence that says where it comes from; a true single secret beside it keeps its block.
+    const accounts = (secretVariables: string[]) => render(completion('Imported').completionMessage, { $: nodesRan({
+      Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [{ name: 'rows', forApproval: true, secretVariables, accountVariables: ['newPassword'], mayBeTypedInto: 'sandbox' }] } }], []],
+      [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[{ json: { status: 'active', name: 'rows', version: 1 } }], []],
+    }) });
+    const OWN = "\n\nrows sets a new password for each account: <code>newPassword</code> comes from each account's data, in the same item as its user name and password, not from an RPA Secret Variables credential. The workflow file reads it in the RPA node's Options → Variables.";
+    expect(accounts(['newPassword']).endsWith(OWN)).toBe(true);
+    expect(accounts(['newPassword'])).not.toContain('types a secret');
+    const both = accounts(['newPassword', 'pin']);
+    expect(both).toContain('\nName: <code>pin</code>\n');
+    expect(both).not.toContain('Name: <code>newPassword</code>');
+    expect(both.endsWith(OWN)).toBe(true);
+    // The form tells Import steps whether it is a Site Login's own form (its title, as the setup command sets it).
+    const option = String((byName(t, 'Import steps').parameters.options as IDataObject).handOverAccounts);
+    expect(['Import a bot', 'Import a bot for Sample accounts', ''].map((formTitle) => evaluate(option, { $: (n: string) => ({ params: n === 'Import a bot' ? { formTitle } : {} }) }))).toEqual([false, true, false]);
   });
 
   it('a Sign steps refusal signs nothing and the last page names the reason; an approver not on the allowlist is refused', async () => {

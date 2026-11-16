@@ -109,6 +109,10 @@ first, before anything reads or writes them.
   never calls that version approved and never says unchanged: `<name>: these are the steps of the stored version 4,
   whose signature does not fit this form (the warning says what that can mean).`, or `changed from the stored
   version 4, whose signature does not fit this form: …`, on the change path and for an upload alike.
+- **Import steps** hands over a workflow file named after the bot. On a Site Login's own form (its title starts
+  `Import a bot for`, as the setup command makes it) its **Options → Hand Over a Place for Accounts** is on: the file
+  has **Get accounts**, off until a table is picked, and the last page says that a password change's new password
+  comes from each account's data, not from an RPA Secret Variables credential.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". A new bot's ticks start from the rule (every candidate but a key pressed in a secret

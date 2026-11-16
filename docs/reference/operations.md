@@ -208,7 +208,10 @@ schedule until a person approves it. Template **RPA: 5 Import a bot** puts a for
   Hand-Over**: on when the workflow approves the steps before it hands the workflow file over, as the import form does;
   the file's notes then do not ask to import and approve the steps. **Import Form Name** and **Import Form Address**:
   the form the file's notes send the reader to, to change the steps or sign them again (empty: **RPA: 5 Import a
-  bot**, no address). The import form sets both to its own workflow's name and address.
+  bot**, no address). The import form sets both to its own workflow's name and address. **Hand Over a Place for
+  Accounts**: the file puts **Get accounts** (a Data Table read, off, no table picked) before each browser Run Steps,
+  and reads a password change's new password from each account's item; a Site Login's own import form turns it on.
+  The workflow file and its RPA nodes are named after the Name, never after the recording or the file.
 
 **What is never imported.** A value typed into a password, PIN, secret or code field, or a value equal to the Site
 Login's username or password, is never imported. A field counts as one when its type, label, name, ID or locator says

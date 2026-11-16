@@ -10,10 +10,13 @@ password are expressions that read each account from the item, so every item sig
 Get active steps (<name>) → Get accounts (one row per account) → <name> (Run Steps) → Data / error output
 ```
 
-The import form hands over **Get active steps (<name>)** and an RPA node named after the bot. Put your accounts node
-between the two. Nothing else changes: the RPA node reads the approved steps, their signature and version from **Get
-active steps (<name>)** by its name. **Get accounts** is a database, spreadsheet, Data Table or Code node, one item per
-account: the user name, the password, and the TOTP Secret when the account uses an authenticator app. The RPA node runs
+A Site Login's own import form (below) hands over this shape, with **Get accounts** in place: a Data Table read that is
+off, with no table picked, and a gold note. Until you turn it on, the bot runs once, with the Site Login's fallback
+account. Pick your accounts' Data Table on it and turn it on, or put your own database or spreadsheet node in its
+place. The RPA node reads the approved steps, their signature and version from **Get active steps (<name>)** by its
+name, so a node between the two changes nothing there. **Get accounts** gives one item per account: the user name, the
+password, and the TOTP Secret when the account uses an authenticator app. The default import form hands over the two
+nodes without **Get accounts**: put your accounts node between them. The RPA node runs
 the items one after the other. Keep its **Settings → On Error** on **Continue (using error output)**, as it comes.
 
 ## The Site Login, with expressions
@@ -71,9 +74,11 @@ The sample site of [Your first browser bot](browser-bot.md) has three accounts: 
 1. Make the Site Login above, with the other fields as in step 2 of the browser bot guide, and name it
    **Sample accounts**. Give it its own form with the command above.
 2. On that form, upload `docs/samples/sandbox-rows.steps.json` with the name `sandbox-rows-accounts`, and choose
-   **Approve and sign**. Import the workflow it hands over (**⋯ → Import → From File**).
-3. Hover over the line between **Get active steps (sandbox-rows-accounts)** and **sandbox-rows-accounts**, click **+**,
-   search for `Code` and choose **Code in JavaScript**. Name it **Get accounts** and replace its code with this (harbor-ops gets a wrong password):
+   **Approve and sign**. Import the workflow it hands over (**⋯ → Import → From File**). It has **Get accounts**
+   between **Get active steps (sandbox-rows-accounts)** and **sandbox-rows-accounts**, switched off.
+3. For this try, the accounts come from a Code node in its place. Delete **Get accounts**, hover over the line between
+   the two nodes, click **+**, search for `Code` and choose **Code in JavaScript**. Name it **Get accounts** and replace
+   its code with this (harbor-ops gets a wrong password):
 
    ```js
    return [
@@ -102,8 +107,10 @@ The login breaker and the run lock are kept per account: the Site Login and the 
 
 ## Rotating passwords
 
-Keep the next password in a column `newPassword`, and add it in **Options → Variables** as `newPassword` with the value
-`{{ $json.newPassword }}`. A `signIn` with `changePassword` ([Steps](../reference/steps.md#sign-in)) types it when the
+Keep the next password in a column `newPassword`. The workflow a Site Login's own form hands over reads it in the RPA
+node's **Options → Variables** as `newPassword`, with the value `{{ $json.newPassword }}`; add it there yourself in a
+workflow made otherwise. It is each account's own, so it is not copied into an RPA Secret Variables credential, which
+holds one value: the form's last page says so. A `signIn` with `changePassword` ([Steps](../reference/steps.md#sign-in)) types it when the
 site asks. The item then says `passwordChanged: true` (in `details` on the error output). Store it for that account:
 
 1. An **If** node on both outputs of the RPA node: `{{ $json.passwordChanged === true || $json.details?.passwordChanged === true }}`.

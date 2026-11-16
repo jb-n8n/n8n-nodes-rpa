@@ -76,6 +76,12 @@ export interface BuildWorkflowOptions {
    * the default form, RPA: 5 Import a bot.
    */
   importForm?: { name?: string; address?: string };
+  /**
+   * A bot that runs one Site Login for many accounts (a Site Login's own import form): each browser Run steps gets a
+   * **Get accounts** node before it, a Data Table read that is off until a person picks the table, with a gold note. A
+   * password change's new password then comes from each account's item, not from the RPA Secret Variables credential.
+   */
+  accounts?: boolean;
 }
 /** The credentials an import passes on to the workflow file. */
 export interface PassedOn { browser?: CredentialRef; siteLogin?: CredentialRef; signing?: CredentialRef; desktopRunner?: CredentialRef }
@@ -155,8 +161,11 @@ const BRANCH = 200;
 const HTTP_METHODS = new Set(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT']);
 const MAX_NAME = 95;
 const APPROVE_WORKFLOW = 'RPA: 3 Approve steps';
-/** The nodes one browser pair draws: Get active steps and Run steps. */
+/** The nodes one browser pair draws: Get active steps and Run steps (and Get accounts with its note, for many accounts). */
 const PAIR_NODES = 2;
+const ACCOUNTS_NODES = 2;
+/** The node a many-accounts bot reads its accounts with. */
+const GET_ACCOUNTS = 'Get accounts';
 /** The nodes one desktop pair draws: Get active steps, Run steps and the variables sticky. */
 const DESKTOP_PAIR_NODES = 3;
 /**
@@ -235,6 +244,20 @@ export function stepVariables(steps: unknown): { all: string[]; secret: string[]
   };
   walk(steps);
   return { all, secret: all.filter((v) => secret.has(v)) };
+}
+/** The run variables a sign-in's password change types (its new password), in order. */
+export function passwordChangeVariables(steps: unknown): string[] {
+  const found = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) { v.forEach(walk); return; }
+    if (typeof v !== 'object' || v === null) return;
+    const o = v as Record<string, unknown>;
+    const value = (o.signIn as { changePassword?: { value?: unknown } } | undefined)?.changePassword?.value;
+    if (typeof value === 'string') for (const m of value.matchAll(/\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g)) found.add(m[1]);
+    Object.values(o).forEach(walk);
+  };
+  walk(steps);
+  return [...found];
 }
 /**
  * Where a step list's secret values are typed, as the RPA Secret Variables credential's May Be Typed Into takes it: the
@@ -370,6 +393,7 @@ interface BuilderOptions {
   passedOn?: PassedOn;
   approvedBeforeHandOver: boolean;
   importForm: string;
+  accounts: boolean;
 }
 
 class Builder {
@@ -417,6 +441,9 @@ class Builder {
   private readonly passedOn: PassedOn;
   private readonly approvedBeforeHandOver: boolean;
   readonly importForm: string;
+  readonly accounts: boolean;
+  /** The Get accounts nodes drawn (one per browser Run steps of a many-accounts bot). */
+  readonly accountNodes: string[] = [];
 
   constructor(o: BuilderOptions) {
     this.prefix = o.prefix;
@@ -428,6 +455,7 @@ class Builder {
     this.passedOn = o.passedOn ?? {};
     this.approvedBeforeHandOver = o.approvedBeforeHandOver;
     this.importForm = o.importForm;
+    this.accounts = o.accounts;
   }
 
   /**
@@ -477,13 +505,16 @@ class Builder {
   private get privateNetwork(): boolean {
     return this.run.allowPrivateNetwork === true;
   }
-  /** Options → Variables for the steps' run variables: not secret ones, each with its start value or empty; secret ones are left out. */
-  private variablesOption(all: string[], secret: Set<string>, start: Record<string, string> = {}): Record<string, unknown> {
+  /**
+   * Options → Variables for the steps' run variables: not secret ones, each with its start value or empty; secret ones
+   * are left out. `fromItem`: each read from the item's field of the same name (a many-accounts bot's new password).
+   */
+  private variablesOption(all: string[], secret: Set<string>, start: Record<string, string> = {}, fromItem: ReadonlySet<string> = new Set()): Record<string, unknown> {
     // Names come from {{var.name}} in the steps, so they are letters, digits and "_". Checked again here, because a name
     // is written into the node as it is: one that n8n could read as an expression stops the import.
     const odd = all.find((v) => !PLAIN_NAME.test(v));
     if (odd !== undefined) throw new Error(`A variable's name must be letters, digits and "_" only: ${JSON.stringify(odd.slice(0, 60))}`);
-    const values = all.filter((v) => !secret.has(v)).map((name) => ({ name, value: literal(start[name]) ?? '' }));
+    const values = all.filter((v) => !secret.has(v)).map((name) => ({ name, value: fromItem.has(name) ? `={{ $json.${name} }}` : literal(start[name]) ?? '' }));
     for (const v of secret) this.secretVariables.add(v);
     return values.length ? { variables: { values } } : {};
   }
@@ -543,12 +574,12 @@ class Builder {
     return candidate;
   }
   /**
-   * The name of a Run steps: the name of its step list, as Get active steps and the run log name it. A recording's or
-   * a step document's flow names its own (`draft`, the name typed on the form). A UiPath project's sequence is named
-   * after its step list too (`<name>-<n>`), never after its first activity.
+   * The name of a Run steps: the name of its step list, as Get active steps and the run log name it: the name typed on
+   * the form, never the recording's or the file's. A UiPath project's sequence is named after its step list too
+   * (`<name>-<n>`), never after its first activity.
    */
-  private runName(n: { displayName: string; draft?: string }, draftName: string): string {
-    return n.draft !== undefined ? this.nodeName(n.displayName, `Run steps (${draftName})`) : this.unique(draftName);
+  private runName(draftName: string): string {
+    return this.unique(draftName);
   }
   /** A node name from the project's display name, or the fallback when it has none or would look like an expression. */
   private nodeName(displayName: string, fallback: string): string {
@@ -576,7 +607,7 @@ class Builder {
   }
   /** The nodes a flow node draws itself, its If or loop body aside. */
   private cost(n: FlowNode): number {
-    if (n.kind === 'browser') return this.drafts.has(draftOf(this.prefix, n)) ? PAIR_NODES : 1;
+    if (n.kind === 'browser') return this.drafts.has(draftOf(this.prefix, n)) ? PAIR_NODES + (this.accounts ? ACCOUNTS_NODES : 0) : 1;
     if (n.kind === 'desktop') return this.desktopDrafts.has(draftOf(this.prefix, n)) ? DESKTOP_PAIR_NODES : 1;
     return n.kind === 'if' ? 2 : 1;
   }
@@ -700,6 +731,34 @@ class Builder {
   }
 
   /**
+   * Get accounts: a Data Table read of every row, with no table picked and switched off, so the workflow runs as handed
+   * over (once, with the Site Login's fallback account) until a person picks the accounts' table and turns it on. A
+   * gold note above it says so. Connected after `tails`.
+   */
+  private getAccounts(tails: Tail[], x: number, y: number): string {
+    const name = this.unique(GET_ACCOUNTS);
+    this.add(T.dataTable, name, [x, y], {
+      resource: 'row',
+      operation: 'get',
+      dataTableId: { __rl: true, mode: 'list', value: '' },
+      returnAll: true,
+    }, {
+      disabled: true,
+      notes: 'One item per account. Off until you pick the table that holds your accounts and turn it on.',
+    });
+    this.connect(tails, name);
+    this.accountNodes.push(name);
+    const content = [
+      '### Your accounts (gold)',
+      `**${md(name)}** gives the RPA node one item per account, with the fields the Site Login's expressions read, such as \`username\`, \`password\` and \`totpSecret\`.`,
+      'It is off, so the bot runs once, with the Site Login\'s fallback account.',
+      'Pick the Data Table that holds your accounts, or put your own database or spreadsheet node in its place. Then turn it on.',
+    ].join('\n');
+    this.sticky(`Your accounts (${name})`, content, COLOUR.gold, [x - 80, y - 300], 260, Math.max(240, noteSize(content, 260).height));
+    return name;
+  }
+
+  /**
    * A desktop sequence: Get active steps → Run steps on the RPA Desktop Runner credential (by type), signed steps
    * required, AI Repair off, the draft's variables empty for the user (secret ones noted), and a gold sticky saying what
    * to fill in and how the steps get approved. A sequence without a draft is a grey sticky.
@@ -713,7 +772,7 @@ class Builder {
     }
     this.desktopDraftNames.push(draftName);
     const get = this.getActiveSteps(draftName, tails, x, y);
-    const run = this.runName(n, draftName);
+    const run = this.runName(draftName);
     const runX = x + STEP;
     const secret = new Set(draft.secretVariables);
     const start = nonSecretStart(draft.startValues, draft.secretVariables);
@@ -766,9 +825,13 @@ class Builder {
         }
         this.draftNames.push(draftName);
         const get = this.getActiveSteps(draftName, tails, x, y);
-        const run = this.runName(n, draftName);
-        const runX = x + STEP;
-        const vars = stepVariables(draft.script);
+        // Many accounts: Get accounts between the two, and a password change's new password from each account's item.
+        const accounts = this.accounts ? this.getAccounts([{ node: get, output: 0 }], x + STEP, y) : undefined;
+        const perAccount = new Set(accounts ? passwordChangeVariables(draft.script) : []);
+        const run = this.runName(draftName);
+        const runX = x + (accounts ? 2 : 1) * STEP;
+        const all = stepVariables(draft.script);
+        const vars = { all: all.all, secret: all.secret.filter((v) => !perAccount.has(v)) };
         const typedInto = vars.secret.length ? secretTypedInto(draft.script, false) : '';
         if (typedInto) this.secretTargets.add(typedInto);
         const creds = this.slots(BROWSER_SLOTS);
@@ -784,24 +847,24 @@ class Builder {
           aiRepair: false,
           options: {
             name: draftName, expectedVersion: fromRow(get, 'version'), ...this.codeOptions(), ...this.runOptions(true), ...this.idPatternOption(draftName),
-            ...this.variablesOption(vars.all, new Set(vars.secret)),
+            ...this.variablesOption(vars.all, new Set(vars.secret), {}, perAccount),
           },
         }, {
           onError: 'continueErrorOutput',
           ...(Object.keys(creds.credentials).length ? { credentials: creds.credentials } : {}),
           notes: [
-            `Runs the signed steps ${draftName}. ${pickText(creds.picked, creds.missing)} ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential and select it here.` : ''}`,
+            `Runs the signed steps ${draftName}${accounts ? ', once for each account' : ''}. ${pickText(creds.picked, creds.missing)} ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential and select it here.` : ''}${perAccount.size ? ` ${[...perAccount].join(', ')}: each account's own, from its item (Options → Variables).` : ''}`,
             'To let it repair itself when the site changes:',
             '1. Connect a chat model to its Model input (after step 2).',
             `2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.`,
             `3. Connect its Repaired Steps output to an Execute Workflow node that calls ${APPROVE_WORKFLOW}, and its error output to ${LOG.failed} again.`,
           ].join('\n'),
         });
-        this.connect([{ node: get, output: 0 }], run);
+        this.connect([{ node: accounts ?? get, output: 0 }], run);
         this.runNodes.push(run);
         this.allRuns.push(run);
         this.lastFile = downloadProperty(draft);
-        return { tails: [{ node: run, output: 0 }], x: x + 2 * STEP };
+        return { tails: [{ node: run, output: 0 }], x: runX + STEP };
       }
       case 'desktop':
         return this.desktopPair(n, tails, x, y);
@@ -974,7 +1037,7 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   const b = new Builder({
     prefix: opts.name, drafts: new Map(drafts.map((d) => [d.name, d])), desktopDrafts: new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])),
     codeWorkflow: opts.codeWorkflow, source: opts.source, run: opts.run, passedOn: opts.credentials,
-    approvedBeforeHandOver: opts.approvedBeforeHandOver === true, importForm: importFormText(opts.importForm),
+    approvedBeforeHandOver: opts.approvedBeforeHandOver === true, importForm: importFormText(opts.importForm), accounts: opts.accounts === true,
   });
   const from = FROM[b.source];
   const uipath = b.source === 'uipath';
@@ -1025,6 +1088,7 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
     `- Runs the approved steps ${which || 'of the import'}, imported from ${from.origin} ${code(project, 120)}.`,
     uipath ? `- ${plural(b.others, 'other activity', 'other activities')} became n8n nodes. ${b.untranslated || b.skipped ? `Grey notes mark what was not translated${b.skipped ? `, and ${b.skipped.toLocaleString('en-US')} more not drawn (see the report)` : ''}: rebuild that by hand.` : 'Each one says what to check.'}` : '',
     '- **Run the bot** runs it now. **On a schedule** is off: set the time, turn it on, publish.',
+    b.accountNodes.length ? `- **${md(b.accountNodes[0])}** is off: pick your accounts' table and turn it on to run every account.` : '',
     b.allRuns.length ? `- Each run writes a row to ${RUN_TABLE}. Failed runs show as failed in Executions.` : '',
     b.allRuns.length ? '- To hear of a failed run, set an Error Workflow in the workflow settings.' : '',
     names.length ? `- To change the steps or sign them again, use ${b.importForm} with the bot's name.` : '',
@@ -1067,7 +1131,7 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   b.nodes.unshift(...b.nodes.splice(before));
 
   return {
-    name: `${project} (${from.workflow})`,
+    name: `${opts.name} (${from.workflow})`,
     description: `Imported from ${from.origin} ${project}: ${summary}.`,
     nodes: b.nodes,
     connections: b.connections,

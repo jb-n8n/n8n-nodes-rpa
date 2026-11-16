@@ -34,7 +34,9 @@ const FILE_EXPRESSION = /^=\{\{ \$json\.files\?\.at\(-1\)\?\.binaryProperty \?\?
  * columns) and Stop and Error's message (the row Log failed run shaped).
  */
 const LOG_EXPRESSIONS = [LOG_RUN_ROW, LOG_FAILED_ROW, STOP_MESSAGE];
-const own = (v: string) => OWN_EXPRESSION.test(v) || LOG_EXPRESSIONS.includes(v) || FILE_EXPRESSION.test(v);
+/** A many-accounts bot's new password, read from each account's item by a variable's own name (letters, digits, "_"). */
+const ITEM_EXPRESSION = /^=\{\{ \$json\.[A-Za-z0-9_]+ \}\}$/;
+const own = (v: string) => OWN_EXPRESSION.test(v) || LOG_EXPRESSIONS.includes(v) || FILE_EXPRESSION.test(v) || ITEM_EXPRESSION.test(v);
 const LOG_NODES = ['Create run log table', 'Log run', 'Write run row', 'Log failed run', 'Write failed run row', 'Stop and Error'];
 const REPAIR_NOTE = 'To let it repair itself when the site changes:\n1. Connect a chat model to its Model input (after step 2).\n2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.\n3. Connect its Repaired Steps output to an Execute Workflow node that calls RPA: 3 Approve steps, and its error output to Log failed run again.';
 
@@ -122,7 +124,11 @@ function lint(w: WorkflowJson): void {
   // The run log's own expressions name two nodes of the generator's: Create run log table and Log failed run.
   for (const n of w.nodes) for (const [, v] of strings(n.parameters)) if (v.startsWith('=') && /\$\(/.test(v) && !LOG_EXPRESSIONS.includes(v)) expect(v).toMatch(OWN_EXPRESSION);
   for (const n of w.nodes.filter((x) => x.type === NODE_TYPE)) {
-    const feeds = Object.entries(w.connections).filter(([, c]) => c.main?.some((out) => out.some((t) => t.node === n.name))).map(([from]) => from);
+    const into = (name: string) => Object.entries(w.connections).filter(([, c]) => c.main?.some((out) => out.some((t) => t.node === name))).map(([from]) => from);
+    let feeds = into(n.name);
+    expect(feeds, n.name).toHaveLength(1);
+    // A many-accounts bot reads its accounts between the two: the row is still the Get active steps' before it.
+    if (/^Get accounts( \d+)?$/.test(feeds[0])) feeds = into(feeds[0]);
     expect(feeds, n.name).toHaveLength(1);
     expect(byName(w, feeds[0]).name, n.name).toMatch(/^Get active steps \(/);
     const p = n.parameters as { steps: string; signature: string; approvedBy: string; options: { expectedVersion: string } };
@@ -164,6 +170,8 @@ function lint(w: WorkflowJson): void {
   for (const n of w.nodes.filter((x) => x.type === 'n8n-nodes-base.dataTable')) {
     const p = n.parameters as { tableName?: string; dataTableId?: { value: string }; filters?: { conditions: { keyName: string }[] }; columns?: { value?: Record<string, string> } };
     const table = p.tableName ?? p.dataTableId?.value ?? '';
+    // Get accounts names no table and no column: the person picks their own table.
+    if (/^Get accounts( \d+)?$/.test(n.name) && table === '' && !p.filters && !p.columns) continue;
     expect(columnsOf[table], n.name).toBeDefined();
     for (const c of p.filters?.conditions ?? []) expect(columnsOf[table]).toContain(c.keyName);
     for (const c of Object.keys(p.columns?.value ?? {})) expect(columnsOf[table]).toContain(c);
@@ -179,7 +187,8 @@ describe('buildWorkflow', () => {
     const { json: w, drafts } = imported();
     lint(w);
     expect(drafts.map((d) => d.name)).toEqual(['sap-report-1']);
-    expect(w.name).toBe('SAP Line Item Report (imported from UiPath)');
+    // Named after the bot (the name typed), the project in the description.
+    expect(w.name).toBe('sap-report (imported from UiPath)');
     expect(w.description).toMatch(/^Imported from the UiPath project SAP Line Item Report: /);
 
     // Grey "About this import" and green "Set once" come first, under names no project node can take.
@@ -468,7 +477,44 @@ describe('buildWorkflow', () => {
     expect(() => buildWorkflow(deskFlow('ok'), [], { name: 'ok', desktopDrafts: [desk('ok', ['={{ $env.SECRET }}'])], source: 'recording' })).toThrow(/variable's name/);
     expect(() => buildWorkflow(deskFlow('ok'), [], { name: 'ok', desktopDrafts: [desk('ok', ['a b'])], source: 'recording' })).toThrow(/variable's name/);
     const fine = buildWorkflow(deskFlow('ok'), [], { name: 'ok', desktopDrafts: [desk('ok', ['invoice_no'])], source: 'recording' });
-    expect((byName(fine, 'Desk').parameters as { options: { variables: { values: Array<{ name: string }> } } }).options.variables.values).toEqual([{ name: 'invoice_no', value: '' }]);
+    expect((byName(fine, 'ok').parameters as { options: { variables: { values: Array<{ name: string }> } } }).options.variables.values).toEqual([{ name: 'invoice_no', value: '' }]);
+  });
+
+  it('a Site Login\'s own form hands over a place for the accounts: Get accounts (off, no table picked) between Get active steps and Run steps, with a gold note; a new password from each account\'s item', () => {
+    const SIGN = { intent: 'Sign in', signIn: { username: { label: 'User' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' },
+      changePassword: { detect: { text: 'Expired' }, new: [{ label: 'New password' }], submit: { role: 'button', name: 'Save' }, value: '{{var.newPassword}}' } } };
+    const PIN = { intent: 'Type the PIN', fill: { field: { label: 'PIN' }, value: '{{var.pin}}', secret: true } };
+    const steps = [SIGN, PIN, { intent: 'Open', goto: 'https://portal.example.com/' }];
+    const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'bot', draft: 'bot' }], 'bot');
+    const plain = buildWorkflow(flow, [draft('bot', steps)], { name: 'bot', source: 'steps' });
+    const many = buildWorkflow(flow, [draft('bot', steps)], { name: 'bot', source: 'steps', accounts: true });
+    lint(many);
+    // One account (the default): as before, no Get accounts, the new password a secret to copy.
+    expect(plain.nodes.some((n) => n.name === 'Get accounts')).toBe(false);
+    expect(plain.connections['Get active steps (bot)'].main).toEqual([[{ node: 'bot', type: 'main', index: 0 }]]);
+    expect(content(byName(plain, 'Set once'))).toContain('Name: newPassword');
+    // Many accounts: Get accounts, a Data Table read of every row, no table picked, switched off, wired between the two.
+    expect(byName(many, 'Get accounts')).toMatchObject({
+      type: 'n8n-nodes-base.dataTable', disabled: true,
+      parameters: { resource: 'row', operation: 'get', dataTableId: { __rl: true, mode: 'list', value: '' }, returnAll: true },
+    });
+    expect(many.connections['Get active steps (bot)'].main).toEqual([[{ node: 'Get accounts', type: 'main', index: 0 }]]);
+    expect(many.connections['Get accounts'].main).toEqual([[{ node: 'bot', type: 'main', index: 0 }]]);
+    expect(byName(many, 'Get accounts').position[0]).toBeLessThan(byName(many, 'bot').position[0]);
+    const note = byName(many, 'Your accounts (Get accounts)');
+    expect((note.parameters as { color: number }).color).toBe(COLOUR.gold);
+    expect(content(note)).toBe("### Your accounts (gold)\n**Get accounts** gives the RPA node one item per account, with the fields the Site Login's expressions read, such as `username`, `password` and `totpSecret`.\nIt is off, so the bot runs once, with the Site Login's fallback account.\nPick the Data Table that holds your accounts, or put your own database or spreadsheet node in its place. Then turn it on.");
+    expect(content(byName(many, 'About this import'))).toContain("- **Get accounts** is off: pick your accounts' table and turn it on to run every account.");
+    // The new password is each account's: read from the item, not copied into the credential; a true single secret still is.
+    const run = byName(many, 'bot');
+    expect((run.parameters as { options: { variables: unknown } }).options.variables).toEqual({ values: [{ name: 'newPassword', value: '={{ $json.newPassword }}' }] });
+    expect(run.notes).toContain('pin: put it in an RPA Secret Variables credential and select it here. newPassword: each account\'s own, from its item (Options → Variables).');
+    expect(content(byName(many, 'Set once'))).toContain('Name: pin');
+    expect(content(byName(many, 'Set once'))).not.toContain('newPassword');
+    // A desktop step list gets no accounts node.
+    const desktop = { name: 'd', writeCandidates: [], variables: [], secretVariables: [], script: { surface: 'desktop' as const, name: 'd', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Click', click: { uia: { path: [{ name: 'x' }] } } }] } };
+    const desk = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'd', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop], source: 'steps', accounts: true });
+    expect(desk.nodes.some((n) => n.name === 'Get accounts')).toBe(false);
   });
 
   it('Run steps reads the signed row from its Get active steps by name: a node put between them changes nothing, and a name cannot break out', () => {
@@ -496,7 +542,8 @@ describe('buildWorkflow', () => {
     lint(w);
     const get = `Get active steps (${odd})`;
     expect(byName(w, get).type).toBe('n8n-nodes-base.dataTable');
-    const p = byName(w, 'Run').parameters as { signature: string };
+    // The Run steps is named after its step list, whatever the flow calls it.
+    const p = byName(w, odd).parameters as { signature: string };
     expect(p.signature).not.toContain('}} {{');
     expect(p.signature).not.toContain("'x'");
     expect(read(p.signature, { [get]: row }, {})).toBe('sig');
@@ -507,7 +554,7 @@ describe('buildWorkflow', () => {
       script: { surface: 'desktop' as const, name: 'd', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Click', click: { uia: { path: [{ name: 'x' }] } } }] },
     };
     const d = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop], source: 'recording' });
-    const dp = byName(d, 'Desk').parameters as { signature: string; options: { expectedVersion: string } };
+    const dp = byName(d, 'd').parameters as { signature: string; options: { expectedVersion: string } };
     expect(read(dp.options.expectedVersion, { 'Get active steps (d)': row }, { username: 'a' })).toBe(3);
   });
 
@@ -737,7 +784,7 @@ describe('buildWorkflow', () => {
       script: { surface: 'desktop' as const, name: 'q', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Click', click: { uia: { path: [{ name: 'x' }] } } }] },
     };
     const d = buildWorkflow({ name: 'q', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'q' }] }, [], { name: 'q', desktopDrafts: [desktop as never], source: 'recording', run: { allowPrivateNetwork: true } });
-    expect(byName(d, 'Desk').parameters).toMatchObject({ operation: 'runSteps' });
+    expect(byName(d, 'q').parameters).toMatchObject({ operation: 'runSteps' });
     expect(JSON.stringify(d)).not.toContain('allowPrivateNetwork');
   });
 
@@ -748,7 +795,7 @@ describe('buildWorkflow', () => {
       script: { surface: 'desktop' as const, name: 'd', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Type', fill: { field: { uia: { path: [{ name: 'x' }] } }, value: '{{var.company}}' } }] },
     };
     const w = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop], source: 'recording' });
-    const run = byName(w, 'Desk');
+    const run = byName(w, 'd');
     expect((run.parameters as { options: Record<string, unknown> }).options.variables).toEqual({ values: [{ name: 'company', value: '2000' }, { name: 'odd', value: '' }] });
     expect(JSON.stringify(w)).not.toContain('$env');
     expect(content(byName(w, 'Fill in the variables (d)'))).toContain('Options → Variables: `company` (starts as `2000`), `odd`. Desktop steps run only once approved');
@@ -762,20 +809,20 @@ describe('buildWorkflow', () => {
     const build = (d: ReturnType<typeof desktop>) => buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [d], source: 'recording' });
     const none = build(desktop([], []));
     expect(none.nodes.some((n) => n.name.startsWith('Fill in the variables'))).toBe(false);
-    expect(byName(none, 'Desk').notes).toBe('Runs the signed desktop steps d on the desktop runner. Pick RPA Desktop Runner and RPA Step Signing here.');
+    expect(byName(none, 'd').notes).toBe('Runs the signed desktop steps d on the desktop runner. Pick RPA Desktop Runner and RPA Step Signing here.');
     const about = content(byName(none, 'About this import'));
     // Two colours (the two notes): no legend. A desktop bot has no repair line.
     expect(about).not.toMatch(/Gold|Green:|repair/);
     const secretOnly = build(desktop(['password'], ['password']));
-    expect(byName(secretOnly, 'Desk').notes).not.toContain('Fill in the Variables');
+    expect(byName(secretOnly, 'd').notes).not.toContain('Fill in the Variables');
     expect(content(byName(secretOnly, 'Fill in the variables (d)'))).toBe(
-      '### Fill in the variables (gold)\nDesktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.\nSecret: make an **RPA Secret Variables** credential, or add these to the one you have for this app; select it on **Desk**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
+      '### Fill in the variables (gold)\nDesktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.\nSecret: make an **RPA Secret Variables** credential, or add these to the one you have for this app; select it on **d**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
     );
     // Handed over after approval (the import form approves before it hands the file over): the note does not ask to
     // import and approve the steps; Import Steps alone approves nothing, so by default it does.
     const approved = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop(['password'], ['password'])], source: 'recording', approvedBeforeHandOver: true });
     expect(content(byName(approved, 'Fill in the variables (d)'))).toBe(
-      '### Fill in the variables (gold)\nSecret: make an **RPA Secret Variables** credential, or add these to the one you have for this app; select it on **Desk**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
+      '### Fill in the variables (gold)\nSecret: make an **RPA Secret Variables** credential, or add these to the one you have for this app; select it on **d**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
     );
     // Made by a Site Login's own form (IB-4): the notes name that form and its address, not the default form.
     const formOpts = { name: 'RPA: 5 Import a bot (Sample *accounts*)', address: 'http://localhost:5720/form/rpa-import-sample-accounts' };
@@ -1073,6 +1120,6 @@ describe('buildWorkflow', () => {
     };
     const w = buildWorkflow({ name: 'c', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'c' }] }, [], { name: 'c', desktopDrafts: [desktop], source: 'uipath' });
     expect(JSON.stringify(w)).not.toContain('Hunter-2026');
-    expect((byName(w, 'Desk').parameters as { options: { variables: unknown } }).options.variables).toEqual({ values: [{ name: 'Password', value: '' }, { name: 'company', value: '1000' }] });
+    expect((byName(w, 'c').parameters as { options: { variables: unknown } }).options.variables).toEqual({ values: [{ name: 'Password', value: '' }, { name: 'company', value: '1000' }] });
   });
 });

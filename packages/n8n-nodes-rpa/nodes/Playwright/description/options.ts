@@ -355,6 +355,15 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     displayOptions: only(['importSteps']),
   },
   {
+    displayName: 'Hand Over a Place for Accounts',
+    name: 'handOverAccounts',
+    type: 'boolean',
+    default: false,
+    description:
+      "Whether the workflow file reads the accounts of a bot that signs in to one Site Login with many accounts: a Get accounts node (a Data Table read, off until you pick the table) before each browser Run Steps, and a password change's new password from each account's item. A Site Login's own import form sets it.",
+    displayOptions: only(['importSteps']),
+  },
+  {
     displayName: 'Login Breaker Reset Key',
     name: 'breakerResetKey',
     type: 'string',

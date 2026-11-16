@@ -166,7 +166,7 @@ you use n8n from, and open the form there. [Record a bot](record-a-bot.md) expla
 
 1. In n8n, create a workflow, **⋯ → Import → From File**, and pick `erp-line-items.workflow.json`, in the
    **Downloads** folder of the computer you approved on.
-2. The RPA node is named after your recording (here **ErpDemo recording**). Its **RPA Desktop Runner** and **RPA Step
+2. The RPA node is named after your bot (here **erp-line-items**), as is the workflow. Its **RPA Desktop Runner** and **RPA Step
    Signing** credentials are already picked: the setup command put them on the import form, and the form passes them
    on. Its **Runs On** is **A Windows desktop app**, so the node shows only the three slots a desktop bot uses, and no
    **Start URL**. **Signature** and **Approved By**, which the import sets, are on the node's **Settings** tab.
