@@ -977,3 +977,39 @@ describe('Sign Steps: the change list the approval emails showed (reviewChanges)
     for (const key of ['steps', 'hash', 'signature']) expect(a[key], key).toEqual(b[key]);
   });
 });
+
+describe('Sign Steps: the whole repaired bot the approval emails showed (reviewSteps on a Run Steps item)', () => {
+  const REFUSED = 'Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again';
+  // A repair of version 1: step 1 kept, step 2 written by the model (the change list names it).
+  const REPAIRED: Script = { ...STEPS, steps: [STEPS.steps[0], { intent: 'Open Compliance', click: { role: 'link', name: 'Compliance' } }] };
+  const item = repairedStepsJson(engine, proposalFor(REPAIRED), '', { byModel: true });
+  const shown = item.reviewSteps as IDataObject[];
+
+  it('carries every step as the review page lists it, the model\'s description labelled as the AI\'s, and signs it', async () => {
+    expect(shown).toEqual([
+      { text: 'Open example.com/list', describedAs: 'Open the list', quiet: true, marks: [] },
+      { text: 'Click Compliance', describedAs: 'Open Compliance', quiet: true, byAi: true, marks: [] },
+    ]);
+    expect(only(await sign(item)).json.status).toBe('active');
+  });
+
+  it('refuses an item whose shown steps were altered: a sentence, a description, a step left out or added, an AI label on a kept step', async () => {
+    const at = (k: number, over: IDataObject) => ({ ...item, reviewSteps: shown.map((r, i) => (i === k ? { ...r, ...over } : r)) });
+    for (const altered of [
+      at(0, { text: 'Open example.com/other' }), at(1, { text: 'Click Archive' }), at(1, { describedAs: 'Open Service' }), at(1, { quiet: undefined, describedAs: undefined }),
+      at(0, { byAi: true }), { ...item, reviewSteps: shown.slice(1) }, { ...item, reviewSteps: [...shown, shown[1]] }, { ...item, reviewSteps: 'x' },
+    ]) expect(only(await sign(altered)).json.error, JSON.stringify(altered.reviewSteps)).toBe(REFUSED);
+  });
+
+  it('signs an item without the AI label (an import, or one made before it), and one made before reviewSteps: the same record', async () => {
+    const unlabelled = { ...item, reviewSteps: shown.map(({ byAi: _b, ...r }) => r) };
+    const { reviewSteps: _r, ...older } = item;
+    const records = [];
+    for (const json of [item, unlabelled, older]) {
+      const out = only(await sign(json)).json;
+      expect(out.status).toBe('active');
+      records.push(out);
+    }
+    for (const key of ['steps', 'hash', 'signature']) expect(records.map((r) => r[key])).toEqual([records[0][key], records[0][key], records[0][key]]);
+  });
+});

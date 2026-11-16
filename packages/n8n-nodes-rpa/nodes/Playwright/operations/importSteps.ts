@@ -165,7 +165,7 @@ async function readSource(ctx: NodeContext, i: number, p: ImportParams): Promise
 
 /** What became of one draft. `code` is the engine's error code when the engine refused or failed it. */
 type DraftOutcome =
-  | { draft: Draft; kind: 'adopted'; proposal: Proposal }
+  | { draft: Draft; kind: 'adopted'; proposal: Proposal; /** The chat model repaired the draft (the agent lane). */ byModel: boolean }
   | { draft: Draft; kind: 'forApproval'; review: IDataObject }
   | { draft: Draft; kind: 'notAdoptable'; code?: ErrorCode; reason: string }
   | { draft: Draft; kind: 'failed'; code?: ErrorCode; reason: string; captures?: Captures; guidance?: string };
@@ -443,21 +443,13 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   const repaired: INodeExecutionData[] = [];
   for (const o of outcomes) {
     if (o.kind === 'adopted') {
-      const item = await repairedStepsItem(ctx, engine, withLeftOut(o.proposal));
-      repaired.push({ ...item, json: withReviewSteps(engine, item.json), pairedItem: paired });
+      const item = await repairedStepsItem(ctx, engine, withLeftOut(o.proposal), { byModel: o.byModel });
+      repaired.push({ ...item, pairedItem: paired });
     }
-    if (o.kind === 'forApproval') repaired.push({ json: withReviewSteps(engine, o.review), pairedItem: paired });
+    if (o.kind === 'forApproval') repaired.push({ json: o.review, pairedItem: paired });
   }
   for (const o of desktopOut) if (o.review) repaired.push({ json: o.review, pairedItem: paired });
   return { kind: 'ok', data: { json: fields, pairedItem: paired, ...binaryField }, repaired };
-}
-
-/** A browser Repaired steps item with its steps as the review page lists them (shown only, never signed or reviewed). */
-function withReviewSteps(engine: Pick<Engine, 'shownUrl'>, json: IDataObject): IDataObject {
-  const doc = json.steps as { steps?: unknown; startUrl?: unknown } | null;
-  const steps = doc?.steps;
-  const startUrl = typeof doc?.startUrl === 'string' ? doc.startUrl : undefined;
-  return { ...json, reviewSteps: reviewSteps(Array.isArray(steps) ? steps : [], { desktop: false, shownUrl: engine.shownUrl, startUrl }) as unknown as IDataObject[] };
 }
 
 /**
@@ -635,7 +627,7 @@ async function adoptAll(
     const r = ran.result;
     if (repair && r.lane === 'agent' && ((r.llmCalls ?? 0) > 0 || r.ok)) noteRepairRan(ctx);
     if (r.ok) {
-      outcomes.push({ draft, kind: 'adopted', proposal: r.proposal });
+      outcomes.push({ draft, kind: 'adopted', proposal: r.proposal, byModel: r.lane === 'agent' });
     } else if (r.adoptable === false) {
       outcomes.push({ draft, kind: 'notAdoptable', code: r.code, reason: r.message });
     } else {

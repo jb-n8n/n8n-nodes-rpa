@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CODE_WORKFLOW_GUIDANCE, CONFIG_GUIDANCE, GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
 import { APPROVER } from './fixtures.js';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
-import { isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
+import { describeStep, isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
 import { ConfigError, MAX_SECONDS } from '../nodes/Playwright/config.js';
 import { memoryGuardStore, type GuardStore } from '../nodes/Playwright/guard-store.js';
 import { BREAKER_KEY, loginFingerprints, resetGuardsForTests, siteLoginKey } from '../nodes/Playwright/guard.js';
@@ -849,10 +849,15 @@ describe('outputs', () => {
     });
     expect(repaired).toHaveLength(1);
     expect(Object.keys(repaired[0].json)).toEqual([
-      'name', 'baseVersion', 'version', 'steps', 'hash', 'digest', 'evidence', 'changes', 'safetyFlags', 'evidenceLine', 'changeList', 'safetyLine', 'reviewChanges', 'attachmentNames',
+      'name', 'baseVersion', 'version', 'steps', 'hash', 'digest', 'evidence', 'changes', 'safetyFlags', 'evidenceLine', 'changeList', 'safetyLine', 'reviewChanges', 'reviewSteps', 'attachmentNames',
     ]);
     // A repair: the change list as the approval emails show it. An entry that names no step keeps the run's words.
     expect(repaired[0].json.reviewChanges).toEqual([{ change: 'Changed', text: 'Read the product list', was: 'Read the items' }]);
+    // The whole repaired bot, as the import's review page lists it: every step, not only the changed ones.
+    expect(repaired[0].json.reviewSteps).toEqual([
+      { text: 'Open example.com/list', describedAs: 'Open the list', quiet: true, marks: [] },
+      { text: 'Read the items', marks: [] },
+    ]);
     expect(repaired[0].json).toMatchObject({
       name: 'items', baseVersion: 3, version: 4, hash: 'd4'.repeat(32), digest: proposalDigest({ ...PROPOSAL, safetyFlags: ['host: example.com'] }), safetyFlags: ['host: example.com'], evidenceLine: 'Proven in a fresh browser: 3 of 3 rows',
       changeList: 'Changed: Read the items -> Read the product list', safetyLine: 'host: example.com', attachmentNames: 'before,after',
@@ -864,6 +869,18 @@ describe('outputs', () => {
     expect(repaired[0].binary?.trace).toMatchObject({ fileName: 'items-v4-proof-trace.zip', mimeType: 'application/zip' });
     expect(repaired[0].pairedItem).toEqual([{ item: 0 }]);
     expect(JSON.stringify(repaired[0].json)).not.toMatch(/proposal/i);
+  });
+  it('a repair labels a description on a step the model wrote as the AI\'s, and only there', async () => {
+    // The model kept step 1 from version 3 and added step 2: the change list names step 2 only.
+    const added = { intent: 'Open Compliance', click: { role: 'link', name: 'Compliance' } };
+    const steps = { ...STEPS, version: 4, steps: [STEPS.steps[0], added, STEPS.steps[1]] } as Script;
+    const proposal = { ...PROPOSAL, steps, changes: [{ was: null, now: describeStep(added as never) }] };
+    const [, repaired] = await executeRunSteps(ctx({ model: STUB_MODEL, params: repairParams() }), fakeEngine(() => agentOk({ proposal })));
+    expect(repaired[0].json.reviewSteps).toEqual([
+      { text: 'Open example.com/list', describedAs: 'Open the list', quiet: true, marks: [] },
+      { text: 'Click Compliance', describedAs: 'Open Compliance', quiet: true, byAi: true, marks: [] },
+      { text: 'Read the items', marks: [] },
+    ]);
   });
   it('a first run (empty steps) sends no Data item: its only output is the Repaired steps item', async () => {
     const engine = fakeEngine(() => agentOk({ rows: [{ id: 'SKU-1001' }, { id: 'SKU-1002' }], confirmed: true, llmCalls: 3, proposal: { ...PROPOSAL, baseVersion: null, version: 1 } }));

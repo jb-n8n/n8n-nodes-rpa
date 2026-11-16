@@ -6,7 +6,7 @@ import type { Engine } from '../engine.js';
 import { configNodeError, errorJson } from '../errors.js';
 import {
   changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, importAddedSteps, isDesktopProposal, isFileDocument, leftOutList,
-  NOT_REPLAYED_EVIDENCE_LINE, POSITION_MARKS, reviewChanges, reviewSteps, safetyLine, type ReviewStep,
+  modelSteps, NOT_REPLAYED_EVIDENCE_LINE, POSITION_MARKS, reviewChanges, reviewSteps, safetyLine, type ReviewStep,
 } from '../format.js';
 import { configErrorItem } from '../output.js';
 import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
@@ -144,6 +144,9 @@ function sameReviewStep(shown: unknown, built: ReviewStep): boolean {
   // Shown quietly only when the rebuilt step is quiet too. An item made before the mark existed has none: its page and
   // emails showed every description as a warning, which says more, never less, than the rebuilt one.
   if (shown.quiet !== undefined && !(shown.quiet === true && built.quiet === true)) return false;
+  // Labelled as the AI's only on a step the change list names as added or changed (modelSteps): Sign Steps does not know
+  // whether a model wrote the steps, so an item without the label (an import, or one made before it existed) signs too.
+  if (shown.byAi !== undefined && !(shown.byAi === true && built.byAi === true)) return false;
   const marks = shown.marks.map((m) => (typeof m === 'string' ? m.replace(STARTS_AS, '$1') : m));
   // The position mark (a step that finds its control by its row or place) is the last mark. An item made before it
   // existed shows none: it signs as before, as an item without reviewSteps does. A mark that is shown must be the one
@@ -162,7 +165,8 @@ function sameReviewStep(shown: unknown, built: ReviewStep): boolean {
  * import used, entry by entry (a paginate's inner lines too), with the marks: the variables (secret ones as the item's
  * `secretVariables` name them on desktop steps, from the step on browser steps), a returned file, a read's output, a
  * sign-in, and "added" only on a step the import may add. A start value is not recorded on the item and is not compared.
- * An item without `reviewSteps` (an older one, or one from Run Steps) is signed as before.
+ * A label that says the AI wrote a description is allowed only on a step the change list names (modelSteps). An item
+ * without `reviewSteps` (one made before Run Steps added them) is signed as before.
  */
 function reviewStepsProblem(engine: Engine, p: ParsedProposal, json: IDataObject): string | undefined {
   const shown = json.reviewSteps;
@@ -174,7 +178,10 @@ function reviewStepsProblem(engine: Engine, p: ParsedProposal, json: IDataObject
     const secretVariables = Array.isArray(json.secretVariables) ? json.secretVariables.filter((v): v is string => typeof v === 'string') : [];
     built = engine.isDesktopDocument(p.steps)
       ? reviewSteps(steps, { desktop: true, secretVariables, added: importAddedSteps(steps as never) })
-      : reviewSteps(steps, { desktop: false, shownUrl: engine.shownUrl, startUrl: isObject(p.steps) && typeof p.steps.startUrl === 'string' ? p.steps.startUrl : undefined });
+      : reviewSteps(steps, {
+        desktop: false, shownUrl: engine.shownUrl, startUrl: isObject(p.steps) && typeof p.steps.startUrl === 'string' ? p.steps.startUrl : undefined,
+        byAi: modelSteps(engine, steps, p.changes.map((c) => ({ was: typeof c.was === 'string' ? c.was : null, now: typeof c.now === 'string' ? c.now : null }))),
+      });
   } catch {
     return REVIEW_STEPS_CHANGED;
   }

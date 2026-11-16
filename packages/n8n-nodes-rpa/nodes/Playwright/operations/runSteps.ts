@@ -168,7 +168,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     return failure({ ...r, message: `${withVariableHint(r.message)}${hint}` });
   }
   try {
-    const repaired = r.lane === 'agent' && r.proposal ? { ...(await repairedStepsItem(ctx, engine, r.proposal)), pairedItem: paired } : undefined;
+    const repaired = r.lane === 'agent' && r.proposal ? { ...(await repairedStepsItem(ctx, engine, r.proposal, { byModel: true })), pairedItem: paired } : undefined;
     // A first run's only output is the Repaired steps item: nothing reads the site's data until
     // version 1 is approved, so the agent's rows never reach Data.
     if (p.steps.kind === 'empty') return { kind: 'ok', ...(repaired ? { repaired } : {}) };
