@@ -5,11 +5,11 @@ import { adoptDraft, statedIdPattern, type AdoptInput } from '../src/import/adop
 import { runDraft } from '../src/lane/draft.js';
 import { runTask, type TaskInput, type TaskResult } from '../src/lane/task.js';
 import { checkTrust } from '../src/lane/trust.js';
-import { buildProposal, proposalDigest } from '../src/proposal/proposal.js';
+import { buildProposal, filesEvidenceText, proposalDigest, UNVERIFIED_COUNT_FLAG } from '../src/proposal/proposal.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { scriptHash } from '../src/sign.js';
 import { CANCELLED } from '../src/lane/script-lane.js';
-import { IMPORT_EMPTY, IMPORT_NOT_ADOPTABLE, IMPORT_ROWS_NEED_ID, ROWS_WITHHELD, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, REPAIR_NEEDS_ID_AND_EXTRACT, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
+import { IMPORT_EMPTY, IMPORT_NOT_ADOPTABLE, IMPORT_ROWS_NEED_ID, importCannotProve, ROWS_WITHHELD, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, REPAIR_NEEDS_ID_AND_EXTRACT, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
 import type { CodeProvider, PortalPolicy, Script, Step } from '../src/types.js';
 import { fakeModel } from './fake-model.js';
 import { ERP_CHECK, LOCAL, policyFor, SECRETS, TEST_KEY } from './helpers.js';
@@ -243,25 +243,56 @@ describe('draft mode', () => {
 });
 
 describe('what can be adopted', () => {
-  const cases: [string, Script, AdoptInput['output']?][] = [
-    ['no rows and no file', draftOf([{ intent: 'Open Reports', click: { role: 'link', name: 'Reports' } }])],
-    ['an ID Pattern but no extract step', draftOf([{ intent: 'Open Reports', click: { role: 'link', name: 'Reports' } }]), { idPattern: 'N26-\\d{4}' }],
-    ['a download without a check', draftOf([{ intent: 'Export', download: { trigger: { role: 'button', name: 'Export' } } }])],
-    ['a check that names neither the file nor its columns', draftOf([{ intent: 'Export', download: { trigger: { role: 'button', name: 'Export' }, check: { minRows: 1 } } }])],
-    ['two downloads', draftOf([DOWNLOAD, DOWNLOAD])],
-    ['a download and an extract', draftOf([EXTRACT, DOWNLOAD]), { idPattern: 'N26-\\d{4}' }],
-    ['a screenshot', draftOf([{ intent: 'Shoot', screenshot: { capture: 'viewport' } }, DOWNLOAD])],
-    ['a download inside paginate', draftOf([{ intent: 'Pages', paginate: { next: { text: 'Next' }, until: 'absent', max: 2, each: [DOWNLOAD] } } as Step])],
+  const UNCHECKED = 'the download in step 3 has no check that names the file or its columns (check.name or check.columns), so the replay cannot tell the right file from a wrong one';
+  const cases: [string, Script, AdoptInput['output'] | undefined, string][] = [
+    ['no rows and no file', draftOf([{ intent: 'Open Reports', click: { role: 'link', name: 'Reports' } }]), undefined, IMPORT_NOT_ADOPTABLE],
+    ['an ID Pattern but no extract step', draftOf([{ intent: 'Open Reports', click: { role: 'link', name: 'Reports' } }]), { idPattern: 'N26-\\d{4}' },
+      `${IMPORT_NOT_ADOPTABLE} Rows need an ID Pattern and an extract or table step.`],
+    ['a download without a check', draftOf([{ intent: 'Export', download: { trigger: { role: 'button', name: 'Export' } } }]), undefined, importCannotProve('download 1 file', UNCHECKED)],
+    ['a check that names neither the file nor its columns', draftOf([{ intent: 'Export', download: { trigger: { role: 'button', name: 'Export' }, check: { minRows: 1 } } }]), undefined,
+      importCannotProve('download 1 file', UNCHECKED)],
+    ['a download and an extract', draftOf([EXTRACT, DOWNLOAD]), { idPattern: 'N26-\\d{4}' },
+      importCannotProve('read rows and download 1 file', 'a replay proves rows or files, not both in one step list')],
+    ['a download inside paginate', draftOf([{ intent: 'Pages', paginate: { next: { text: 'Next' }, until: 'absent', max: 2, each: [DOWNLOAD] } } as Step]), undefined,
+      importCannotProve('download 1 file', 'a download or screenshot inside paginate (step 3) repeats, so the replay cannot tell what to expect')],
+    ['a PDF beside two downloads', draftOf([DOWNLOAD, { intent: 'Save', pdf: {} } as Step, DOWNLOAD]), undefined,
+      importCannotProve('download 2 files and save 1 PDF', 'a replay cannot prove a PDF or read step (step 4)')],
   ];
-  it.each(cases)('a non-adoptable draft (%s) returns IMPORT_NOT_ADOPTABLE', async (_name, draft, output) => {
+  it.each(cases)('a non-adoptable draft (%s) says what the steps do and why they cannot be proved', async (_name, draft, output, message) => {
     const r = await adoptDraft(adoptInput(draft, output ? { output } : {}));
-    expect(r).toMatchObject({ ok: false, code: 'policy_violation', adoptable: false, configError: true });
-    // The golden text first; a draft that has something to prove but in a shape prove cannot judge says what is missing.
-    expect((r.ok ? '' : r.message).startsWith(IMPORT_NOT_ADOPTABLE)).toBe(true);
-    if (_name === 'no rows and no file') expect(r.ok ? '' : r.message).toBe(IMPORT_NOT_ADOPTABLE);
-    else expect(r.ok ? '' : r.message.length).toBeGreaterThan(IMPORT_NOT_ADOPTABLE.length);
+    expect(r).toMatchObject({ ok: false, code: 'policy_violation', adoptable: false, configError: true, message });
     expect(lane.seen).toEqual([]);
     expect(sessions).toEqual([]);
+  });
+
+  it('the texts', () => {
+    expect(IMPORT_NOT_ADOPTABLE).toBe('These steps read no rows, download no file and take no screenshot, so there is nothing to prove: the draft is returned for review but cannot be signed.');
+    expect(importCannotProve('download 3 files', 'reasons')).toBe('These steps download 3 files, but reasons: the draft is returned for review but cannot be signed.');
+  });
+
+  it('several checked downloads, or a screenshot, are proved together: each file and screenshot with its step number', async () => {
+    const shot = { intent: 'Keep a screenshot', screenshot: { capture: 'viewport' } } as Step;
+    for (const steps of [[DOWNLOAD, DOWNLOAD], [shot, DOWNLOAD], [shot]]) {
+      lane.next = laneSuccess();
+      prove.next = {
+        ok: true, rows: [], total: null, reasons: [], diff: { missing: [], extra: [] }, policyViolation: false, readPosts: [],
+        files: [{ step: 3, fileName: 'LINEITEMS_1000.csv', mimeType: 'text/csv', bytes: 120, columns: ['Document'], rows: 3 }], screenshots: [4],
+      };
+      const r = await adoptDraft(adoptInput(draftOf(steps)));
+      if (!r.ok) throw new Error(JSON.stringify(r));
+      expect(prove.seen.at(-1)).toMatchObject({ expectFiles: true });
+      expect(prove.seen.at(-1)!.expectFile).toBeUndefined();
+      expect(r.proposal.evidence).toEqual({
+        count: 0, total: null, diff: { missing: [], extra: [] },
+        files: [{ step: 3, fileName: 'LINEITEMS_1000.csv', mimeType: 'text/csv', bytes: 120, columns: ['Document'], rows: 3 }], screenshots: [4],
+      });
+      // A file is the evidence, as for one download: no "count unverified" flag.
+      expect(r.proposal.safetyFlags).not.toContain(UNVERIFIED_COUNT_FLAG);
+      expect(r.digest).toBe(proposalDigest(r.proposal));
+    }
+    expect(filesEvidenceText({ files: [{ step: 3, fileName: 'a.csv', mimeType: 'text/csv', bytes: 12, columns: null, rows: 2 }, { step: 7, fileName: 'b.xlsx', mimeType: 'application/zip', bytes: 900, columns: null, rows: null }], screenshots: [5] }))
+      .toBe('Proven in a fresh browser: step 3 downloaded "a.csv" (text/csv, 12 bytes, 2 rows), step 5 took a screenshot and step 7 downloaded "b.xlsx" (application/zip, 900 bytes); every file passed the checks its step declares');
+    expect(filesEvidenceText({ files: [], screenshots: [4] })).toBe('Proven in a fresh browser: step 4 took a screenshot');
   });
 
   it('a rows draft with an ID Pattern and an extract step is adopted; its proof judges rows', async () => {

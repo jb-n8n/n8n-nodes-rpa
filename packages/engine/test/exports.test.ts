@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
  */
 const EXPORTS = [
   'AGENT_TOOLS', 'ALSO_CHANGED', 'AgentTools', 'BROWSER_CERT_NOT_TRUSTED', 'BROWSER_CERT_NOT_TRUSTED_CDP', 'BROWSER_FINGERPRINT_INVALID',
-  'BROWSER_FINGERPRINT_MISMATCH', 'BROWSER_FINGERPRINT_NEEDS_WSS', 'BrowserUnavailableError', 'CANCELLED', 'CONNECT_TIMEOUT_MS',
+  'BROWSER_FINGERPRINT_MISMATCH', 'BROWSER_FINGERPRINT_NEEDS_WSS', 'BrowserUnavailableError', 'CANCELLED', 'CONDITION_NOT_MET', 'CONNECT_TIMEOUT_MS',
   'CompileError', 'DEFAULT_BUDGET_MS', 'DEFAULT_CODE_TIMEOUT_MS', 'DEFAULT_LEASE_MS', 'DEFAULT_MAX_ACTIONS', 'DEFAULT_MAX_BYTES',
   'DEFAULT_MAX_TOKENS', 'DEFAULT_MIME', 'DEFAULT_RUNNER_PORT', 'DENYLIST', 'DESKTOP_CHANGES_MISMATCH', 'DESKTOP_EVIDENCE_INVALID',
   'DESKTOP_FLAGS_INCOMPLETE', 'DESKTOP_NEEDS_FIRST_VERSION', 'DESKTOP_VERBS', 'DESKTOP_WRITES_PRESET', 'DETECTED_PREFIX',
@@ -27,9 +27,9 @@ const EXPORTS = [
   'codeWorkflowFailed', 'compileProposal', 'connectRunner', 'createAddressGuard', 'createMasker', 'currentIdentity', 'declareWrites',
   'defaultResolveHost', 'describeCheck', 'describeDesktopStep', 'describeInterrupt', 'describeLocator', 'describeStep', 'desktopBinding',
   'desktopProposal', 'desktopSafetyFlags', 'desktopVerbOf', 'desktopWriteCandidates', 'detectImportSource', 'detectTotal',
-  'downloadTemplateIssues', 'downloadTemplateOf', 'effectivePolicy', 'effectiveWriteMode', 'elideOldPages', 'extractsFields', 'fileFacts',
+  'downloadTemplateIssues', 'downloadTemplateOf', 'effectivePolicy', 'effectiveWriteMode', 'elideOldPages', 'extractsFields', 'fileFacts', 'filesEvidenceText',
   'fingerprintOf', 'firstPresent', 'firstUserMessage', 'flattenSteps', 'hasChangePassword', 'hasSecretFill', 'hasSignature', 'hostnameOf',
-  'importSource', 'installInterrupts', 'isDesktopDocument', 'isDestructive', 'isEmptySteps', 'isLoginPage', 'isPrivateAddress',
+  'importCannotProve', 'importSource', 'installInterrupts', 'isDesktopDocument', 'isDestructive', 'isEmptySteps', 'isLoginPage', 'isPrivateAddress',
   'isVisibleNow', 'laneFailure', 'laneMasker', 'localLaunchArgs', 'loginBlockEnd', 'maskLog', 'maskedName', 'matchingReadPost',
   'modelErrorText', 'msUntilNextWindow', 'needsApprovalAsWritten', 'networkSentence', 'neutralize', 'newRunState', 'noWritePolicy', 'normalizeFingerprint',
   'normalizeForDenylist', 'notHttp', 'notReplayedFlags', 'notReplayedProposal', 'openLaneRuntime', 'openSession', 'pageOf',

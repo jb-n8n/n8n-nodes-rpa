@@ -109,9 +109,13 @@ and Remote Desktop windows, and SAP GUI for Windows. A UiPath project gives one 
   `Only JavaScript or TypeScript Playwright code can be imported; record with --target javascript.`
 
 Clicks, typing, choices, checks and Enter come over, and from Playwright code also hovers, clicks with Ctrl, Shift
-or Alt held, and key presses. A file upload and page JavaScript have no step and are reported. Steps that read no rows and download
-no file cannot be proved by a replay:
-`These steps read no rows and download no file, so there is nothing to prove: the draft is returned for review but cannot be signed.`
+or Alt held, and key presses. A file upload and page JavaScript have no step and are reported. Steps that read no rows,
+download no file and take no screenshot cannot be proved by a replay:
+`These steps read no rows, download no file and take no screenshot, so there is nothing to prove: the draft is returned for review but cannot be signed.`
+Steps that download several files, or take a screenshot, are proved together: every download step that runs must bring
+its file, and each download needs a `check` that names the file or its columns. The review page lists each file with its
+name and size, and each screenshot. When steps cannot be proved for another reason, the message says what they do and
+what stands in the way, such as a download without a check.
 
 ## From a recording of a Windows app
 

@@ -131,6 +131,9 @@ async function conditionMet(when: StepWhen, surface: Surface, ctx: StepContext):
   return 'equals' in when ? value === when.equals : value !== when.notEquals;
 }
 
+/** The log note of a step skipped because its `when` was not met (an optional step that failed notes its error instead). */
+export const CONDITION_NOT_MET = 'condition not met';
+
 /**
  * Runs steps in order. `afterStep` is awaited with the index of each top-level step the run got past (it passed, or
  * was skipped because its `when` condition was not met or because it is optional), before the next step starts.
@@ -171,7 +174,7 @@ export async function runSteps(
     const timeout = Math.min(step.timeoutMs ?? ctx.defaultTimeoutMs, opts.maxTimeoutMs ?? Infinity);
     let hookLabel: string | undefined;
     const skipUnmet = async () => {
-      log('skipped', 0, { note: 'condition not met' });
+      log('skipped', 0, { note: CONDITION_NOT_MET });
       if (!opts.nested) await opts.afterStep?.(i);
     };
     const endHook = async (ok: boolean) => {

@@ -278,7 +278,10 @@ Login. A step found by a row position (`Vendor Row 1`) is reported, because a la
 Import messages, word for word:
 - `The recording signs in: attach an RPA Site Login so the import can sign in without the typed password.`
 - `Imported steps that submit a form or post to download cannot be adopted: repair and import never write.`
-- `These steps read no rows and download no file, so there is nothing to prove: the draft is returned for review but cannot be signed.`
+- `These steps read no rows, download no file and take no screenshot, so there is nothing to prove: the draft is returned for review but cannot be signed.`
+- `These steps <what they do>, but <what stands in the way>: the draft is returned for review but cannot be signed.`, for
+  steps a replay cannot prove as they are: a download without a check that names the file or its columns, a download or
+  screenshot inside `paginate`, a PDF or read step, or rows together with files.
 - `These steps read rows, but a step that reads them has no idPattern, so the replay cannot check the rows: the draft is returned for review but cannot be signed. Give each extract and extractTable step an idPattern, the shape of the ID every row has, such as INV-\d{4}.`
 - `Only JavaScript or TypeScript Playwright code can be imported; record with --target javascript.`
 - `Nothing in this file could be turned into steps.`

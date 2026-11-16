@@ -308,7 +308,10 @@ export const DOWNLOAD_NEEDS_BROWSER_SERVER =
 export const IMPORT_NEEDS_SITE_LOGIN = 'The recording signs in: attach an RPA Site Login so the import can sign in without the typed password.';
 export const IMPORT_REFUSES_WRITES = 'Imported steps that submit a form or post to download cannot be adopted: repair and import never write.';
 export const IMPORT_NOT_ADOPTABLE =
-  'These steps read no rows and download no file, so there is nothing to prove: the draft is returned for review but cannot be signed.';
+  'These steps read no rows, download no file and take no screenshot, so there is nothing to prove: the draft is returned for review but cannot be signed.';
+/** Steps that do something a replay could prove, in a shape it cannot: what they do (`found`), and what stands in the way. */
+export const importCannotProve = (found: string, why: string) =>
+  `These steps ${found}, but ${why}: the draft is returned for review but cannot be signed.`;
 export const IMPORT_ROWS_NEED_ID =
   'These steps read rows, but a step that reads them has no idPattern, so the replay cannot check the rows: the draft is returned for review but cannot be signed. Give each extract and extractTable step an idPattern, the shape of the ID every row has, such as INV-\\d{4}.';
 export const IMPORT_UNSUPPORTED_TARGET = 'Only JavaScript or TypeScript Playwright code can be imported; record with --target javascript.';

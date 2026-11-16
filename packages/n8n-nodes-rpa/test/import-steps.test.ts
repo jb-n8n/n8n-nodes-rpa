@@ -127,7 +127,7 @@ function proved(input: AdoptInput, over: { lane?: 'script' | 'agent'; llmCalls?:
 const adoptFailure = (code: Extract<AdoptResult, { ok: false }>['code'], message: string, over: Partial<Extract<AdoptResult, { ok: false }>> = {}): AdoptResult => ({
   ok: false, code, message, violations: [], log: [], blockedRequests: [], durationMs: 900, lane: 'script', ...over,
 });
-const NOT_ADOPTABLE = `${real.IMPORT_NOT_ADOPTABLE} Screenshot, PDF and read steps cannot be proved.`;
+const NOT_ADOPTABLE = real.importCannotProve('take 1 screenshot and save 1 PDF', 'a replay cannot prove a PDF or read step (step 4)');
 
 /** The Chrome fixture's draft, renamed: hand-built UiPath drafts reuse its steps. */
 function chromeDraft(name: string): Draft {
