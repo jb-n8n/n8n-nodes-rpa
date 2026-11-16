@@ -86,7 +86,7 @@ The parameters (all of them work with `Get-Rpa.ps1` and `Install-Rpa.ps1`):
 | `-Address <name or address>` | The name or address n8n reaches this machine at, for the Connection Lines. `rpa connection` and upgrades keep it. Without it, behind a NAT (this machine's address towards the one `-AllowFrom` address is private, and that address is not), the installer asks for it once after `YES`, and Enter keeps the private one. Not with `-Force` or `-Unattended`. |
 | `-User <name>` | The bot user. Default `rpa-runner`, created as a standard user. An existing administrator is refused. |
 | `-UserPassword <SecureString>` | A password for the bot user, for example `-UserPassword (Read-Host 'Password' -AsSecureString)`. Give one you keep if a person will ever sign in as the bot user. |
-| `-Unattended`, `-IdleSeconds <n>` | Nobody signed in: a service signs the bot user in for each run and out `-IdleSeconds` (15) after it. Windows Server only. |
+| `-Unattended`, `-IdleSeconds <n>` | Nobody signed in: a service signs the bot user in for each run and out `-IdleSeconds` (15) after it. Windows Server only. Given, it also keeps the installer from asking for the address and from offering the Connection Line with its token. |
 | `-AutoSignIn` | Windows keeps the bot user signed in. |
 | `-RunnerPort`, `-BrowserPort` | Other ports than 8765 and 3000. |
 | `-WithBrowser` | Add the browser (see [Who can reach the ports](#who-can-reach-the-ports)). It needs the browser zip. |
@@ -96,8 +96,8 @@ The parameters (all of them work with `Get-Rpa.ps1` and `Install-Rpa.ps1`):
 **When n8n cannot reach this machine** (a NAT, a home or office network, another cloud): install with `-NoFirewall`
 and follow [When n8n cannot reach this machine](#when-n8n-cannot-reach-this-machine).
 
-When it has finished, the installer prints where everything is, `RPA is installed.`, and with `-Unattended` the
-Connection Lines with their tokens hidden, then `For how the supervisor is doing: & "C:\Program Files\RPA Runner\rpa.cmd" status`.
+At the end it prints `RPA is installed.`, what is installed and `Next:`; where everything is goes to `install.log` in
+the install folder. After an unattended install, `y` at its last question prints the Connection Line with its token (section 6).
 
 ## 3. What the install changes
 

@@ -35,13 +35,14 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 The installer lists what it will change and asks you to type `YES`. On Windows Server it sets up the **unattended**
 mode: a Windows service signs the bot user in when n8n connects and signs it out afterwards, so nobody needs to stay
-signed in. It prints `RPA is installed.` and a summary.
+signed in. It ends with `RPA is installed.`, what is installed, `Next:`, and a question:
+`Show the Connection Line now, to paste into the setup command? (y/N)`.
 
-In the same PowerShell, print the Connection Line with its token, and keep the window open for step 2:
-`& "C:\Program Files\RPA Runner\rpa.cmd" connection -ShowTokens`. The line starts `rpa-runner://`. Its address is the
-name or address you gave the installer (it asks for one when n8n is outside this machine's private network), else the
-one this machine has towards the n8n address you gave `-AllowFrom`, and the command says which. If n8n reaches the
-machine by another name or address (a NAT, a tunnel), run the command again with `-Address <that name or address>`.
+Type `y`. It prints the Connection Line with its token: keep the window open for step 2. The line starts
+`rpa-runner://`. Its address is the name or address you gave the installer (it asks for one when n8n is outside this
+machine's private network), else the one this machine has towards the n8n address you gave `-AllowFrom`, and the line
+below it says which. If you answered no, or n8n reaches the machine by another name or address (a NAT, a tunnel), print
+it in the same PowerShell: `& "C:\Program Files\RPA Runner\rpa.cmd" connection -ShowTokens`, with `-Address <that name or address>` if needed.
 
 ## 2. Set up n8n with one command
 
