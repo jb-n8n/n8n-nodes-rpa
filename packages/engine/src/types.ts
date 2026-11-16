@@ -88,8 +88,9 @@ export interface SignInSpec {
   };
   /**
    * A site that forces a new password at sign-in: once the sign-in (and its code) is done, when `detect` shows, the
-   * step types the Site Login password into `current` (when the form has one), the variable's value into each `new`
-   * field, and clicks `submit`.
+   * step clicks `via` (when given) until the change form shows, types the Site Login password into `current` (when the
+   * form has one), the variable's value into each `new` field, and clicks `submit`. With `signInAgain`, it then signs in
+   * once more with the new password when the site shows its sign-in page again.
    * The change page must be a declared login page. `value` follows the rule of a secret fill: exactly one {{var.name}},
    * masked from the start of the run, signed steps only. No variable is allowed in the locators.
    */
@@ -99,6 +100,20 @@ export interface SignInSpec {
 /** signIn.changePassword: the change page's marker, its fields and button, and the variable that holds the new password. */
 export interface ChangePasswordSpec {
   detect: Locator;
+  /**
+   * A change form behind a link or button ("Modify password"): once `detect` shows, each locator is clicked in order,
+   * each only if it shows before the first `new` field does (waiting up to the step timeout), until that field shows. A
+   * locator that never shows is skipped. With via, the first `new` field marks the change page: the change counts as
+   * done once it is gone, and as refused when the site sends it back.
+   */
+  via?: Locator[];
+  /**
+   * Sign in again with the new password when the site asks for it after the change: its `via` buttons or links (a
+   * "Continue" on the confirmation page) are clicked in order, each only if it shows, until the username field (or
+   * the password field) shows on a declared login page; then the step signs in as before with the new password, and
+   * its code when the step has `totp`. When the run leaves the login pages instead, nothing more is typed.
+   */
+  signInAgain?: { via?: Locator[] };
   /** The current-password field; absent for a form that asks only for the new password. */
   current?: Locator;
   /** One or two fields (the new password and its confirmation). */

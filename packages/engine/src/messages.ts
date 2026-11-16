@@ -130,6 +130,15 @@ export const CODE_WORKFLOW_REJECTED_TWICE = 'the site rejected the one-time code
 /** A signIn with totp.via: the code field did not show within the step timeout after the password or the last via click (drift). */
 export const signInCodeFieldMissing = (seconds: number, clicked: number, total: number) =>
   `signIn: the one-time code field did not appear within ${seconds} s after the password was submitted (${clicked} of ${total} totp.via clicked)`;
+/** signIn.changePassword with via: the change form's first new-password field did not show within the step timeout (drift). */
+export const changePasswordFormMissing = (seconds: number, clicked: number, total: number) =>
+  `signIn: the change-password form did not appear within ${seconds} s after the site asked for a new password (${clicked} of ${total} changePassword.via clicked)`;
+/**
+ * signIn.changePassword.signInAgain: the site took the new password, but neither its sign-in page nor any other page
+ * showed within the step timeout (drift). The output still says passwordChanged.
+ */
+export const signInAgainPageMissing = (seconds: number) =>
+  `signIn: the site took the new password, but its sign-in page did not show again within ${seconds} s`;
 /** The agent's two-page sign_in typed the username and moved to the password page, but never ran its second call. */
 export const AGENT_SIGN_IN_UNFINISHED = 'the agent typed the username but did not finish signing in on the password page';
 

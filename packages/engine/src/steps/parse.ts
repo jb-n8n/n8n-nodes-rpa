@@ -186,15 +186,30 @@ function checkWhenSecrets(steps: Step[], secret: Set<string>, issues: string[], 
   });
 }
 
+/** A list of 1 to 5 locators (signIn's totp.via and check, changePassword.via, signInAgain.via). */
+function checkLocatorList(list: unknown, p: string, issues: string[]) {
+  if (!Array.isArray(list) || list.length === 0 || list.length > 5) { issues.push(`${p} must be an array of 1 to 5 locators`); return; }
+  list.forEach((loc, i) => checkLocator(loc, `${p}[${i}]`, issues));
+}
+
 /**
- * signIn.changePassword: `{ detect, current?, new: 1 or 2 locators, submit, value }`. `value` follows the rule of a secret
- * fill (exactly one {{var.name}}, nothing around it). Its locators are checked for variables with the rest of signIn
- * (checkBrowserWriteLocators). Returns the object when it is one, for the caller's frame check.
+ * signIn.changePassword: `{ detect, via?, current?, new: 1 or 2 locators, submit, value, signInAgain? }`, signInAgain
+ * being `{ via? }`. `value` follows the rule of a secret fill (exactly one {{var.name}}, nothing around it). Its locators
+ * are checked for variables with the rest of signIn (checkBrowserWriteLocators). Returns the object when it is one, for
+ * the caller's frame check.
  */
 function checkChangePassword(v: unknown, p: string, issues: string[]): Obj | undefined {
   if (!isObj(v)) { issues.push(`${p} must be an object`); return undefined; }
-  checkKeys(v, ['detect', 'current', 'new', 'submit', 'value'], p, issues);
+  checkKeys(v, ['detect', 'via', 'current', 'new', 'submit', 'value', 'signInAgain'], p, issues);
   checkLocator(v.detect, `${p}.detect`, issues);
+  if (v.via !== undefined) checkLocatorList(v.via, `${p}.via`, issues);
+  if (v.signInAgain !== undefined) {
+    if (!isObj(v.signInAgain)) issues.push(`${p}.signInAgain must be an object`);
+    else {
+      checkKeys(v.signInAgain, ['via'], `${p}.signInAgain`, issues);
+      if (v.signInAgain.via !== undefined) checkLocatorList(v.signInAgain.via, `${p}.signInAgain.via`, issues);
+    }
+  }
   if (v.current !== undefined) checkLocator(v.current, `${p}.current`, issues);
   if (!Array.isArray(v.new) || v.new.length < 1 || v.new.length > 2) issues.push(`${p}.new must be an array of 1 or 2 locators`);
   else v.new.forEach((loc, i) => checkLocator(loc, `${p}.new[${i}]`, issues));
@@ -278,19 +293,16 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
           checkLocator(v.totp.field, `${p}.totp.field`, issues);
           checkLocator(v.totp.submit, `${p}.totp.submit`, issues);
           if (v.totp.source !== undefined && v.totp.source !== 'seed' && v.totp.source !== 'workflow') issues.push(`${p}.totp.source must be "seed" or "workflow"`);
-          for (const key of ['via', 'check'] as const) {
-            const list = v.totp[key];
-            if (list === undefined) continue;
-            if (!Array.isArray(list) || list.length === 0 || list.length > 5) { issues.push(`${p}.totp.${key} must be an array of 1 to 5 locators`); continue; }
-            list.forEach((loc, i) => checkLocator(loc, `${p}.totp.${key}[${i}]`, issues));
-          }
+          for (const key of ['via', 'check'] as const) if (v.totp[key] !== undefined) checkLocatorList(v.totp[key], `${p}.totp.${key}`, issues);
         }
       }
       const change = v.changePassword === undefined ? undefined : checkChangePassword(v.changePassword, `${p}.changePassword`, issues);
       const totp = isObj(v.totp) ? v.totp : undefined;
       const lists = (key: 'via' | 'check'): [string, unknown][] => (Array.isArray(totp?.[key]) ? (totp[key] as unknown[]).map((loc, i) => [`totp.${key}[${i}]`, loc]) : []);
+      const listOf = (list: unknown, at: string): [string, unknown][] => (Array.isArray(list) ? list.map((loc, i): [string, unknown] => [`${at}[${i}]`, loc]) : []);
       const changeLocators: [string, unknown][] = change
-        ? [['changePassword.detect', change.detect], ...(change.current !== undefined ? [['changePassword.current', change.current] as [string, unknown]] : []), ...(Array.isArray(change.new) ? change.new.map((loc, i): [string, unknown] => [`changePassword.new[${i}]`, loc]) : []), ['changePassword.submit', change.submit]]
+        ? [['changePassword.detect', change.detect], ...listOf(change.via, 'changePassword.via'), ...(change.current !== undefined ? [['changePassword.current', change.current] as [string, unknown]] : []), ...listOf(change.new, 'changePassword.new'), ['changePassword.submit', change.submit],
+          ...(isObj(change.signInAgain) ? listOf(change.signInAgain.via, 'changePassword.signInAgain.via') : [])]
         : [];
       for (const [k, loc] of [['username', v.username], ['next', v.next], ['password', v.password], ['submit', v.submit], ['totp.field', totp?.field], ['totp.submit', totp?.submit], ...lists('via'), ...lists('check'), ...changeLocators] as [string, unknown][]) {
         if (isObj(loc) && loc.frame !== undefined) issues.push(`${p}.${k} cannot use frame`);
