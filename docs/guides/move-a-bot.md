@@ -56,8 +56,8 @@ Then, for each bot:
    n8n user who submits this page is the approver: they must be on **Sign steps → Approver Allowlist**, or nothing is
    signed. The row records their n8n user's email address.
 5. The last page says what was signed, and counts the values removed as secrets and the steps not translated. It
-   downloads the workflow that runs the bot. When nothing was signed (rejected, or the approver is not on the list), it
-   offers no workflow file. For a UiPath project, notes in that workflow show what was not
+   downloads the workflow that runs the bot. When nothing was signed (rejected, the approver is not on the list, or no
+   step list passed the replay), it offers no workflow file and does not say one downloads. For a UiPath project, notes in that workflow show what was not
    translated, such as a credential lookup. A log message is dropped without a note. Import the workflow in n8n. Its
    RPA credentials are the ones the import used, already picked by name and id (never a value): check them, pick any
    other credential its notes name, and run it (the **Execute** button at the bottom of the canvas). Each run writes a
