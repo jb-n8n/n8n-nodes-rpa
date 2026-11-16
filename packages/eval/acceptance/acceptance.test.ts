@@ -429,10 +429,11 @@ describe('ACCEPTANCE_SEEDS', () => {
 });
 
 describe('the templates the suite emulates', () => {
-  it('template 2 needs at most 9 working nodes (stickies, the chat model, the two table creations and the destination placeholder not counted)', () => {
-    // The table creations run once in a branch of their own; the in-memory table needs no creating.
+  it('template 2 needs at most 11 working nodes (stickies, the chat model, the two table creations and the destination placeholder not counted)', () => {
+    // The table creations run once in a branch of their own; the in-memory table needs no creating. Two of the eleven end
+    // a failure as the handed-over workflow does: the run row written as the table's columns allow, then Stop and Error.
     const working = DATA_FEED.nodes.filter((n) => !['n8n-nodes-base.stickyNote', '@n8n/n8n-nodes-langchain.lmChatAnthropic', 'n8n-nodes-base.noOp'].includes(n.type) && n.parameters.operation !== 'create');
-    expect(working.length).toBeLessThanOrEqual(9);
+    expect(working.length).toBeLessThanOrEqual(11);
   });
   it('the eval builds the same Run Steps settings as the data-feed template', () => {
     const run = byName(DATA_FEED, 'Run steps').parameters;
