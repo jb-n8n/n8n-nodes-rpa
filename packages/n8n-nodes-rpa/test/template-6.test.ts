@@ -198,10 +198,10 @@ describe('6-one-time-code.json: a code from an email', () => {
     expect(sleeps).toEqual([5000]);
     const late = { ...s, startedAt: new Date(Date.now() - 101_000).toISOString() };
     await expect(runCode('Wait, then read again', [{ code: '', notFromSender: 0 }], late)).rejects.toThrow(
-      'No mail with a code came from no-reply@example.com within 100 seconds. Check sender, subjectHas and codePattern in Settings.',
+      'No code mail came from no-reply@example.com in 100 seconds. Check sender and subjectHas in Settings.',
     );
     await expect(runCode('Wait, then read again', [{ code: '', notFromSender: 2 }], late)).rejects.toThrow(
-      'No mail with a code came from no-reply@example.com within 100 seconds. Mails from other addresses were left alone. Check sender, subjectHas and codePattern in Settings.',
+      'No code mail came from no-reply@example.com in 100 seconds. Mails from other addresses were left alone. Check sender and subjectHas in Settings.',
     );
   });
 });
@@ -241,7 +241,9 @@ describe('6-one-time-code.json: a code typed by a person', () => {
 
   it('the Type a code form opens with n8n sign-in, for people who may run this workflow, and keeps the code in its own table', () => {
     const form = byName(t, 'Type a code');
-    expect(form).toMatchObject({ type: 'n8n-nodes-base.formTrigger', parameters: { authentication: 'n8nUserAuth', requireExecuteAccess: true, path: 'rpa-one-time-code' } });
+    // n8n 2.45's Form Trigger takes its address from options.path (a path at the top is ignored: the form would sit at its webhook id).
+    expect(form).toMatchObject({ type: 'n8n-nodes-base.formTrigger', typeVersion: 2.6, parameters: { authentication: 'n8nUserAuth', requireExecuteAccess: true, options: { path: 'rpa-one-time-code' } } });
+    expect(form.parameters).not.toHaveProperty('path');
     const fields = (form.parameters.formFields as { values: { fieldName: string; requiredField: boolean }[] }).values;
     expect(fields.map((f) => [f.fieldName, f.requiredField])).toEqual([['code', true], ['account', false]]);
     expect(targets(t, 'Type a code')).toEqual([['Create typed codes table for the form']]);
@@ -282,6 +284,8 @@ describe('6-one-time-code.json: what a person reads', () => {
     const set = sticky(t, 'Set once').content;
     expectChecklist(set);
     for (const text of ['`source`', '**Read new mail**', 'docs/samples/authenticator-code.steps.json', '**Type a code**', 'Publish this workflow', '**Options → One-Time Code Workflow**']) expect(set).toContain(text);
+    // n8n's Import from File drops a workflow's own settings (n8n 2.45, seen live): the note asks for the one that matters.
+    expect(set).toContain('set **Save successful production executions** to **Do not save**');
     expect(set.indexOf('Publish this workflow')).toBeLessThan(set.indexOf('One-Time Code Workflow'));
   });
 

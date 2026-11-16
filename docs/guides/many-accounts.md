@@ -111,7 +111,8 @@ With a TOTP Secret the run makes the code itself, and you are done. For the othe
      app's. Upload it on your import form and approve it. Pick **RPA Desktop Runner** on **Read the code from the
      app**. The runner's policy needs the app and `clipboardRead` ([Steps](../reference/steps.md#desktop-steps)).
    - `typed`: nothing more.
-3. Click **Publish**.
+3. In its **⋯ → Settings**, set **Save successful production executions** to **Do not save**: the code is in each
+   execution. Click **Publish**.
 4. On your bot's RPA node, choose it in **Options → One-Time Code Workflow**. Pick it from the list: an expression is
    refused.
 5. In the bot's sign-in step, `totp` needs `"source": "workflow"`. A recording imported with **One-Time Code

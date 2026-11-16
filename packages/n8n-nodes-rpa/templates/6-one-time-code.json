@@ -314,7 +314,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Up to giveUpSeconds in all: waits 5 seconds, then the loop looks again. No Wait node: it would pause the bot's run.\nconst s = $('Settings').first().json;\nif (Date.now() - Date.parse(s.startedAt) > Number(s.giveUpSeconds) * 1000) {\n  throw new Error(`No mail with a code came from ${s.sender} within ${s.giveUpSeconds} seconds.${$input.first().json.notFromSender ? ' Mails from other addresses were left alone.' : ''} Check sender, subjectHas and codePattern in Settings.`);\n}\nawait new Promise((resolve) => setTimeout(resolve, 5000));\nreturn [{ json: { tryAgain: true } }];\n"
+        "jsCode": "// Up to giveUpSeconds in all: waits 5 seconds, then the loop looks again. No Wait node: it would pause the bot's run.\nconst s = $('Settings').first().json;\nif (Date.now() - Date.parse(s.startedAt) > Number(s.giveUpSeconds) * 1000) {\n  throw new Error(`No code mail came from ${s.sender} in ${s.giveUpSeconds} seconds.${$input.first().json.notFromSender ? ' Mails from other addresses were left alone.' : ''} Check sender and subjectHas in Settings.`);\n}\nawait new Promise((resolve) => setTimeout(resolve, 5000));\nreturn [{ json: { tryAgain: true } }];\n"
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000609",
       "name": "Wait, then read again",
@@ -660,7 +660,6 @@
       "parameters": {
         "authentication": "n8nUserAuth",
         "requireExecuteAccess": true,
-        "path": "rpa-one-time-code",
         "formTitle": "Type a one-time code",
         "formDescription": "While a bot signs in, type the code the site sent you. The bot takes it within 5 seconds.",
         "formFields": {
@@ -681,6 +680,7 @@
           ]
         },
         "options": {
+          "path": "rpa-one-time-code",
           "respondWithOptions": {
             "values": {
               "respondWith": "text",
@@ -784,7 +784,7 @@
     },
     {
       "parameters": {
-        "content": "### Set once (green)\n1. In **Settings**, set `source`: `email`, `app` or `typed`.\n2. Email: open **Read new mail**, pick your mail account and turn the node on. In **Settings**, set `sender` to the site's mail address, and `subjectHas`.\n3. App: upload `docs/samples/authenticator-code.steps.json` on your import form and approve it. Pick **RPA Desktop Runner** on **Read the code from the app**.\n4. Typed: nothing to set. While the bot waits, open the **Type a code** form and type the code.\n5. Publish this workflow.\n6. On the bot's RPA node, choose this workflow in **Options → One-Time Code Workflow**.",
+        "content": "### Set once (green)\n1. In **Settings**, set `source`: `email`, `app` or `typed`.\n2. Email: open **Read new mail**, pick your mail account and turn the node on. In **Settings**, set `sender` to the site's mail address, and `subjectHas`.\n3. App: upload `docs/samples/authenticator-code.steps.json` on your import form and approve it. Pick **RPA Desktop Runner** on **Read the code from the app**.\n4. Typed: nothing to set. While the bot waits, open the **Type a code** form and type the code.\n5. In **⋯ → Settings**, set **Save successful production executions** to **Do not save**. Publish this workflow.\n6. On the bot's RPA node, choose this workflow in **Options → One-Time Code Workflow**.",
         "height": 300,
         "width": 520,
         "color": 4
@@ -800,7 +800,7 @@
     },
     {
       "parameters": {
-        "content": "### How it works (grey)\nThe RPA node starts this workflow when the site asks for a code, with `requestedAt` and `account` (the user name). It must return one item with `code`, within **Code Timeout** on the RPA node (120 seconds). `giveUpSeconds` ends the search before that. Each source looks again every 5 seconds. A Wait node would pause the bot's run, so there is none. Successful executions are not saved, so codes do not stay in them.",
+        "content": "### How it works (grey)\nThe RPA node starts this workflow when the site asks for a code, with `requestedAt` and `account` (the user name). It must return one item with `code`, within **Code Timeout** on the RPA node (120 seconds). `giveUpSeconds` ends the search before that. Each source looks again every 5 seconds. A Wait node would pause the bot's run, so there is none. With successful executions not saved (step 5), codes do not stay in them.",
         "height": 300,
         "width": 520,
         "color": 7

@@ -268,7 +268,8 @@ Site Login's user name). It returns one item with `code`. **Settings**:
   `rpa_typed_codes` Data Table (`code`, `account`). The code request takes the newest code typed since the request,
   for its account or for none, removes it, and returns it. It looks again every 5 seconds.
 - It has no Wait node: in a workflow the RPA node starts, a Wait would pause the bot's run, and the node would get no
-  code. Successful executions are not saved.
+  code. Its file says not to save successful executions, but n8n's import from file does not keep a workflow's
+  settings: set **Save successful production executions** to **Do not save** in its **⋯ → Settings**.
 
 ## Data Tables
 
