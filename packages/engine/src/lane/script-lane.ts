@@ -329,15 +329,15 @@ async function executeScript(
       failure, violations: session.violations, log: maskLog(res.state.log, masker), screenshot,
       lastCheckpoint: res.state.lastCheckpoint, credentialsSubmitted: res.state.credentialsSubmitted,
       ...(wrote(res.state) ? { submitted: true } : {}), ...changed(res.state),
-      ...(res.state.downloads.length ? { files: [...res.state.downloads] } : {}),
     };
     const o = runtime.override(res.failure.intent, res.failure.message.startsWith(DETECTED_PREFIX));
     if (o) {
+      const kept = filesOnFailure(o.code, res.state, session.violations);
       // A step that only says it was stopped gets the violation's own message (off-list site, private address). So does
       // any step when the run ended on a private address: the step's own error is only a consequence of it.
       const firstFatal = session.violations.find((v) => v.fatal);
       const detail = res.failure.message === BLOCKED_STOP || firstFatal?.kind === 'private' ? o.message : res.failure.message;
-      return { result: fail(o.code, o.code === 'policy_violation' ? masker.mask(`${res.failure.intent}: ${detail}`) : o.message, base), ...keep };
+      return { result: fail(o.code, o.code === 'policy_violation' ? masker.mask(`${res.failure.intent}: ${detail}`) : o.message, { ...base, ...kept }), ...keep };
     }
     const pageText = await maskedPageText(ctx.page, masker);
     const loginConfirmed = Object.values(res.state.detected).includes('logged_in');
@@ -353,7 +353,8 @@ async function executeScript(
       })
       : undefined;
     const message = masker.mask(look ? withPageLook(shown, look) : shown);
-    return { result: fail(code, message, { ...base, ...(look ? { missingControls: look.controls } : {}) }), ...keep };
+    const kept = filesOnFailure(code, res.state, session.violations);
+    return { result: fail(code, message, { ...base, ...(look ? { missingControls: look.controls } : {}), ...kept }), ...keep };
   }
   const tail = {
     violations: session.violations, log: maskLog(res.state.log, masker),
@@ -391,6 +392,30 @@ async function executeScript(
     },
     ...keep,
   };
+}
+
+/**
+ * The failures that may hand back the files earlier steps downloaded: ordinary site failures that are not about
+ * protection. drift_detected (a control or page changed), not_found (the page says there is nothing), site_down (the
+ * site did not answer) and incomplete (the run ran out of time, was cancelled, or a check on what it read failed).
+ * Never policy_violation, script_untrusted, a login, code or breaker code (login_failed, account_locked, auth_blocked,
+ * locked_out, busy, password_change_failed), browser_unavailable or runner_unavailable: an allow-list, so a new code
+ * returns no file until it is added here on purpose.
+ */
+export const FILES_ON_FAILURE: ReadonlySet<ErrorCode> = new Set<ErrorCode>(['drift_detected', 'not_found', 'site_down', 'incomplete']);
+
+/**
+ * `{ files }` for a failed run: only for a code in FILES_ON_FAILURE, only when the session recorded no fatal violation
+ * (a stopped request, an off-list site, a refused secret: the stop is the protection, so nothing fetched before it is
+ * handed over), and only the files a success would have returned at that point: each download already passed its own
+ * step's type and checks before the run kept it, and the run's binary cap is applied as a success applies it (with the
+ * run's captures counted), a file that would go over it is dropped. `{}` when no file is left.
+ */
+export function filesOnFailure(code: ErrorCode, state: Pick<RunState, 'outputs' | 'downloads'>, violations: Violation[]): { files?: DownloadedFile[] } {
+  if (!FILES_ON_FAILURE.has(code) || violations.some((v) => v.fatal) || state.downloads.length === 0) return {};
+  const files: DownloadedFile[] = [];
+  for (const file of state.downloads) if (!runBinaryProblem({ outputs: state.outputs, downloads: [...files, file] })) files.push(file);
+  return files.length ? { files } : {};
 }
 
 /**

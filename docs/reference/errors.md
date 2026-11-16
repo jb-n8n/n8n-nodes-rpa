@@ -117,10 +117,12 @@ the list: it reads the page itself.
 The same list is on the error item as `details.missingControls`: for each step, `step` (its number), `intent`,
 `lookedFor`, `kind` (`buttons` or `fields`), `offered` and `more`.
 
-**Files downloaded before the failure.** When a run fails after earlier steps downloaded files, the error item keeps
-them: each as a binary under the name a successful run gives it (such as `file_5`), and listed in
+**Files downloaded before the failure.** When a run fails `drift_detected`, `not_found`, `site_down` or `incomplete`
+after earlier steps downloaded files, the error item keeps them: each as a binary under the name a successful run gives it (such as `file_5`), and listed in
 `details.files` with `fileName`, `mimeType`, `bytes` and `binaryProperty`. Each passed its own step's checks; the
-file of the step that failed is not there. The import's replay never returns a file.
+file of the step that failed is not there, and neither is a file that would take the run over its size limit. A run
+the rules stopped (`policy_violation`, a blocked request or site), a refused sign-in and any other code return no
+file. The import's replay never returns a file.
 
 **On the import form, every missing control on the page.** The import's replay (nothing is signed yet, and it blocks
 writes) also checks the later steps that act on the same page, without pressing, typing or reading anything. It goes
