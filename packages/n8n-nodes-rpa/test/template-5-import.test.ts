@@ -585,6 +585,19 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(['Import a bot', 'Import a bot for Sample accounts', ''].map((formTitle) => evaluate(option, { $: (n: string) => ({ params: n === 'Import a bot' ? { formTitle } : {} }) }))).toEqual([false, true, false]);
   });
 
+  it('a description with the same kind of action is grey even when it names another control (RF4-3)', () => {
+    // Accepted (RF4-3): the mark judges the kind of action and the values a description states, not which control it
+    // names. "Close the banner" on a click of Delete is shown grey, as the author's words, and the step's own sentence,
+    // "Click Delete", leads. Changing this is a ruling, not a side effect.
+    const steps = [{ intent: 'Close the banner', click: { role: 'button', name: 'Delete' } }];
+    const shown = reviewSteps(steps, { desktop: false, shownUrl });
+    expect(shown).toEqual([{ text: 'Click Delete', describedAs: 'Close the banner', quiet: true, marks: [] }]);
+    const item = { name: 'banner', version: 1, steps: { startUrl: 'https://a.example/', steps }, reviewSteps: shown, safetyFlags: [], evidenceLine: 'Proven in a fresh browser: 1 rows' };
+    const html = String(reviewFields({ $: nodesRan({ Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 1, items: [] }, drafts: [] } }], [{ json: item }]] }) })[0].html);
+    expect(html).toContain('<li>Click Delete <em>(the author calls it: Close the banner)</em></li>');
+    expect(html).not.toContain('described differently');
+  });
+
   it('a Sign steps refusal signs nothing and the last page names the reason; an approver not on the allowlist is refused', async () => {
     const { ran } = await importedRecording();
     const refused = await signAfterReview(ran, { writes_0: [], moreWrites_0: '99', decision_0: 'Approve and sign' });
