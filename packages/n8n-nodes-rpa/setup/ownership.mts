@@ -139,6 +139,47 @@ export function sameName(items: any[], spec: { name: string; type: string }, hom
 }
 
 /**
+ * The credential of this type that this run's project owns (mine), whatever its name: n8n names one made by hand
+ * "RPA Step Signing account", as 0.1.0's guides had people do. Exactly one: that one. Several: the one `named` names
+ * (--signing-key), else the one the person picks at a terminal; never a guess. Without a terminal: `preferId` when it
+ * is one of them (the RPA Browser the form found already uses), else `noPick` says why it stops, or (undefined) none is
+ * picked. Others (of this name or type, not owned by the project: another project's, or one only shared into it) are
+ * each said in one line and never used. Stops on a credential of this command's name and another type in the project.
+ */
+export async function byType(items: any[], spec: { name: string; type: string }, home: string | undefined, opts: {
+  named?: string; preferId?: string; noPick: (list: string) => string | undefined; why?: string;
+}): Promise<{ mine?: any; others: any[] }> {
+  const owned = (c: any) => home !== undefined && ownerProject(c, 'credential') === home;
+  const conflict = items.find((c) => c?.name === spec.name && c?.type !== spec.type && owned(c));
+  if (conflict) throw new Stop(`A credential named "${spec.name}" (id ${clean(conflict.id)}) has the type ${clean(conflict.type)}, not ${spec.type}. Rename it in n8n, then run this again.`);
+  const sharedIn = (c: any) => home !== undefined && Array.isArray(c?.shared) && c.shared.some((s: any) => s?.id === home);
+  const ours = items.filter((c) => c?.type === spec.type && owned(c));
+  const others = items.filter((c) => !ours.includes(c) && (c?.name === spec.name || (c?.type === spec.type && sharedIn(c))));
+  for (const o of others) leftAlone('credential', o, clean(o.type), home);
+  if (opts.named !== undefined) {
+    const same = ours.filter((c) => c.name === opts.named);
+    if (same.length > 1) throw new Stop(`Your project has ${same.length} ${spec.name} credentials named "${clean(opts.named)}" (ids ${same.map((c) => clean(c.id)).join(', ')}), and this command cannot tell which one is meant. Rename all but one in n8n, then run this again. Nothing was changed.`, 2);
+    if (!same.length) throw new Stop(`No ${spec.name} credential named "${clean(opts.named)}" in your project. ${ours.length ? `Your project's: ${byNameAndId(ours)}.` : 'Your project has none.'} Give its name as n8n shows it. Nothing was changed.`, 2);
+    return { mine: same[0], others };
+  }
+  if (ours.length <= 1) return { mine: ours[0], others };
+  if (!interactive()) {
+    const prefer = opts.preferId !== undefined ? ours.find((c) => String(c.id) === opts.preferId) : undefined;
+    if (prefer) return { mine: prefer, others };
+    const stop = opts.noPick(byNameAndId(ours));
+    if (stop !== undefined) throw new Stop(stop, 2);
+    return { mine: undefined, others };
+  }
+  say(`Your project has ${ours.length} ${spec.name} credentials:`);
+  ours.forEach((c, i) => say(`  ${i + 1}. "${clean(c.name, c.id)}" (id ${clean(c.id)})`));
+  if (opts.why) say(opts.why);
+  const answer = await ask(`Which one should this run use? Type its number (1 to ${ours.length}), or press Enter to stop: `);
+  const n = /^\d+$/.test(answer) ? Number(answer) : 0;
+  if (n < 1 || n > ours.length) throw new Stop('Nothing was changed.');
+  return { mine: ours[n - 1], others };
+}
+
+/**
  * Why --site-login found nothing to pick, with the RPA Site Logins this run's project has, by name and id (cleaned).
  * Those of other projects or users were each named in a line of their own already.
  */
@@ -173,14 +214,17 @@ export function leftAlone(kind: string, item: any, typeOrNothing: string, home: 
 export async function credential(client: Client, found: { mine?: any; others: any[] }, projectId: string | undefined, spec: { name: string; type: string }, data: () => Record<string, unknown>, keptNote: string) {
   const { mine, others } = found;
   if (mine) {
-    say(`reused   credential "${spec.name}" (id ${clean(mine.id)}): ${keptNote}`);
-    return { ref: { id: String(mine.id), name: spec.name }, created: false };
+    // By its own name: one found by its type may have any name ("RPA Step Signing account").
+    const name = String(mine.name ?? spec.name);
+    say(`reused   credential "${clean(name, mine.id)}" (id ${clean(mine.id)}): ${keptNote}`);
+    return { ref: { id: String(mine.id), name }, created: false };
   }
   const r = await client.api('POST', '/credentials', { name: spec.name, type: spec.type, data: data(), ...(projectId ? { projectId } : {}) });
   if ((r.status !== 200 && r.status !== 201) || !r.json?.id) throw new Stop(`Could not create the credential "${spec.name}" (${client.reason(r)}).`);
   const id = clean(r.json.id);
   say(`created  credential "${spec.name}" (id ${id})`);
-  if (others.length) say(`         n8n now has more than one credential named "${spec.name}": this run's is id ${id}. Do not pick ids ${others.map((o) => clean(o.id)).join(', ')}.`);
+  const same = others.filter((o) => o?.name === spec.name);
+  if (same.length) say(`         n8n now has more than one credential named "${spec.name}": this run's is id ${id}. Do not pick ids ${same.map((o) => clean(o.id)).join(', ')}.`);
   return { ref: { id: String(r.json.id), name: spec.name }, created: true };
 }
 

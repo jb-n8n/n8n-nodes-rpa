@@ -86,7 +86,9 @@ The import form is ready.
 ```
 
 Keep the address. It ends in `/form/rpa-import`, or in a long id when another form in your n8n has that address
-already (the command says so). Run the command again at any time: it reuses what is there and changes nothing. If
+already (the command says so). Run the command again at any time: it reuses what is there and changes nothing. It
+uses your project's **RPA Step Signing** and **RPA Browser** credentials whatever their names, such as
+`RPA Step Signing account`; with several, it asks which, or takes `--signing-key "<its name>"`. If
 **RPA: 5 Import a bot** differs from this version's template, for example after an upgrade, it lists what differs and
 asks `Update this form to this version? (y/N)`. `y` updates it in place and keeps its address, approvers and
 credentials. Anything else changed by hand in it is lost, and the question names what. The signing key stays in n8n,

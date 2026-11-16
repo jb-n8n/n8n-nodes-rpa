@@ -31,7 +31,7 @@ export const FIELDS: Record<string, string[]> = {
   httpBasicAuth: ['user', 'password'],
 };
 
-export interface Cred { id: string; name: string; type: string; data: Record<string, any>; projectId?: string }
+export interface Cred { id: string; name: string; type: string; data: Record<string, any>; projectId?: string; sharedWith?: string[] }
 export interface Wf { id: string; name: string; active: boolean; versionId: string; nodes: any[]; connections: unknown; settings: unknown; projectId?: string; updatedAt?: string }
 export interface Options {
   teamName?: string; knowsNode?: boolean; echo?: 'credentials' | 'activate'; credentials?: Cred[]; workflows?: Wf[]; patch?: boolean; ownership?: boolean;
@@ -97,8 +97,10 @@ export async function fakeN8n(o: Options = {}) {
         const limit = Math.min(Number(url.searchParams.get('limit') ?? 100), 2);
         return { data: items.slice(offset, offset + limit), nextCursor: offset + limit < items.length ? String(offset + limit) : null };
       };
-      const credItem = ({ data: _d, projectId, ...c }: Cred) => ({
-        ...c, ...(own ? { shared: [{ id: projectId, name: PROJECTS[projectId!]?.name, role: 'credential:owner' }] } : {}),
+      // n8n lists each project a credential is in: its owner, and those it is only shared into (credential:user).
+      const credItem = ({ data: _d, projectId, sharedWith, ...c }: Cred) => ({
+        ...c,
+        ...(own ? { shared: [{ id: projectId, name: PROJECTS[projectId!]?.name, role: 'credential:owner' }, ...(sharedWith ?? []).map((p) => ({ id: p, name: PROJECTS[p]?.name, role: 'credential:user' }))] } : {}),
       });
       const project = (id: string) => (id === 'P-team' && o.teamName !== undefined ? { ...PROJECTS[id], name: o.teamName } : PROJECTS[id]);
       const wfItem = ({ projectId, ...w }: Wf, full = false) => ({

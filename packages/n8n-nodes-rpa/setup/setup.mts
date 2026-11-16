@@ -28,8 +28,12 @@
 // names another), and each credential's and workflow's project with its role. Only what this run's project owns is
 // reused; a credential merely shared into it is not.
 //
-// It never rewrites what is there on its own: a credential or workflow of its project with the same name is reused as it
-// is, and a reused workflow must match the template (node names and types, credentials of its project) before it is
+// The RPA Step Signing and the RPA Browser are found by their type, whatever their name (0.1.0's guides had n8n name them
+// "RPA Step Signing account"): the project's only one is reused; of several, the one --signing-key names or the person
+// picks at a terminal, never a guess (ownership.mts byType). Other credentials are found by this command's names.
+//
+// It never rewrites what is there on its own: a credential or workflow of its project is reused as it is, and a reused
+// workflow must match the template (node names and types, credentials of its project) before it is
 // published. Only a flag made for it changes one: --new-form-password (the form's login) and --replace-signing-key,
 // which also asks for the word REPLACE at a terminal, because every bot signed with the old key stops until it is
 // approved again. n8n's API never returns a secret, so a second run cannot show a password made earlier.
@@ -46,7 +50,7 @@ import {
   BROWSER, checkApprover, FORM, type Inputs, type Options, readOptions, RUNNER, SIGNING, USAGE, WHERE_KEYS, WORKFLOW_NAME,
 } from './options.mjs';
 import {
-  byNameAndId, credential, keyAdvice, keyClaims, keyOwnerEmail, leftAlone, noDesktopRunner, noSiteLogin, ownerEntryProject, ownerProject,
+  byNameAndId, byType, credential, keyAdvice, keyClaims, keyOwnerEmail, leftAlone, noDesktopRunner, noSiteLogin, ownerEntryProject, ownerProject,
   personalProject, projectCredentials, projectOf, type Ref, replaceData, sameName, setProject, shared, useFound,
 } from './ownership.mjs';
 import { closingRunner, correctLine, NO_ANSWER, offerLine, removeTrial, type RunnerTest, testRunner } from './runner.mjs';
@@ -413,6 +417,8 @@ interface Closing {
   formPassword?: string;
   /** The signing key when this run made it, else undefined; shown only with showKey. */
   signingKey?: string;
+  /** The RPA Step Signing credential the form signs with, named in the closing lines. */
+  signingRef: Ref;
   showKey: boolean;
   runnerRef?: Ref;
   runnerTest?: RunnerTest;
@@ -428,7 +434,7 @@ interface Closing {
 function closingLines(inputs: Inputs, closing: Closing) {
   const { options } = inputs;
   const basic = options.formLogin === 'basic';
-  const { workflow, formUrl, shownUrl, shownName, formSays, siteForm, siteRef, formPassword, signingKey, showKey, runnerRef, runnerTest, runners, browserRef } = closing;
+  const { workflow, formUrl, shownUrl, shownName, formSays, siteForm, siteRef, formPassword, signingKey, signingRef, showKey, runnerRef, runnerTest, runners, browserRef } = closing;
   say();
   say(`${formSays}.`);
   say(`  Address:    ${shownUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
@@ -445,7 +451,7 @@ function closingLines(inputs: Inputs, closing: Closing) {
   if (options.allowPrivateNetwork && privateOn) say('  Private network: on. Imports may open sites on this computer or your own network, and the workflow the form hands over has it on too.');
   if (showKey && signingKey) reveal(`  Signing key: `, signingKey, '   (shown once: keep a copy where you keep recovery secrets)');
   // Made earlier: bots may be approved with it by now, so a new key is no way to keep a copy.
-  else if (signingKey === undefined) say('  Signing key: made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.');
+  else if (signingKey === undefined) say(`  Signing key: in ${nameAndId(signingRef)}, made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.`);
   // Made now and not shown: a new key now costs nothing, as no bot is signed with this one yet.
   else say('  Signing key: made by this run and kept in n8n, which does not show it again. Most people need no copy: it is for moving signed bots to another n8n, or for a lost n8n. To have one, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
   say();
@@ -546,7 +552,8 @@ async function run(inputs: Inputs): Promise<number> {
   let { workflow, updating } = chosen;
   const { differs } = chosen;
 
-  // The credentials found in the project, by name (the browser's too without --browser-url: a reused workflow may use it).
+  // The credentials found in the project: the signing key and the browser by type (the browser's too without
+  // --browser-url: a reused workflow may use it), the others by name.
   // The Site Login (--site-login) is found the same way, and only picked: it must be there.
   const SITE = options.siteLogin !== undefined ? { name: options.siteLogin, type: CREDENTIALS.siteLogin } : undefined;
   // The RPA Desktop Runner: the one --desktop-runner names; else made from the Connection Line; else, when the project
@@ -558,8 +565,33 @@ async function run(inputs: Inputs): Promise<number> {
   let found = new Map<string, { mine?: any; others: any[] }>();
   // The project's only RPA Desktop Runner, when it has exactly one and no other is named: found beside `found`.
   let onlyRunner: { mine?: any; others: any[] } | undefined;
-  const findAll = () => {
-    found = new Map(specs.map((spec) => [spec.name, sameName(list.items, spec, home)]));
+  // The RPA Step Signing and the RPA Browser are found by their type, whatever their name (byType); the rest by name.
+  const browserOnForm = () => {
+    const id = workflow ? nodeOf(workflow, NODE.importSteps)?.credentials?.[BROWSER.type]?.id : undefined;
+    return id === undefined || id === null ? undefined : String(id);
+  };
+  const findAll = async () => {
+    found = new Map();
+    for (const spec of specs) {
+      if (spec === SIGNING) {
+        found.set(spec.name, await byType(list.items, SIGNING, home, {
+          named: options.signingKey,
+          why: 'Bots signed with one key do not run with another: pick the one your bots were approved with.',
+          noPick: (all) => `Your project has several RPA Step Signing credentials, ${all}, and this command does not pick one by guess: bots signed with one key do not run with another. Name the one your bots were approved with: --signing-key "<its name>". Nothing was changed.`,
+        }));
+      } else if (spec === BROWSER) {
+        found.set(spec.name, await byType(list.items, BROWSER, home, {
+          preferId: browserOnForm(),
+          noPick: (all) => {
+            if (inputs.browser) return `Your project has several RPA Browser credentials, ${all}, and this command does not pick one by guess. Run this at a terminal to pick one, or delete the ones you do not use in n8n. Nothing was changed.`;
+            say(`not picked: your project has several RPA Browser credentials, ${all}, and without a terminal this run picks none. Pick one on "${NODE.importSteps}" in n8n.`);
+            return undefined;
+          },
+        }));
+      } else {
+        found.set(spec.name, sameName(list.items, spec, home));
+      }
+    }
     onlyRunner = undefined;
     if (SITE && !found.get(SITE.name)?.mine) throw new Stop(noSiteLogin(SITE.name, list.items, home), 2);
     if (DESKTOP && !found.get(DESKTOP.name)?.mine) throw new Stop(noDesktopRunner(DESKTOP.name, list.items, home), 2);
@@ -575,7 +607,7 @@ async function run(inputs: Inputs): Promise<number> {
     ...(w ? [{ kind: 'workflow', name: String(w.name), id: String(w.id) }] : [])];
   // A set this run does not use: each credential found is left alone, as one of another project would be.
   const useNoneFound = () => { for (const f of allFound()) { if (f.mine) f.others.push(f.mine); f.mine = undefined; } };
-  if (home) findAll();
+  if (home) await findAll();
 
   // In a shared project, one answer for what was found there, as a set: all of it is used, or none of it.
   if (home) {
@@ -625,7 +657,7 @@ async function run(inputs: Inputs): Promise<number> {
 
   // An existing signing key is replaced only with --replace-signing-key and the typed word, asked before anything is
   // changed. Nothing else decides it: a key may sign bots this command cannot see. Only this project's key is replaced.
-  if (options.replaceSigningKey && list.items.some((c) => c?.name === SIGNING.name && c?.type === SIGNING.type)) await confirmReplace();
+  if (options.replaceSigningKey && list.items.some((c) => c?.type === SIGNING.type)) await confirmReplace();
 
   // A workflow to make: made first without credentials when the project is not known yet, so that its project is.
   let made: Record<string, any> | undefined;
@@ -651,7 +683,7 @@ async function run(inputs: Inputs): Promise<number> {
       if (home) setProject(ownerEntryProject(r.json), home, inputs.userId, !projectId);
       if (!home) say('Note: n8n does not say which project owns the new workflow, so no credential of the same name is reused: fresh ones are made.');
       if (!home && SITE) throw new Stop(`--site-login: n8n does not say which project owns the new workflow, so this run cannot tell that "${clean(SITE.name)}" is yours. Pick it on "${NODE.importSteps}" and "${NODE.signSteps}" in n8n instead.`);
-      findAll();
+      await findAll();
       if (shared.is && !(await useFound(foundSet()))) useNoneFound();
     }
   }
@@ -665,7 +697,7 @@ async function run(inputs: Inputs): Promise<number> {
   const of = (spec: { name: string }) => found.get(spec.name) ?? { others: [] };
   if (siteForm) {
     // A second form signs with the key the first one uses: this run never makes another key beside one the project has.
-    const keyThere = list.items.find((c) => c?.name === SIGNING.name && c?.type === SIGNING.type && (!home || ownerProject(c, 'credential') === home));
+    const keyThere = list.items.find((c) => c?.type === SIGNING.type && (!home || ownerProject(c, 'credential') === home));
     if (!of(SIGNING).mine && keyThere) {
       throw new Stop(`A form for a Site Login signs with the RPA Step Signing key your other forms use, and this run does not use that credential (id ${clean(keyThere.id)}). In a shared project, answer y when asked, or add --reuse-project-credentials. No key or form was made.`);
     }
@@ -721,7 +753,7 @@ async function run(inputs: Inputs): Promise<number> {
     const { href, token } = inputs.browser;
     browserRef = (await credential(client, of(BROWSER), projectId, BROWSER, () => browserCredentialData(href, token), 'its endpoint and token stay as they are')).ref;
   } else if (of(BROWSER).mine) {
-    browserRef = { id: String(of(BROWSER).mine.id), name: BROWSER.name };
+    browserRef = { id: String(of(BROWSER).mine.id), name: String(of(BROWSER).mine.name ?? BROWSER.name) };
   }
   // The Site Login is only picked: by id and name, never its values. In a shared project whose set was not used, it is not.
   const siteMine = SITE ? of(SITE).mine : undefined;
@@ -747,7 +779,7 @@ async function run(inputs: Inputs): Promise<number> {
     if (options.approver !== undefined) say(`         its Approver Allowlist was left as it is: change it on "${NODE.signSteps}" in n8n.`);
     const onImport = nodeOf(workflow, NODE.importSteps)?.credentials ?? {};
     // The runner by name and id: the one picked may have any name, and Import steps may hold another one.
-    const toPick = [inputs.browser && !onImport[BROWSER.type] ? `"${BROWSER.name}"` : '', !onImport[SIGNING.type] ? `"${SIGNING.name}"` : '',
+    const toPick = [inputs.browser && !onImport[BROWSER.type] && browserRef ? nameAndId(browserRef) : '', !onImport[SIGNING.type] ? nameAndId(signing.ref) : '',
       runnerRef && String(onImport[RUNNER.type]?.id) !== runnerRef.id ? nameAndId(runnerRef) : ''].filter(Boolean);
     if (toPick.length) say(`         its credentials were left as they are: pick ${toPick.join(', ')} on "${NODE.importSteps}" in n8n, so the workflow file the form hands over carries them.`);
     // --site-login and --allow-private-network change a workflow only when this run makes it: one it reuses is left as it is.
@@ -819,7 +851,7 @@ async function run(inputs: Inputs): Promise<number> {
     runnerTest = await testRunner(inputs, runnerRef);
   }
 
-  closingLines(inputs, { workflow, formUrl, shownUrl, shownName, formSays, siteForm, siteRef, formPassword, signingKey, showKey, runnerRef, runnerTest, runners, browserRef });
+  closingLines(inputs, { workflow, formUrl, shownUrl, shownName, formSays, siteForm, siteRef, formPassword, signingKey, signingRef: signing.ref, showKey, runnerRef, runnerTest, runners, browserRef });
   return 0;
 }
 

@@ -40,6 +40,9 @@ export const USAGE = [
   '  --show-signing-key     print the signing key when this run makes it (n8n never gives a stored key back).',
   '  --replace-signing-key  make a new signing key and print it. Every bot signed with the old key must be approved again:',
   '                         it asks you to type REPLACE, at a terminal only.',
+  '  --signing-key <name>   the RPA Step Signing credential to use when your project has several (bots signed with one key',
+  '                         do not run with another). Without it, the only one your project has is used, whatever its name;',
+  '                         with several it asks at a terminal, and stops elsewhere.',
   '  --new-form-password    with --form-login basic: give the form a new password and print it (n8n never shows the old one again).',
   '  --browser-url <ws-url> the browser service for browser bots: creates the RPA Browser credential, with the token from',
   '                         RPA_BROWSER_TOKEN, and sets it on Import steps.',
@@ -75,6 +78,8 @@ export interface Options {
   allowHttp: boolean;
   showSigningKey: boolean;
   replaceSigningKey: boolean;
+  /** The name of the project's RPA Step Signing credential to use, when it has several. */
+  signingKey?: string;
   newFormPassword: boolean;
   browserUrl?: string;
   /** The name of an RPA Site Login of the project, picked on Import steps and Sign steps. */
@@ -98,7 +103,7 @@ export function readOptions(argv: string[]): Options | 'help' {
       args: argv,
       options: {
         url: { type: 'string' }, approver: { type: 'string' }, 'form-login': { type: 'string' }, 'allow-http': { type: 'boolean' }, 'show-signing-key': { type: 'boolean' },
-        'replace-signing-key': { type: 'boolean' },
+        'replace-signing-key': { type: 'boolean' }, 'signing-key': { type: 'string' },
         'new-form-password': { type: 'boolean' }, 'browser-url': { type: 'string' }, 'project-id': { type: 'string' },
         'site-login': { type: 'string' }, 'desktop-runner': { type: 'string' }, 'allow-private-network': { type: 'boolean' },
         'new-workflow': { type: 'boolean' }, 'reuse-project-credentials': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
@@ -135,6 +140,11 @@ export function readOptions(argv: string[]): Options | 'help' {
   if (desktopRunner !== undefined && (badName(desktopRunner) || (desktopRunner !== RUNNER.name && OWN_NAMES.includes(desktopRunner)))) {
     throw new Stop('--desktop-runner must be the name of an RPA Desktop Runner credential as n8n shows it, such as "RPA Desktop Runner account".', 2);
   }
+  const signingKey = values['signing-key'];
+  // "RPA Step Signing" is allowed: the one an earlier run made.
+  if (signingKey !== undefined && (badName(signingKey) || (signingKey !== SIGNING.name && OWN_NAMES.includes(signingKey)))) {
+    throw new Stop('--signing-key must be the name of an RPA Step Signing credential as n8n shows it, such as "RPA Step Signing account".', 2);
+  }
   return {
     url: values.url ?? DEFAULT_URL,
     approver: values.approver,
@@ -142,6 +152,7 @@ export function readOptions(argv: string[]): Options | 'help' {
     allowHttp: values['allow-http'] === true,
     showSigningKey: values['show-signing-key'] === true,
     replaceSigningKey: values['replace-signing-key'] === true,
+    signingKey,
     newFormPassword: values['new-form-password'] === true,
     browserUrl: values['browser-url'],
     siteLogin,

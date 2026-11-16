@@ -84,7 +84,10 @@ command says so).
 
 If you made an RPA Desktop Runner credential in n8n already, answer `n` instead: the command picks it when your project
 has only that one, and names it. With several, add `--desktop-runner "<its name>"`. It never reads a credential's
-values. The signing key stays in n8n, which does not show it again. The `Signing key:` line says how to keep a copy:
+values. It uses your project's **RPA Step Signing** credential whatever its name (n8n names one made by hand
+`RPA Step Signing account`), and names it in the `Signing key:` line. With several, it asks which at a terminal, or
+takes `--signing-key "<its name>"`: bots signed with one key do not run with another. The same goes for **RPA Browser**.
+The signing key stays in n8n, which does not show it again. The `Signing key:` line says how to keep a copy:
 you need one only to move signed bots to another n8n or for a lost n8n, so most people skip it. Without a copy, a lost key means approving
 every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)).
 Run the command again at any time: it reuses only what your own project owns, and asks first about what it finds in
