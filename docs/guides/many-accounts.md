@@ -55,6 +55,14 @@ and its address. A bot is changed or signed again on the form it was approved on
 bot, so a bot opened on another Site Login's form gets a red warning on its review page: change it on its own form.
 Approved there, it would run only with that form's Site Login, and its own runs would stop.
 
+**Approval by email for this form.** Approval by email goes through **RPA: 3 Approve steps**, and its **Sign steps**
+holds one Site Login: the one the signature binds. So each Site Login whose form approves by email needs its own copy.
+Import `packages/n8n-nodes-rpa/templates/3-approve-steps.json` once more and rename it, for example **RPA: 3 Approve
+steps (Sample accounts)**. Follow its **Set once** note, with **Sample accounts** on its **Sign steps**, and publish
+it. Then on **RPA: 5 Import a bot (Sample accounts)**, choose that copy in **Approve steps**, turn the node on, and set
+`approval` to `by email` in **Settings**, as the form's **Approval by email** note says. A copy with another Site Login
+on its **Sign steps** signs for that one, and the bot then does not run with this Site Login.
+
 ## Try it on the sample site
 
 The sample site of [Your first browser bot](browser-bot.md) has three accounts: `summit-ops`, the one of that guide,
