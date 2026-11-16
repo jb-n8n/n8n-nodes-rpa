@@ -62,7 +62,8 @@ describe('template 5 after the upgrade from 0.1.0', () => {
     // The guide's setup command at a terminal on the n8n 0.1.0 set up, answered y to the update (setup.test.ts S1).
     const fake = await n8n({ credentials: CREDS, workflows: [form010()] });
     const yes = await runAtTerminal(['setup', '--url', fake.url, '--approver', 'ops@example.com'], { N8N_API_KEY: API_KEY },
-      [[/Connect a Windows machine now/, 'n'], [/Update this form to this version\? \(y\/N\) /, 'y']]);
+      // A browser setup asks nothing about a Windows machine (the setup command's onboarding change): only the update.
+      [[/Update this form to this version\? \(y\/N\) /, 'y']]);
     expect(yes.code, yes.out).toBe(0);
     expect(fake.state.credentials.map((c) => c.id), 'no second key').toEqual(CREDS.map((c) => c.id));
     const [form] = fake.state.workflows;
