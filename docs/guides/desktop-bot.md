@@ -91,8 +91,8 @@ The signing key stays in n8n, which does not show it again. The `Signing key:` l
 you need one only to move signed bots to another n8n or for a lost n8n, so most people skip it. Without a copy, a lost key means approving
 every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)).
 Run the command again at any time: it reuses only what your own project owns, and asks first about what it finds in
-another project. A form it made that differs from this version's template, for example after an upgrade, is listed by
-what differs, with the question `Update this form to this version? (y/N)`. `--form-login basic` serves approvers with
+another project. A form it made, or RPA 0.1.0 made, that differs from this version's template, for example after an
+upgrade, is listed by what differs, with the question `Update this form to this version? (y/N)`. `--form-login basic` serves approvers with
 no n8n account. To set the form up by hand, import `packages/n8n-nodes-rpa/templates/5-import-a-bot.json`
 ([Templates](../reference/templates.md#set-it-up-by-hand)).
 

@@ -91,7 +91,9 @@ uses your project's **RPA Step Signing** and **RPA Browser** credentials whateve
 `RPA Step Signing account`; with several, it asks which, or takes `--signing-key "<its name>"`. If
 **RPA: 5 Import a bot** differs from this version's template, for example after an upgrade, it lists what differs and
 asks `Update this form to this version? (y/N)`. `y` updates it in place and keeps its address, approvers and
-credentials. Anything else changed by hand in it is lost, and the question names what. The signing key stays in n8n,
+credentials. Anything else changed by hand in it is lost, and the question names what. A form RPA 0.1.0 made gets the
+same question: the command says so, and lists only what was changed by hand since. Its sign-in becomes n8n's sign-in;
+add `--form-login basic` to keep its Basic Auth login. An archived workflow is not counted. The signing key stays in n8n,
 and n8n does not show it again. The `Signing key:` line says how to keep a copy: you need one only to move signed bots
 to another n8n or for a lost n8n, so most people skip it. The command's other options are in step 2 of the
 [desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command), with the way for an n8n where you cannot run a

@@ -55,8 +55,8 @@ import {
 } from './ownership.mjs';
 import { closingRunner, correctLine, NO_ANSWER, offerLine, removeTrial, type RunnerTest, testRunner } from './runner.mjs';
 import {
-  type Changes, credentialProblem, FORM_AUTH, FORM_PATH, formAuthentication, formPathOf, formPathTaken, isOwnForm, loadTemplate, namesFor, NODE,
-  siteFormName, siteFormTitle, siteSlug, structuralDifference, templateChanges, templateNodes, updatedNodes, wire, WORKFLOW_NAMES,
+  type Changes, credentialProblem, FORM_AUTH, FORM_PATH, formAuthentication, formPathOf, formPathTaken, handChanges010, isForm010, isOwnForm, loadTemplate, namesFor, NODE,
+  siteFormName, siteFormTitle, siteSlug, structuralDifference, templateChanges, templateNodes, updatedNodes, wire, wire010, WORKFLOW_NAMES,
 } from './template.mjs';
 
 const PROJECT_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -243,18 +243,41 @@ function formAddress(formNode: any, inputs: Inputs) {
 const someNames = (names: string[]) => `${names.slice(0, 8).map((n) => `"${clean(n)}"`).join(', ')}${names.length > 8 ? ` and ${names.length - 8} more` : ''}`;
 
 /**
- * Says how a form this command made differs from this version's template and asks whether to update it. Default no;
- * without a terminal it asks nothing and changes nothing.
+ * A form to bring up to date: how it differs from this version's template, and for a form RPA 0.1.0 made (made010),
+ * what a person changed in it since, as 0.1.0's own template tells it (handChanges010).
  */
-async function askUpdate(workflow: any, changes: Changes): Promise<boolean> {
+interface Update { changes: Changes; made010?: { hand?: Changes; toN8nSignIn: boolean } }
+
+/**
+ * Says how a form this command (or RPA 0.1.0) made differs from this version's template and asks whether to update it.
+ * Default no; without a terminal it asks nothing and changes nothing.
+ */
+async function askUpdate(workflow: any, { changes, made010 }: Update): Promise<boolean> {
   const what = nameAndId(workflow);
-  say(`The form ${what} was made by this command, and differs from this version's template:`);
+  say(made010 ? `The form ${what} was made by RPA 0.1.0, from its template "${WORKFLOW_NAME}", and differs from this version's template:`
+    : `The form ${what} was made by this command, and differs from this version's template:`);
   if (changes.added.length) say(`  Added in the template:     ${someNames(changes.added)}`);
   if (changes.removed.length) say(`  Not in the template:       ${someNames(changes.removed)}`);
   if (changes.changed.length) say(`  Set differently:           ${someNames(changes.changed)}`);
   if (changes.older.length) say(`  At an older node version:  ${someNames(changes.older)}`);
   if (changes.connections) say('  Connected differently:     the links between its nodes');
-  say("An update gives it this version's nodes and connections. It keeps the Approver Allowlist, the form's sign-in, address and title, the credentials picked on its nodes, Allow Private Network, the Settings node's values, the workflow picked on Approve steps, and the workflow's name and id. Anything else changed by hand in this workflow is lost.");
+  const hand = made010?.hand;
+  if (made010 && !hand) say('  Changed by hand since:     nothing. It is the form 0.1.0 made, with what you set in it.');
+  if (hand) {
+    say('  Changed by hand since 0.1.0 made it:');
+    if (hand.removed.length) say(`    Added by hand:           ${someNames(hand.removed)}`);
+    if (hand.added.length) say(`    Removed by hand:         ${someNames(hand.added)}`);
+    if (hand.changed.length || hand.older.length) say(`    Set by hand:             ${someNames([...hand.changed, ...hand.older])}`);
+    if (hand.connections) say('    Connected by hand:       the links between its nodes');
+  }
+  if (made010) {
+    say(`An update gives it this version's nodes and connections, with the new node "${NODE.signSteps}": imports are then approved and signed on this form, with your project's RPA Step Signing key. It keeps the form's address and title, the credentials picked on its nodes (the Site Login on "${NODE.importSteps}" goes on "${NODE.signSteps}" too), Allow Private Network, the workflow picked on Approve steps, and the workflow's name and id.${hand ? ' What was changed by hand is lost.' : ''}`);
+    say(made010.toN8nSignIn
+      ? "  Its sign-in becomes n8n's sign-in, as this run sets up: people open the form with their n8n login, and its Basic Auth login is no longer used. To keep Basic Auth, answer n and run this again with --form-login basic."
+      : `  It keeps its sign-in${formAuthentication(workflow) === FORM_AUTH.basic ? ', Basic Auth, with its login' : ", n8n's sign-in"}.`);
+  } else {
+    say("An update gives it this version's nodes and connections. It keeps the Approver Allowlist, the form's sign-in, address and title, the credentials picked on its nodes, Allow Private Network, the Settings node's values, the workflow picked on Approve steps, and the workflow's name and id. Anything else changed by hand in this workflow is lost.");
+  }
   if (changes.removed.length) say(`  Lost with it: the node${changes.removed.length > 1 ? 's' : ''} ${someNames(changes.removed)}, which the template does not have.`);
   if (!interactive()) {
     say('Not updated: without a terminal this command does not ask. To update it, run this command again at a terminal and answer y.');
@@ -345,21 +368,24 @@ async function confirmReplace() {
 }
 
 /**
- * The workflow this run uses, from this project's workflows of this run's names (ours), newest first: one that matches
- * the template and signs people in as asked; else one this command made that differs from this version's template, with
- * its changes (updating: brought up to date when the person agrees, asked later). Says why one that signs in another way
- * is not used. Stops on one that differs, unless --new-workflow; differs is the first one that does.
+ * The workflow this run uses, from this project's workflows of this run's names (ours), newest first, archived ones left
+ * out: one that matches the template and signs people in as asked; else one this command made, or RPA 0.1.0 made
+ * (isForm010, whatever its sign-in: 0.1.0's forms all had Basic Auth), that differs from this version's template, with
+ * its changes (updating: brought up to date when the person agrees, asked later). Says why one this command made that
+ * signs in another way is not used. Stops on one that differs, unless --new-workflow; differs is the first one that does.
  */
 async function chooseWorkflow(inputs: Inputs, ours: any[], credentials: any[], home: string | undefined, siteForm: boolean, reportOthers: () => void) {
   const { client, options } = inputs;
   const basic = options.formLogin === 'basic';
   let workflow: Record<string, any> | undefined;
-  let differs: { id: string; name: string; why: string; active: boolean; own?: { json: any; changes: Changes } } | undefined;
+  let differs: { id: string; name: string; why: string; active: boolean; made010: boolean; own?: { json: any; update: Update } } | undefined;
   // One that matches the template but signs people in another way (Basic Auth or n8n's sign-in) is not used.
   let otherLogin: Record<string, any> | undefined;
   for (const w of [...ours].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))) {
     const r = await client.api('GET', `/workflows/${encodeURIComponent(String(w.id))}`);
     if (r.status !== 200 || !Array.isArray(r.json?.nodes)) throw new Stop(`Could not read the workflow "${clean(w.name, w.id)}" (${client.reason(r)}).`);
+    // Archived since it was listed: not counted (it cannot be published until someone restores it).
+    if (r.json.isArchived === true) continue;
     // Read again, from the workflow itself: it is used only when it still belongs to this project.
     const notMine = ownerProject(r.json, 'workflow') !== home ? 'n8n does not say it belongs to your project' : undefined;
     const credentialWhy = notMine ?? credentialProblem(r.json, credentials, home as string);
@@ -379,17 +405,29 @@ async function chooseWorkflow(inputs: Inputs, ours: any[], credentials: any[], h
       otherLogin ??= r.json;
       continue;
     }
+    // One RPA 0.1.0 made: brought up to date like this command's own, keeping its sign-in; what a person changed in it
+    // since is told apart by 0.1.0's own template (handChanges010).
+    // Only one that signs people in: a 0.1.0 form whose sign-in was turned off is made fresh, as one of this command's is.
+    // Basic Auth (as 0.1.0 made them all) is kept with --form-login basic, or becomes n8n's sign-in as the run asks.
+    const auth010 = formAuthentication(r.json);
+    const made010 = isForm010(r.json) && (auth010 === FORM_AUTH[options.formLogin] || (auth010 === FORM_AUTH.basic && !basic));
+    if (isForm010(r.json) && !made010) {
+      otherLogin ??= r.json;
+      continue;
+    }
+    const update: Update | undefined = !credentialWhy && changes && (own || made010)
+      ? { changes, ...(made010 ? { made010: { hand: handChanges010(r.json), toN8nSignIn: auth010 !== FORM_AUTH[options.formLogin] } } : {}) } : undefined;
     differs ??= {
-      id: String(w.id), name: String(w.name), active: r.json.active === true,
+      id: String(w.id), name: String(w.name), active: r.json.active === true, made010,
       why: credentialWhy ?? structuralDifference(r.json) ?? "its nodes' settings or connections differ from this version's template",
-      ...(own ? { own: { json: r.json, changes } } : {}),
+      ...(update ? { own: { json: r.json, update } } : {}),
     };
   }
   // The form to bring up to date, when the person agrees (asked below, before anything is written).
-  let updating: Changes | undefined;
+  let updating: Update | undefined;
   if (!workflow && differs?.own && (!options.newWorkflow || siteForm)) {
     workflow = differs.own.json;
-    updating = differs.own.changes;
+    updating = differs.own.update;
   }
   if (!workflow && otherLogin) {
     const auth = formAuthentication(otherLogin);
@@ -399,7 +437,13 @@ async function chooseWorkflow(inputs: Inputs, ours: any[], credentials: any[], h
   if (!workflow && differs && !options.newWorkflow) {
     reportOthers();
     const state = differs.active ? 'This run changed nothing: that form is still published at its address.' : 'It is not published, and this run changed nothing.';
-    throw new Stop(`The workflow ${nameAndId(differs)} in your project differs from the template: ${differs.why}. ${state} To keep its address, undo that change in n8n, or delete that workflow, and run this again. --new-workflow makes another form at a new address${options.siteLogin !== undefined ? ", with --site-login a form of that Site Login's own" : ''}.`);
+    // Only a credential stands in the way of a form this command or RPA 0.1.0 made: never "undo that change" for a
+    // change the person did not make.
+    const fix = differs.made010 || differs.why.startsWith('a credential') || differs.why.startsWith('n8n does not say')
+      ? 'To keep its address, pick credentials of your project on it in n8n, or delete that workflow, and run this again.'
+      : 'To keep its address, undo that change in n8n, or delete that workflow, and run this again.';
+    const what = differs.made010 ? `was made by RPA 0.1.0, and this run cannot update it: ${differs.why}` : `differs from the template: ${differs.why}`;
+    throw new Stop(`The workflow ${nameAndId(differs)} in your project ${what}. ${state} ${fix} --new-workflow makes another form at a new address${options.siteLogin !== undefined ? ", with --site-login a form of that Site Login's own" : ''}.`);
   }
   return { workflow, updating, differs };
 }
@@ -419,6 +463,8 @@ interface Closing {
   signingKey?: string;
   /** The RPA Step Signing credential the form signs with, named in the closing lines. */
   signingRef: Ref;
+  /** The form's Basic Auth login when this command did not make it (a form RPA 0.1.0 made keeps its own). */
+  keptLogin?: Ref;
   showKey: boolean;
   runnerRef?: Ref;
   runnerTest?: RunnerTest;
@@ -433,14 +479,17 @@ interface Closing {
  */
 function closingLines(inputs: Inputs, closing: Closing) {
   const { options } = inputs;
-  const basic = options.formLogin === 'basic';
-  const { workflow, formUrl, shownUrl, shownName, formSays, siteForm, siteRef, formPassword, signingKey, signingRef, showKey, runnerRef, runnerTest, runners, browserRef } = closing;
+  const { workflow, formUrl, shownUrl, shownName, formSays, siteForm, siteRef, formPassword, signingKey, signingRef, keptLogin, showKey, runnerRef, runnerTest, runners, browserRef } = closing;
+  // How the form signs people in: as asked, or as a form RPA 0.1.0 made kept it.
+  const basic = formAuthentication(workflow) === FORM_AUTH.basic;
   say();
   say(`${formSays}.`);
   say(`  Address:    ${shownUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
   if (formUrl && !inputs.formBase) say('              Replace the host and port with the ones you open n8n with, if they differ.');
   if (siteForm && siteRef) say(`  Site Login: "${clean(siteRef.name)}". Use this form for the bots that sign in with it. Your other import form is not changed.`);
-  if (basic) {
+  if (basic && keptLogin) {
+    say(`  Sign-in:    Basic Auth, with the user name and password in ${nameAndId(keptLogin)}, as before. n8n does not show the password again.`);
+  } else if (basic) {
     say(`  User name:  ${FORM.user}`);
     if (formPassword) reveal('  Password:   ', formPassword, '   (shown once: keep it in your password manager)');
     else say('  Password:   made earlier, n8n does not show it again. To set a new one, run this again with --new-form-password.');
@@ -457,7 +506,7 @@ function closingLines(inputs: Inputs, closing: Closing) {
   say();
   say('Next:');
   say('  1. Record a bot, or pick a bot file you have: an RPA recording, a UiPath project, a Chrome Recorder export, Playwright code or a step document.');
-  if (basic) say('  2. Open the form address in your browser and sign in with the user name and password above.');
+  if (basic) say(`  2. Open the form address in your browser and sign in with the user name and password ${keptLogin ? 'of that credential' : 'above'}.`);
   else say('  2. Open the form address in your browser and sign in to n8n. The first time, n8n asks whether the form may use your n8n login: choose Allow access.');
   say('  3. Upload the file, give the steps a name, and submit. On the next page, review the steps and approve them.');
   if (!basic) say(`  Only the n8n users on "${NODE.signSteps}" → Approver Allowlist may approve: add others there in n8n.`);
@@ -529,7 +578,8 @@ async function run(inputs: Inputs): Promise<number> {
   const siteIds = new Set(siteForm ? list.items.filter((c) => c?.type === CREDENTIALS.siteLogin && c?.name === options.siteLogin).map((c) => String(c.id)) : []);
   const carriesSite = (w: any) => String(w?.name ?? '').startsWith(WORKFLOW_NAME)
     && siteIds.has(String(w?.nodes?.find((n: any) => n?.name === NODE.importSteps)?.credentials?.[CREDENTIALS.siteLogin]?.id));
-  const named = workflows.items.filter((w) => names.test(String(w?.name ?? '')) || carriesSite(w));
+  // An archived workflow is not counted: n8n's API and its command line both list it, with isArchived true.
+  const named = workflows.items.filter((w) => w?.isArchived !== true && (names.test(String(w?.name ?? '')) || carriesSite(w)));
 
   // The project this run works in. Without --project-id, the key owner's personal project, learned from a workflow that
   // lives there; when none does, it is learned from the workflow this run makes, before any credential is chosen. Through
@@ -588,6 +638,13 @@ async function run(inputs: Inputs): Promise<number> {
             return undefined;
           },
         }));
+      } else if (spec === FORM) {
+        // The form's Basic Auth login: this command's "RPA import form", else the one on the form found when the project
+        // owns it (a form 0.1.0 made has its own, whatever its name).
+        const byName = sameName(list.items, FORM, home);
+        const onForm = workflow ? nodeOf(workflow, NODE.form)?.credentials?.httpBasicAuth?.id : undefined;
+        const login = byName.mine || onForm === undefined || onForm === null ? undefined : projectCredentials(list.items, FORM.type, home).find((c) => String(c.id) === String(onForm));
+        found.set(spec.name, login ? { mine: login, others: byName.others } : byName);
       } else {
         found.set(spec.name, sameName(list.items, spec, home));
       }
@@ -620,8 +677,10 @@ async function run(inputs: Inputs): Promise<number> {
   }
 
   // A reused workflow must use exactly this run's credentials (the form's login, the signing key, the browser): one that
-  // points at any other credential of those types is not relied on, and a fresh one is made.
-  if (workflow) {
+  // points at any other credential of those types is not relied on, and a fresh one is made. Not a form RPA 0.1.0
+  // made: it has no signing key yet, and an update keeps the login and browser picked on it (credentialProblem has
+  // checked that they are this project's).
+  if (workflow && !updating?.made010) {
     const runs: Record<string, string | undefined> = { httpBasicAuth: found.get(FORM.name)?.mine?.id, [SIGNING.type]: found.get(SIGNING.name)?.mine?.id, [BROWSER.type]: found.get(BROWSER.name)?.mine?.id };
     for (const n of workflow.nodes) {
       const required = n.name === NODE.form && basic ? 'httpBasicAuth' : n.name === NODE.signSteps ? SIGNING.type : undefined;
@@ -638,6 +697,7 @@ async function run(inputs: Inputs): Promise<number> {
     }
   }
   if (!workflow) updating = undefined;
+  const made010 = updating?.made010 !== undefined;
   // A form this command made that differs from this version's template: brought up to date only when the person says
   // yes at a terminal. Otherwise it stays exactly as it is, and nothing else is made or changed.
   if (workflow && updating && !(await askUpdate(workflow, updating))) {
@@ -645,10 +705,10 @@ async function run(inputs: Inputs): Promise<number> {
     return 0;
   }
 
-  // The approver is needed only for a workflow still to create: the API key owner's address when n8n tells it, else
-  // asked, before anything is created.
+  // The approver is needed only for a workflow still to create, or a 0.1.0 form whose new Sign steps needs an Approver
+  // Allowlist: the API key owner's address when n8n tells it, else asked, before anything is created.
   let approver = options.approver;
-  if (!workflow && approver === undefined) {
+  if ((!workflow || made010) && approver === undefined) {
     approver = await keyOwnerEmail(client, inputs.userId);
     if (approver) say(`approver ${approver}: ${inputs.cli ? "n8n's owner" : "the API key's owner"} (another with --approver)`);
     else if (!interactive()) throw new Stop('Give your email address with --approver: it goes into the Approver Allowlist of Sign steps.', 2);
@@ -707,6 +767,9 @@ async function run(inputs: Inputs): Promise<number> {
   // The form's login: only with --form-login basic. With n8n's sign-in there is nothing to make.
   let formRef: Ref | undefined;
   if (basic) {
+    // A login this command did not make: n8n never shows its user name, so a new password cannot be set here.
+    const login = of(FORM).mine;
+    if (options.newFormPassword && login && login.name !== FORM.name) throw new Stop(`--new-form-password sets a new password only on the form login this command made, "${FORM.name}". The form uses ${nameAndId(login)}: change its password in n8n. Nothing was changed.`, 2);
     const form = await credential(client, of(FORM), projectId, FORM, () => ({ user: FORM.user, password: formPassword }),
       options.newFormPassword ? 'a new password is set below' : 'its password was made earlier and stays as it is');
     formRef = form.ref;
@@ -767,16 +830,22 @@ async function run(inputs: Inputs): Promise<number> {
     // public API keeps the published version live until the new one is published; n8n's command line unpublishes it
     // on import, so the publish follows at once.
     const old = workflow;
-    const r = await putWorkflow(client, old, old.name, updatedNodes(old), loadTemplate().connections);
+    // A form 0.1.0 made gets its new Sign steps wired: this run's signing key, the Site Login on Import steps, the approver.
+    const updatedTo = made010 ? wire010(updatedNodes(old), signing.ref, approver as string, updating.made010?.toN8nSignIn === true, formRef) : updatedNodes(old);
+    const r = await putWorkflow(client, old, old.name, updatedTo, loadTemplate().connections);
     if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not update the workflow "${clean(old.name, old.id)}" (id ${clean(old.id)}) (${client.reason(r)}). ${old.active ? 'n8n keeps its published version until another is published.' : ''}`.trim());
     workflow = { ...r.json, active: inputs.cli ? false : r.json.active };
     updated = true;
     say(`updated  workflow ${nameAndId(old)}: its nodes and connections are this version's template, with what you set kept`);
+    if (made010) {
+      const site = updatedTo.find((n) => n.name === NODE.signSteps)?.credentials?.[CREDENTIALS.siteLogin];
+      say(`         its new node "${NODE.signSteps}" signs with ${nameAndId(signing.ref)}${site ? `, for the Site Login ${nameAndId(site)}` : ''}; approver ${approver}. Imports are approved on this form now (Settings → approval).`);
+    }
   } else if (workflow) {
     say(`reused   workflow ${nameAndId(workflow)}: it matches the template${workflow.active ? '' : ', publishing it'}`);
   }
   if (workflow) {
-    if (options.approver !== undefined) say(`         its Approver Allowlist was left as it is: change it on "${NODE.signSteps}" in n8n.`);
+    if (options.approver !== undefined && !made010) say(`         its Approver Allowlist was left as it is: change it on "${NODE.signSteps}" in n8n.`);
     const onImport = nodeOf(workflow, NODE.importSteps)?.credentials ?? {};
     // The runner by name and id: the one picked may have any name, and Import steps may hold another one.
     const toPick = [inputs.browser && !onImport[BROWSER.type] && browserRef ? nameAndId(browserRef) : '', !onImport[SIGNING.type] ? nameAndId(signing.ref) : '',
@@ -839,7 +908,7 @@ async function run(inputs: Inputs): Promise<number> {
   // n8n registers the form a moment after it publishes the workflow; through n8n's command line, the running n8n
   // notices the publish by itself, within about 5 to 20 seconds.
   if (formUrl && inputs.cli && publishedNow) say("waiting  for the form to answer: the running n8n takes up to half a minute to notice a publish through its command line");
-  const answered = formUrl ? await waitForForm(formUrl, basic, inputs.cli ? 40 : 10) : undefined;
+  const answered = formUrl ? await waitForForm(formUrl, formAuthentication(workflow) === FORM_AUTH.basic, inputs.cli ? 40 : 10) : undefined;
   if (formUrl && answered?.ready && inputs.cli && publishedNow) say(`answered the form, after ${answered.seconds} s`);
   if (formUrl && !answered?.ready) warn(`Note: the form did not answer as expected at ${formUrl} (${answered?.status ?? 'no answer'}). ${inputs.cli ? 'Check that the n8n at this address is the one that runs here (--url), and its log. ' : ''}In n8n, open "${shownName}", then the node "${NODE.form}", for its production URL.`);
   const ready = formUrl === undefined || answered?.ready === true;
@@ -851,7 +920,8 @@ async function run(inputs: Inputs): Promise<number> {
     runnerTest = await testRunner(inputs, runnerRef);
   }
 
-  closingLines(inputs, { workflow, formUrl, shownUrl, shownName, formSays, siteForm, siteRef, formPassword, signingKey, signingRef: signing.ref, showKey, runnerRef, runnerTest, runners, browserRef });
+  const keptLogin = formRef && formRef.name !== FORM.name ? formRef : undefined;
+  closingLines(inputs, { workflow, formUrl, shownUrl, shownName, formSays, siteForm, siteRef, formPassword, signingKey, signingRef: signing.ref, keptLogin, showKey, runnerRef, runnerTest, runners, browserRef });
   return 0;
 }
 

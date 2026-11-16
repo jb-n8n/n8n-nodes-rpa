@@ -8,7 +8,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { runnerNoTcpAnswer } from '../../engine/src/messages.js';
+import { TEMPLATE_010 } from '../setup/template-010.mjs';
 import { open, TEMPLATE, PLAIN_KEY, API_KEY, EXPIRING_KEY, FINGERPRINT, RUNNER_TOKEN, LINE, NEW_TOKEN, NEW_LINE, BROWSER_TOKEN, RUNNER_CONNECTED, RUNNER_UNREACHABLE, Cred, Wf, HOME, fakeN8n, n8n, run, runAtTerminal } from './fixtures/fake-n8n-api.js';
 
 const ENV = { N8N_API_KEY: API_KEY };
@@ -1857,5 +1859,209 @@ describe('the RPA Step Signing and the RPA Browser are found by their type, what
     expect(shared.out).toContain('left alone credential "RPA Step Signing account" (playwrightScriptSigningApi, id c-010): it belongs to another project or user, so it is not used');
     expect(signOn(h.state().workflows[0]).id).not.toBe('c-010');
     expectFilesGone(f);
+  });
+});
+
+describe('a form RPA 0.1.0 made is brought up to date, never blamed on the person (S1)', () => {
+  /** 0.1.0's template as the v0.1.0 tag has it, with what its "Set once" note had people pick. */
+  const SHIPPED_010 = JSON.parse(readFileSync(new URL('./fixtures/template-0.1.0-5-import-a-bot.json', import.meta.url), 'utf8'));
+  const KEY_010: Cred = { id: 'c-010', name: 'RPA Step Signing account', type: 'playwrightScriptSigningApi', data: { secretKey: 'c3'.repeat(32) } };
+  const BROWSER_010: Cred = { id: 'c-b010', name: 'RPA Browser account', type: 'playwrightBrowserApi', data: { mode: 'playwright', wsUrl: 'ws://browser:3000/', token: BROWSER_TOKEN } };
+  const SITE_010: Cred = { id: 'c-s010', name: 'RPA Site Login account', type: 'playwrightSiteLoginApi', data: { username: 'u', password: 'made-up-site-pw' } };
+  const LOGIN_010: Cred = { id: 'c-l010', name: 'Import form login', type: 'httpBasicAuth', data: { user: 'importer', password: 'made-up-form-pw' } };
+  const MODEL: Cred = { id: 'c-model', name: 'Anthropic account', type: 'anthropicApi', data: { apiKey: 'made-up-model-key' } };
+  const CREDS = [KEY_010, BROWSER_010, SITE_010, LOGIN_010, MODEL];
+  const ref = (c: Cred) => ({ id: c.id, name: c.name });
+  const QUESTION = /Update this form to this version\? \(y\/N\) /;
+  function form010(change?: (nodes: any[], wf: any) => void): Wf {
+    const t = structuredClone(SHIPPED_010);
+    const nodes = t.nodes.map((n: any) => {
+      if (/\.(formTrigger|form)$/.test(n.type)) n.webhookId = `0a1b2c3d-0000-4000-8000-${String(n.id).slice(-12)}`;
+      if (n.name === 'Import a bot') n.credentials = { httpBasicAuth: ref(LOGIN_010) };
+      if (n.name === 'Import steps') {
+        n.credentials = { playwrightBrowserApi: ref(BROWSER_010), playwrightSiteLoginApi: ref(SITE_010) };
+        n.parameters.options = { allowPrivateNetwork: true };
+      }
+      if (n.name === 'Chat model') {
+        n.credentials = { anthropicApi: ref(MODEL) };
+        n.disabled = true;
+      }
+      if (n.name === 'Approve steps') n.parameters.workflowId = { __rl: true, mode: 'list', value: 'w-t3-010', cachedResultName: 'RPA: 3 Approve steps' };
+      return n;
+    });
+    const wf: Wf = { id: 'w-010', name: 'RPA: 5 Import a bot', active: true, versionId: 'v-010', nodes, connections: t.connections, settings: { executionOrder: 'v1' } };
+    change?.(wf.nodes, wf);
+    return wf;
+  }
+  const n = (wf: { nodes: any[] }, name: string) => wf.nodes.find((x) => x.name === name);
+
+  it('setup/template-010.mts holds 0.1.0\'s template: every node but the sticky notes, and the connections (and the v0.1.0 tag, where the repository has it)', () => {
+    const shipped = { nodes: SHIPPED_010.nodes.filter((x: any) => !/stickyNote$/.test(x.type)).map(({ name, type, typeVersion, parameters }: any) => ({ name, type, typeVersion, parameters })), connections: SHIPPED_010.connections };
+    expect(TEMPLATE_010).toEqual(shipped);
+    let tagged: string | undefined;
+    try {
+      tagged = execFileSync('git', ['show', 'v0.1.0:packages/n8n-nodes-rpa/templates/5-import-a-bot.json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      tagged = undefined; // a checkout without the tag (a shallow clone)
+    }
+    if (tagged !== undefined) expect(JSON.parse(tagged)).toEqual(SHIPPED_010);
+  });
+
+  it('without a terminal: says it was made by RPA 0.1.0, that nothing was changed by hand, never "undo that change"; nothing written', async () => {
+    const fake = await n8n({ credentials: CREDS, workflows: [form010()] });
+    const before = JSON.stringify(fake.state.workflows);
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('The form "RPA: 5 Import a bot" (id w-010) was made by RPA 0.1.0, from its template "RPA: 5 Import a bot", and differs from this version\'s template:');
+    expect(r.out).toContain('  Changed by hand since:     nothing. It is the form 0.1.0 made, with what you set in it.');
+    expect(r.out).toContain('  At an older node version:  "Import a bot", "Import steps"');
+    expect(r.out).toContain('  Lost with it: the node "Chat model", which the template does not have.');
+    expect(r.out).toContain('Not updated: without a terminal this command does not ask. To update it, run this command again at a terminal and answer y.');
+    expect(r.out).not.toMatch(/undo that change|differs from the template:/);
+    expect(JSON.stringify(fake.state.workflows)).toBe(before);
+    expect(fake.posts()).toEqual([]);
+    expect(fake.state.credentials).toHaveLength(CREDS.length);
+  });
+
+  it('y at a terminal, with --form-login basic: updated in place with its Basic Auth login, address and credentials; Sign steps signs with the 0.1.0 key for its Site Login; nothing new made', async () => {
+    const fake = await n8n({ credentials: CREDS, workflows: [form010()] });
+    const yes = await runAtTerminal(basicSetup(fake.url, '--browser-url', 'ws://browser:3000/', '--allow-private-network'), { ...ENV, RPA_BROWSER_TOKEN: BROWSER_TOKEN }, [[/Connect a Windows machine now/, 'n'], [QUESTION, 'y']]);
+    expect(yes.out).toContain('  It keeps its sign-in, Basic Auth, with its login.');
+    expect(yes.code, yes.out).toBe(0);
+    expect(fake.state.credentials.map((c) => c.id), 'no credential made: no second key, no second browser, no form login').toEqual(CREDS.map((c) => c.id));
+    expect(fake.state.workflows).toHaveLength(1);
+    const [after] = fake.state.workflows;
+    expect(after).toMatchObject({ id: 'w-010', name: 'RPA: 5 Import a bot', active: true });
+    expect(after.nodes.map((x) => x.name).sort()).toEqual(template().nodes.map((x: any) => x.name).sort());
+    expect(after.connections).toEqual(template().connections);
+    // Its sign-in and login, its address (the webhook id, no Form Path) and title, as 0.1.0 set them.
+    expect(n(after, 'Import a bot')).toMatchObject({ webhookId: n(form010(), 'Import a bot').webhookId, credentials: { httpBasicAuth: ref(LOGIN_010) }, parameters: { authentication: 'basicAuth', formTitle: 'Import a bot' } });
+    expect(n(after, 'Import a bot').parameters.options?.path).toBeUndefined();
+    expect(n(after, 'Import steps').typeVersion).toBe(2);
+    expect(n(after, 'Import steps').credentials).toEqual({ playwrightBrowserApi: ref(BROWSER_010), playwrightSiteLoginApi: ref(SITE_010), playwrightScriptSigningApi: ref(KEY_010) });
+    expect(n(after, 'Import steps').parameters.options.allowPrivateNetwork).toBe(true);
+    expect(n(after, 'Sign steps').credentials).toEqual({ playwrightScriptSigningApi: ref(KEY_010), playwrightSiteLoginApi: ref(SITE_010) });
+    expect(n(after, 'Sign steps').parameters.approverAllowlist).toBe('ops@example.com');
+    expect(n(after, 'Approve steps').parameters.workflowId.value).toBe('w-t3-010');
+    expect(yes.out).toContain('updated  workflow "RPA: 5 Import a bot" (id w-010): its nodes and connections are this version\'s template, with what you set kept');
+    expect(yes.out).toContain('         its new node "Sign steps" signs with "RPA Step Signing account" (id c-010), for the Site Login "RPA Site Login account" (id c-s010); approver ops@example.com. Imports are approved on this form now (Settings → approval).');
+    expect(yes.out).toContain('reused   credential "RPA Step Signing account" (id c-010): its key stays as it is');
+    expect(yes.out).toContain(`  Address:    ${fake.url}/form/${n(after, 'Import a bot').webhookId}`);
+    expect(yes.out).toContain('reused   credential "Import form login" (id c-l010): its password was made earlier and stays as it is');
+    expect(yes.out).toContain('  Sign-in:    Basic Auth, with the user name and password in "Import form login" (id c-l010), as before. n8n does not show the password again.');
+    expect(yes.out).toContain('  2. Open the form address in your browser and sign in with the user name and password of that credential.');
+    expect(yes.out).toContain('  Signing key: in "RPA Step Signing account" (id c-010), made earlier');
+    expect(yes.out).toContain('The import form is ready.');
+    expectNoSecrets(yes.out, [KEY_010.data.secretKey, 'made-up-form-pw', 'made-up-site-pw', 'made-up-model-key']);
+    // Run again: it matches now, nothing asked or made. A new password is not set on a login this command did not make.
+    const again = await run(basicSetup(fake.url), ENV);
+    expect(again.code, again.out).toBe(0);
+    expect(again.out).toMatch(/reused +workflow "RPA: 5 Import a bot" \(id w-010\): it matches the template/);
+    expect(fake.state.credentials).toHaveLength(CREDS.length);
+    const password = await run(basicSetup(fake.url, '--new-form-password'), ENV);
+    expect(password.code).toBe(2);
+    expect(password.out).toContain('--new-form-password sets a new password only on the form login this command made, "RPA import form". The form uses "Import form login" (id c-l010): change its password in n8n. Nothing was changed.');
+    expect(fake.state.credentials.find((c) => c.id === 'c-l010')!.data).toEqual(LOGIN_010.data);
+  });
+
+  it("y at a terminal, the guide's command (n8n's sign-in): the question says its sign-in becomes n8n's, and the form then opens with n8n's sign-in", async () => {
+    const fake = await n8n({ credentials: CREDS, workflows: [form010()] });
+    const yes = await runAtTerminal(setup(fake.url), ENV, [[/Connect a Windows machine now/, 'n'], [QUESTION, 'y']]);
+    expect(yes.code, yes.out).toBe(0);
+    expect(yes.out).toContain("  Its sign-in becomes n8n's sign-in, as this run sets up: people open the form with their n8n login, and its Basic Auth login is no longer used. To keep Basic Auth, answer n and run this again with --form-login basic.");
+    const [after] = fake.state.workflows;
+    expect(after.id).toBe('w-010');
+    expect(n(after, 'Import a bot').parameters).toMatchObject({ authentication: 'n8nUserAuth', requireExecuteAccess: true });
+    expect(n(after, 'Import a bot')).not.toHaveProperty('credentials');
+    expect(n(after, 'Import a bot').webhookId).toBe(n(form010(), 'Import a bot').webhookId);
+    expect(n(after, 'Sign steps').credentials).toEqual({ playwrightScriptSigningApi: ref(KEY_010), playwrightSiteLoginApi: ref(SITE_010) });
+    expect(fake.state.credentials.map((c) => c.id)).toEqual(CREDS.map((c) => c.id));
+    expect(fake.state.credentials.find((c) => c.id === 'c-l010')!.data, 'the old login is left as it is').toEqual(LOGIN_010.data);
+    expect(yes.out).toContain('  Sign-in:    the form opens with your n8n sign-in.');
+    expect(yes.out).toContain('The import form is ready.');
+    const again = await run(setup(fake.url), ENV);
+    expect(again.code, again.out).toBe(0);
+    expect(again.out).toMatch(/reused +workflow "RPA: 5 Import a bot" \(id w-010\): it matches the template/);
+    expect(fake.state.workflows).toHaveLength(1);
+  });
+
+  it('what a person changed in it is said as their change, by 0.1.0\'s own template, and lost only after y', async () => {
+    const changed = form010((nodes, wf) => {
+      n(wf, 'Import a bot').parameters.formDescription = 'Upload the bot for the finance team.';
+      nodes.push({ id: 'x1', name: 'Tell the team', type: 'n8n-nodes-base.noOp', typeVersion: 1, position: [0, 0], parameters: {} });
+      wf.nodes = nodes.filter((x: any) => x.name !== 'Imported');
+      delete wf.connections['Workflow file?'];
+      wf.connections['Workflow file?'] = { main: [[{ node: 'Imported, with the workflow file', type: 'main', index: 0 }], []] };
+    });
+    const fake = await n8n({ credentials: CREDS, workflows: [changed] });
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('was made by RPA 0.1.0, from its template "RPA: 5 Import a bot"');
+    expect(r.out).toContain('  Changed by hand since 0.1.0 made it:\n    Added by hand:           "Tell the team"\n    Removed by hand:         "Imported"\n    Set by hand:             "Import a bot"\n    Connected by hand:       the links between its nodes');
+    expect(r.out).toContain('What was changed by hand is lost.');
+    expect(r.out).not.toMatch(/undo that change|Changed by hand since: +nothing/);
+    // The model is 0.1.0's guide's choice, not a change: another provider on the model input counts as nothing.
+    const model = form010((nodes, wf) => {
+      wf.nodes = nodes.filter((x: any) => x.name !== 'Chat model').concat({ id: 'm1', name: 'OpenAI Chat Model', type: '@n8n/n8n-nodes-langchain.lmChatOpenAi', typeVersion: 1.2, position: [0, 0], parameters: { model: 'gpt-x' } });
+      delete wf.connections['Chat model'];
+      wf.connections['OpenAI Chat Model'] = { ai_languageModel: [[{ node: 'Import steps', type: 'ai_languageModel', index: 0 }]] };
+    });
+    const other = await n8n({ credentials: CREDS, workflows: [model] });
+    const m = await run(setup(other.url), ENV);
+    expect(m.code, m.out).toBe(0);
+    expect(m.out).toContain('  Changed by hand since:     nothing.');
+  });
+
+  it('one it cannot update (a credential of another project on it) stops without blaming a change; one whose sign-in was turned off is left alone, and a fresh one made', async () => {
+    const elsewhere = { ...LOGIN_010, id: 'c-l-other', projectId: 'P-other' };
+    const fake = await n8n({ credentials: [...CREDS, elsewhere], workflows: [form010((nodes) => { n({ nodes }, 'Import a bot').credentials = { httpBasicAuth: ref(elsewhere) }; })] });
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('The workflow "RPA: 5 Import a bot" (id w-010) in your project was made by RPA 0.1.0, and this run cannot update it: a credential on "Import a bot" (id c-l-other) belongs to another project or user. This run changed nothing: that form is still published at its address. To keep its address, pick credentials of your project on it in n8n, or delete that workflow, and run this again.');
+    expect(r.out).not.toContain('undo that change');
+    const open010 = await n8n({ credentials: CREDS, workflows: [form010((nodes) => { delete n({ nodes }, 'Import a bot').parameters.authentication; })] });
+    const o = await run(setup(open010.url), ENV);
+    expect(o.code, o.out).toBe(0);
+    expect(o.out).toContain('not used workflow "RPA: 5 Import a bot" (id w-010): its form uses no sign-in, and this run sets up n8n\'s sign-in. This run makes a fresh one: unpublish the old one in n8n when you no longer use it.');
+    expect(open010.state.workflows).toHaveLength(2);
+    expect(n(open010.state.workflows[1], 'Sign steps').credentials.playwrightScriptSigningApi).toEqual(ref(KEY_010));
+  });
+
+  it('an archived form is not counted: n8n lists it, and a fresh form takes the template\'s name and /form/rpa-import', async () => {
+    const archived = form010((nodes, wf) => {
+      wf.isArchived = true;
+      wf.active = false;
+      n({ nodes }, 'Import a bot').parameters.options = { path: 'rpa-import' };
+    });
+    const fake = await n8n({ credentials: CREDS, workflows: [archived] });
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).not.toMatch(/0\.1\.0|differs|left alone workflow/);
+    const fresh = fake.state.workflows.find((w) => w.id !== 'w-010')!;
+    expect(fresh.name).toBe('RPA: 5 Import a bot');
+    expect(r.stdout).toContain(`  Address:    ${fake.url}/form/rpa-import\n`);
+    expect(fake.state.workflows.find((w) => w.id === 'w-010')).toEqual({ ...archived, projectId: HOME });
+  });
+
+  it("through n8n's command line: the same offer, the update in place by its id, and an archived one not counted", async () => {
+    const f = await cliN8n({ credentials: CREDS, workflows: [{ ...form010(), activeVersionId: 'v-010' }] });
+    const guide = (x: CliFake) => ['setup', '--url', x.url, '--approver', 'ops@example.com'];
+    const no = await run(guide(f), f.env);
+    expect(no.code, no.out).toBe(0);
+    expect(no.out).toContain('was made by RPA 0.1.0');
+    expect(imports(f)).toEqual([]);
+    const yes = await runAtTerminal(guide(f), f.env, [[/Connect a Windows/, 'n'], [QUESTION, 'y']]);
+    expect(yes.code, yes.out).toBe(0);
+    const [after] = f.state().workflows;
+    expect(after.id).toBe('w-010');
+    expect(after.activeVersionId).toBe(after.versionId);
+    expect(n(after, 'Sign steps').credentials).toEqual({ playwrightScriptSigningApi: ref(KEY_010), playwrightSiteLoginApi: ref(SITE_010) });
+    expect(f.state().credentials.map((c) => c.id)).toEqual(CREDS.map((c) => c.id));
+    expectFilesGone(f);
+    const g = await cliN8n({ credentials: CREDS, workflows: [{ ...form010(), isArchived: true }] });
+    const fresh = await run(guide(g), g.env);
+    expect(fresh.code, fresh.out).toBe(0);
+    expect(fresh.out).not.toContain('0.1.0');
+    expect(g.state().workflows.find((w) => w.id !== 'w-010').name).toBe('RPA: 5 Import a bot');
   });
 });

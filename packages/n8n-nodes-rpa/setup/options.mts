@@ -24,7 +24,7 @@ export const USAGE = [
   '',
   'Sets up n8n for importing a bot: the import form, which opens with your n8n sign-in, the RPA Step Signing credential,',
   `and the workflow "${WORKFLOW_NAME}", published. Run it again at any time: it reuses what is there, and offers to bring`,
-  'a form it made up to date after an upgrade.',
+  'a form it made, or RPA 0.1.0 made, up to date after an upgrade. An archived workflow is not counted.',
   '',
   "Two ways in. Where n8n runs (inside n8n's container, as n8n's user), it uses n8n's own command line and needs no API key.",
   'Anywhere else, or with --api-key, it uses n8n\'s public API and an API key.',
