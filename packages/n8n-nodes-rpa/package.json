@@ -37,7 +37,8 @@
   },
   "files": [
     "dist",
-    "templates"
+    "templates",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "n8n": {
     "n8nNodesApiVersion": 1,

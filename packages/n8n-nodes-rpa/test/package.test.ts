@@ -75,6 +75,9 @@ describe('the packed tarball (scripts/pack.mjs, what publish.yml publishes)', ()
       expect(files).toContain('package/dist/engine/index.js');
       expect(files).toContain('package/dist/schema/steps.schema.json');
       expect(files).toContain('package/dist/setup.mjs');
+      // The setup bundle's third-party code is named with its licence (scripts/build-setup.mjs checks the text).
+      expect(files).toContain('package/THIRD-PARTY-NOTICES.md');
+      expect(execFileSync('tar', ['-xOzf', tgz, 'package/THIRD-PARTY-NOTICES.md'], { encoding: 'utf8' })).toContain(`\n## fflate ${deps.fflate}\n`);
       expect(files).not.toMatch(/\.d\.ts$/m);
     } finally {
       rmSync(dir, { recursive: true, force: true });
