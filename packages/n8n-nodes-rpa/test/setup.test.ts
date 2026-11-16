@@ -8,7 +8,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { runnerNoTcpAnswer } from '../../engine/src/messages.js';
+import { TEMPLATE_010 } from '../setup/template-010.mjs';
 import { open, TEMPLATE, PLAIN_KEY, API_KEY, EXPIRING_KEY, FINGERPRINT, RUNNER_TOKEN, LINE, NEW_TOKEN, NEW_LINE, BROWSER_TOKEN, RUNNER_CONNECTED, RUNNER_UNREACHABLE, Cred, Wf, HOME, fakeN8n, n8n, run, runAtTerminal } from './fixtures/fake-n8n-api.js';
 
 const ENV = { N8N_API_KEY: API_KEY };
@@ -201,7 +203,7 @@ describe('npx n8n-nodes-rpa setup', () => {
       expect(fake.state.requests.some((q) => q.method === 'PATCH')).toBe(false);
       expect(r.stdout).toMatch(/reused .*RPA Step Signing.*its key stays as it is/);
       // Bots may be approved with it by now: no advice to replace it, only what a new key does.
-      expect(r.stdout).toContain('  Signing key: made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.');
+      expect(r.stdout).toContain('  Signing key: in "RPA Step Signing" (id c7), made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.');
       expect(r.stdout).not.toMatch(/To keep a copy|before you approve a bot/);
     }
     expect(fake.state.workflows).toHaveLength(1);
@@ -337,12 +339,23 @@ describe('npx n8n-nodes-rpa setup', () => {
     const same = await n8n();
     const s = await run(setup(same.url), { ...ENV, WEBHOOK_URL: `${same.url}/` });
     expect(s.stdout.split('\n')[1]).toBe(`Setting up ${same.url} for RPA`);
-    // N8N_EDITOR_BASE_URL when WEBHOOK_URL is not set; an n8n under a path keeps it.
+    // N8N_WEBHOOK_URL (the compose stack's, n8n 2.45's name) first, then WEBHOOK_URL (its older name), then N8N_EDITOR_BASE_URL.
+    for (const [env, want] of [
+      [{ N8N_WEBHOOK_URL: 'https://hooks.example.com/', WEBHOOK_URL: 'https://old.example.com/', N8N_EDITOR_BASE_URL: 'https://editor.example.com/' }, 'https://hooks.example.com/'],
+      [{ N8N_WEBHOOK_URL: 'not an address', WEBHOOK_URL: 'https://old.example.com/' }, 'https://old.example.com/'],
+      [{ N8N_WEBHOOK_URL: 'https://hooks.example.com', N8N_EDITOR_BASE_URL: 'https://editor.example.com/' }, 'https://hooks.example.com/'],
+    ] as [Record<string, string>, string][]) {
+      const order = await n8n();
+      const o = await run(setup(order.url), { ...ENV, ...env });
+      expect(o.code, o.out).toBe(0);
+      expect(o.stdout).toContain(`  Address:    ${want}form/${formOf(order)}\n`);
+    }
+    // N8N_EDITOR_BASE_URL when neither is set; an n8n under a path keeps it.
     const editor = await n8n();
     const e = await run(setup(editor.url), { ...ENV, N8N_EDITOR_BASE_URL: 'https://example.com/n8n' });
     expect(e.stdout).toContain(`  Address:    https://example.com/n8n/form/${formOf(editor)}\n`);
     // Nothing usable from the environment: the address as reached, and one line to say what to change.
-    for (const env of [{}, { WEBHOOK_URL: 'https://user:made-up@n8n.example.com/' }, { WEBHOOK_URL: 'ftp://n8n.example.com/' }, { WEBHOOK_URL: 'not an address' }] as Record<string, string>[]) {
+    for (const env of [{}, { WEBHOOK_URL: 'https://user:made-up@n8n.example.com/' }, { N8N_WEBHOOK_URL: 'https://user:made-up@n8n.example.com/' }, { WEBHOOK_URL: 'ftp://n8n.example.com/' }, { N8N_WEBHOOK_URL: 'not an address' }] as Record<string, string>[]) {
       const fake = await n8n();
       const o = await run(setup(fake.url), { ...ENV, ...env });
       expect(o.code, o.out).toBe(0);
@@ -1139,7 +1152,12 @@ describe('npx n8n-nodes-rpa setup', () => {
         const nodes = t.nodes.map((x: any) => (x.name === 'Sign steps' ? { ...x, credentials: { playwrightScriptSigningApi: { id: 'c-team2', name: 'Some other key' } } } : x));
         const teamWf: Wf = { id: 'w-team', name: 'RPA: 5 Import a bot', active: false, versionId: 'v', nodes, connections: t.connections, settings: {}, projectId: 'P-team' };
         const fake = await n8n({ credentials: [TEAM_KEY, OTHER_KEY], workflows: [teamWf] });
-        const { code, out } = await run(setup(fake.url, '--project-id', 'P-team', '--reuse-project-credentials', '--show-signing-key'), ENV);
+        // Two keys in the project: never a guess. Without a terminal it stops and names --signing-key.
+        const guess = await run(setup(fake.url, '--project-id', 'P-team', '--reuse-project-credentials'), ENV);
+        expect(guess.code, guess.out).toBe(2);
+        expect(guess.out).toContain('Your project has several RPA Step Signing credentials, "RPA Step Signing" (id c-team), "Some other key" (id c-team2), and this command does not pick one by guess: bots signed with one key do not run with another. Name the one your bots were approved with: --signing-key "<its name>". Nothing was changed.');
+        expect(fake.posts()).toEqual([]);
+        const { code, out } = await run(setup(fake.url, '--project-id', 'P-team', '--reuse-project-credentials', '--show-signing-key', '--signing-key', 'RPA Step Signing'), ENV);
         expect(code, out).toBe(0);
         expect(out).toMatch(/not used workflow "RPA: 5 Import a bot" \(id w-team\): its node "(Import a bot|Sign steps)" does not use the (httpBasicAuth|playwrightScriptSigningApi) credential this run uses\. This run makes a fresh one\./);
         expect(fake.state.workflows.find((w) => w.id === 'w-team')!.active).toBe(false);
@@ -1149,18 +1167,21 @@ describe('npx n8n-nodes-rpa setup', () => {
         expect(out).not.toContain('u'.repeat(64));
       });
 
-      it('the same in the personal project: a workflow that points at another signing credential is not relied on', async () => {
+      it('the same in the personal project: a workflow that points at another signing credential than the one picked is not relied on', async () => {
         const t = JSON.parse(readFileSync(TEMPLATE, 'utf8'));
         const OTHER_KEY: Cred = { id: 'c-other-key', name: 'Some other key', type: 'playwrightScriptSigningApi', data: { secretKey: 'u'.repeat(64) }, projectId: HOME };
+        const KEY_010: Cred = { id: 'c-010', name: 'RPA Step Signing account', type: 'playwrightScriptSigningApi', data: { secretKey: 'v'.repeat(64) }, projectId: HOME };
         const nodes = t.nodes.map((x: any) => (x.name === 'Sign steps' ? { ...x, credentials: { playwrightScriptSigningApi: { id: 'c-other-key', name: 'Some other key' } } } : x));
         const wf: Wf = { id: 'w-mine', name: 'RPA: 5 Import a bot', active: false, versionId: 'v', nodes, connections: t.connections, settings: {}, projectId: HOME };
-        const fake = await n8n({ credentials: [OTHER_KEY], workflows: [wf] });
-        const { code, out } = await run(setup(fake.url, '--show-signing-key'), ENV);
+        const fake = await n8n({ credentials: [OTHER_KEY, KEY_010], workflows: [wf] });
+        const { code, out } = await run(setup(fake.url, '--show-signing-key', '--signing-key', 'RPA Step Signing account'), ENV);
         expect(code, out).toBe(0);
+        expect(out).toMatch(/reused +credential "RPA Step Signing account" \(id c-010\): its key stays as it is/);
         expect(out).toMatch(/not used workflow .*\(id w-mine\): its node "(Import a bot|Sign steps)" does not use/);
-        const made = fake.state.credentials.find((c) => c.name === 'RPA Step Signing')!;
-        expect(signingOf({ state: { workflows: fake.state.workflows.filter((w) => w.id !== 'w-mine') } })).toBe(made.id);
-        expect(count(out, made.data.secretKey)).toBe(1);
+        expect(fake.state.credentials.map((c) => c.id), 'no key made').toEqual(['c-other-key', 'c-010']);
+        expect(signingOf({ state: { workflows: fake.state.workflows.filter((w) => w.id !== 'w-mine') } })).toBe('c-010');
+        expect(out).not.toContain('u'.repeat(64));
+        expect(out).not.toContain('v'.repeat(64));
         expect(fake.state.workflows.find((w) => w.id === 'w-mine')!.active).toBe(false);
       });
 
@@ -1699,5 +1720,360 @@ describe("setup through n8n's own command line, with no API key", () => {
     expect(after.activeVersionId).toBe(after.versionId);
     expect(yes.out).toContain('The import form is ready.');
     expect(f.state().workflows).toHaveLength(1);
+  });
+});
+
+describe('the RPA Step Signing and the RPA Browser are found by their type, whatever their name (S2)', () => {
+  // As 0.1.0's guides had people make them: n8n names a credential made by hand "<type> account".
+  const KEY_010: Cred = { id: 'c-010', name: 'RPA Step Signing account', type: 'playwrightScriptSigningApi', data: { secretKey: 'a1'.repeat(32) } };
+  const KEY_2: Cred = { id: 'c-two', name: 'Second key', type: 'playwrightScriptSigningApi', data: { secretKey: 'b2'.repeat(32) } };
+  const BROWSER_010: Cred = { id: 'c-b010', name: 'RPA Browser account', type: 'playwrightBrowserApi', data: { mode: 'playwright', wsUrl: 'ws://browser:3000/', token: BROWSER_TOKEN } };
+  const BROWSER_2: Cred = { id: 'c-b2', name: 'Lab browser', type: 'playwrightBrowserApi', data: { mode: 'playwright', wsUrl: 'ws://lab:3000/', token: BROWSER_TOKEN } };
+  const signOn = (wf: Wf) => wf.nodes.find((n) => n.name === 'Sign steps').credentials.playwrightScriptSigningApi;
+  const browserOn = (wf: Wf) => wf.nodes.find((n) => n.name === 'Import steps').credentials?.playwrightBrowserApi;
+  const QUESTION = /Which one should this run use\? Type its number \(1 to 2\), or press Enter to stop: /;
+  const withBrowser = (url: string, ...more: string[]) => setup(url, '--browser-url', 'ws://browser:3000/', ...more);
+  const BROWSER_ENV = { ...ENV, RPA_BROWSER_TOKEN: BROWSER_TOKEN };
+
+  it("a key named as 0.1.0 named it is reused, and so is the RPA Browser: nothing new is made, and the closing lines name the key", async () => {
+    const fake = await n8n({ credentials: [KEY_010, BROWSER_010] });
+    const r = await run(withBrowser(fake.url), BROWSER_ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(fake.state.credentials.map((c) => c.id), 'no credential made').toEqual(['c-010', 'c-b010']);
+    expect(r.stdout).toContain('reused   credential "RPA Step Signing account" (id c-010): its key stays as it is');
+    expect(r.stdout).toContain('reused   credential "RPA Browser account" (id c-b010): its endpoint and token stay as they are');
+    const [wf] = fake.state.workflows;
+    expect(signOn(wf)).toEqual({ id: 'c-010', name: 'RPA Step Signing account' });
+    expect(wf.nodes.find((n) => n.name === 'Import steps').credentials).toEqual({
+      playwrightBrowserApi: { id: 'c-b010', name: 'RPA Browser account' }, playwrightScriptSigningApi: { id: 'c-010', name: 'RPA Step Signing account' },
+    });
+    expect(r.stdout).toContain('  Signing key: in "RPA Step Signing account" (id c-010), made earlier and kept in n8n, which does not show it again.');
+    expect(fake.state.requests.some((q) => q.method === 'PATCH')).toBe(false);
+    expectNoSecrets(r.out, [KEY_010.data.secretKey]);
+  });
+
+  it('none in the project: one is made, as before', async () => {
+    const fake = await n8n({ credentials: [{ ...KEY_010, projectId: 'P-other' }] });
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code, r.out).toBe(0);
+    const made = fake.state.credentials.find((c) => c.id !== 'c-010')!;
+    expect(made).toMatchObject({ name: 'RPA Step Signing', projectId: HOME });
+    expect(signOn(fake.state.workflows[0]).id).toBe(made.id);
+  });
+
+  it('one only shared into the project is never used, whatever its name: it is said, and the project gets its own', async () => {
+    const fake = await n8n({ credentials: [{ ...KEY_010, projectId: 'P-other', sharedWith: [HOME] }] });
+    const r = await run(setup(fake.url, '--reuse-project-credentials'), ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout).toContain('left alone credential "RPA Step Signing account" (playwrightScriptSigningApi, id c-010): it belongs to another project or user, so it is not used');
+    expect(signOn(fake.state.workflows[0]).id).not.toBe('c-010');
+    expect(fake.state.credentials.find((c) => c.id === 'c-010')!.data.secretKey).toBe(KEY_010.data.secretKey);
+  });
+
+  it('two keys: never a guess. Without a terminal it stops and names --signing-key; at a terminal it asks; --signing-key picks by name', async () => {
+    const fake = await n8n({ credentials: [KEY_010, KEY_2] });
+    const piped = await run(setup(fake.url), ENV);
+    expect(piped.code, piped.out).toBe(2);
+    expect(piped.out).toContain('Your project has several RPA Step Signing credentials, "RPA Step Signing account" (id c-010), "Second key" (id c-two), and this command does not pick one by guess: bots signed with one key do not run with another. Name the one your bots were approved with: --signing-key "<its name>". Nothing was changed.');
+    // No workflow told the project, so the run learned it from a workflow it made first: removed again.
+    const nothingLeft = () => {
+      expect(fake.state.workflows).toEqual([]);
+      expect(fake.state.credentials.map((c) => c.id)).toEqual(['c-010', 'c-two']);
+    };
+    nothingLeft();
+    // Enter, or an answer that is not one of the numbers: it stops, and nothing is made.
+    for (const answer of ['', '3', 'yes']) {
+      const stop = await runAtTerminal(setup(fake.url), ENV, [[/Connect a Windows machine now/, 'n'], [QUESTION, answer]]);
+      expect(stop.code, stop.out).toBe(1);
+      expect(stop.out).toContain('Nothing was changed.');
+    }
+    nothingLeft();
+    const asked = await runAtTerminal(setup(fake.url), ENV, [[/Connect a Windows machine now/, 'n'], [QUESTION, '2']]);
+    expect(asked.code, asked.out).toBe(0);
+    expect(asked.out).toContain('Your project has 2 RPA Step Signing credentials:\n  1. "RPA Step Signing account" (id c-010)\n  2. "Second key" (id c-two)\nBots signed with one key do not run with another: pick the one your bots were approved with.');
+    expect(signOn(fake.state.workflows[0]).id).toBe('c-two');
+    const other = await n8n({ credentials: [KEY_010, KEY_2] });
+    const named = await run(setup(other.url, '--signing-key', 'RPA Step Signing account'), ENV);
+    expect(named.code, named.out).toBe(0);
+    expect(signOn(other.state.workflows[0])).toEqual({ id: 'c-010', name: 'RPA Step Signing account' });
+    expect(other.state.credentials).toHaveLength(2);
+    // A name the project has no key of: it stops, listing the project's keys. A name this command gives to another credential is refused.
+    const wrong = await run(setup(other.url, '--signing-key', 'RPA Step Signing (old)'), ENV);
+    expect(wrong.code).toBe(2);
+    expect(wrong.out).toContain('No RPA Step Signing credential named "RPA Step Signing (old)" in your project. Your project\'s: "RPA Step Signing account" (id c-010), "Second key" (id c-two). Give its name as n8n shows it. Nothing was changed.');
+    const own = await run(setup(other.url, '--signing-key', 'RPA Browser'), ENV);
+    expect(own.code).toBe(2);
+    expect(own.out).toContain('--signing-key must be the name of an RPA Step Signing credential as n8n shows it');
+    expectNoSecrets(piped.out + asked.out + named.out, [KEY_010.data.secretKey, KEY_2.data.secretKey]);
+  });
+
+  it('--replace-signing-key replaces the key it found, whatever its name, only after REPLACE: the credential keeps its id and name', async () => {
+    const fake = await n8n({ credentials: [KEY_010] });
+    const no = await run(setup(fake.url, '--replace-signing-key'), ENV);
+    expect(no.code).toBe(2);
+    expect(no.out).toContain('--replace-signing-key needs you at a terminal, to type REPLACE.');
+    const yes = await runAtTerminal(setup(fake.url, '--replace-signing-key'), ENV, [[/Connect a Windows machine now/, 'n'], [/Type REPLACE/, 'REPLACE']]);
+    expect(yes.code, yes.out).toBe(0);
+    expect(fake.state.credentials).toHaveLength(1);
+    const [key] = fake.state.credentials;
+    expect(key).toMatchObject({ id: 'c-010', name: 'RPA Step Signing account' });
+    expect(key.data.secretKey).not.toBe(KEY_010.data.secretKey);
+    expect(JSON.parse(fake.state.requests.find((q) => q.method === 'PATCH')!.body).name).toBe('RPA Step Signing account');
+    expect(count(yes.out, key.data.secretKey)).toBe(1);
+    expect(yes.out).not.toContain(KEY_010.data.secretKey);
+  });
+
+  it('two RPA Browsers: asked at a terminal; without one, --browser-url stops, else none is picked unless the form found uses one', async () => {
+    const fake = await n8n({ credentials: [KEY_010, BROWSER_010, BROWSER_2] });
+    const stop = await run(withBrowser(fake.url), BROWSER_ENV);
+    expect(stop.code, stop.out).toBe(2);
+    expect(stop.out).toContain('Your project has several RPA Browser credentials, "RPA Browser account" (id c-b010), "Lab browser" (id c-b2), and this command does not pick one by guess. Run this at a terminal to pick one, or delete the ones you do not use in n8n. Nothing was changed.');
+    expect(fake.state.workflows).toEqual([]);
+    expect(fake.state.credentials).toHaveLength(3);
+    const none = await run(setup(fake.url), ENV);
+    expect(none.code, none.out).toBe(0);
+    expect(none.stdout).toContain('not picked: your project has several RPA Browser credentials, "RPA Browser account" (id c-b010), "Lab browser" (id c-b2), and without a terminal this run picks none. Pick one on "Import steps" in n8n.');
+    expect(browserOn(fake.state.workflows[0])).toBeUndefined();
+    const asked = await n8n({ credentials: [KEY_010, BROWSER_010, BROWSER_2] });
+    const t = await runAtTerminal(withBrowser(asked.url), BROWSER_ENV, [[/Connect a Windows machine now/, 'n'], [QUESTION, '2']]);
+    expect(t.code, t.out).toBe(0);
+    expect(browserOn(asked.state.workflows[0])).toEqual({ id: 'c-b2', name: 'Lab browser' });
+    // Run again without a terminal: the form uses "Lab browser", which this run keeps; nothing asked, nothing made.
+    const again = await run(withBrowser(asked.url), BROWSER_ENV);
+    expect(again.code, again.out).toBe(0);
+    expect(again.stdout).toMatch(/reused +workflow "RPA: 5 Import a bot"/);
+    expect(asked.state.credentials).toHaveLength(3);
+  });
+
+  it("through n8n's command line: the same keys found by type; two stop without a terminal; --signing-key picks", async () => {
+    const f = await cliN8n({ credentials: [KEY_010, BROWSER_010] });
+    const r = await run(['setup', '--url', f.url, '--approver', 'ops@example.com', '--browser-url', 'ws://browser:3000/'], { ...f.env, RPA_BROWSER_TOKEN: BROWSER_TOKEN });
+    expect(r.code, r.out).toBe(0);
+    expect(f.state().credentials.map((c) => c.id), 'nothing imported').toEqual(['c-010', 'c-b010']);
+    expect(r.stdout).toContain('reused   credential "RPA Step Signing account" (id c-010): its key stays as it is');
+    expect(r.stdout).toContain('reused   credential "RPA Browser account" (id c-b010)');
+    const [wf] = f.state().workflows;
+    expect(signOn(wf)).toEqual({ id: 'c-010', name: 'RPA Step Signing account' });
+    expect(r.stdout).toContain('  Signing key: in "RPA Step Signing account" (id c-010), made earlier');
+    const g = await cliN8n({ credentials: [KEY_010, KEY_2] });
+    const stop = await run(['setup', '--url', g.url, '--approver', 'ops@example.com'], g.env);
+    expect(stop.code, stop.out).toBe(2);
+    expect(stop.out).toContain('--signing-key "<its name>". Nothing was changed.');
+    expect(imports(g)).toEqual([]);
+    const picked = await run(['setup', '--url', g.url, '--approver', 'ops@example.com', '--signing-key', 'Second key'], g.env);
+    expect(picked.code, picked.out).toBe(0);
+    expect(signOn(g.state().workflows[0]).id).toBe('c-two');
+    // Shared into the owner's project by another user, named as 0.1.0 named it: left alone, the project gets its own.
+    const h = await cliN8n({ credentials: [{ ...KEY_010, projectId: 'P-other', sharedWith: ['P-owner'] }] });
+    const shared = await run(['setup', '--url', h.url, '--approver', 'ops@example.com'], h.env);
+    expect(shared.code, shared.out).toBe(0);
+    expect(shared.out).toContain('left alone credential "RPA Step Signing account" (playwrightScriptSigningApi, id c-010): it belongs to another project or user, so it is not used');
+    expect(signOn(h.state().workflows[0]).id).not.toBe('c-010');
+    expectFilesGone(f);
+  });
+});
+
+describe('a form RPA 0.1.0 made is brought up to date, never blamed on the person (S1)', () => {
+  /** 0.1.0's template as the v0.1.0 tag has it, with what its "Set once" note had people pick. */
+  const SHIPPED_010 = JSON.parse(readFileSync(new URL('./fixtures/template-0.1.0-5-import-a-bot.json', import.meta.url), 'utf8'));
+  const KEY_010: Cred = { id: 'c-010', name: 'RPA Step Signing account', type: 'playwrightScriptSigningApi', data: { secretKey: 'c3'.repeat(32) } };
+  const BROWSER_010: Cred = { id: 'c-b010', name: 'RPA Browser account', type: 'playwrightBrowserApi', data: { mode: 'playwright', wsUrl: 'ws://browser:3000/', token: BROWSER_TOKEN } };
+  const SITE_010: Cred = { id: 'c-s010', name: 'RPA Site Login account', type: 'playwrightSiteLoginApi', data: { username: 'u', password: 'made-up-site-pw' } };
+  const LOGIN_010: Cred = { id: 'c-l010', name: 'Import form login', type: 'httpBasicAuth', data: { user: 'importer', password: 'made-up-form-pw' } };
+  const MODEL: Cred = { id: 'c-model', name: 'Anthropic account', type: 'anthropicApi', data: { apiKey: 'made-up-model-key' } };
+  const CREDS = [KEY_010, BROWSER_010, SITE_010, LOGIN_010, MODEL];
+  const ref = (c: Cred) => ({ id: c.id, name: c.name });
+  const QUESTION = /Update this form to this version\? \(y\/N\) /;
+  function form010(change?: (nodes: any[], wf: any) => void): Wf {
+    const t = structuredClone(SHIPPED_010);
+    const nodes = t.nodes.map((n: any) => {
+      if (/\.(formTrigger|form)$/.test(n.type)) n.webhookId = `0a1b2c3d-0000-4000-8000-${String(n.id).slice(-12)}`;
+      if (n.name === 'Import a bot') n.credentials = { httpBasicAuth: ref(LOGIN_010) };
+      if (n.name === 'Import steps') {
+        n.credentials = { playwrightBrowserApi: ref(BROWSER_010), playwrightSiteLoginApi: ref(SITE_010) };
+        n.parameters.options = { allowPrivateNetwork: true };
+      }
+      if (n.name === 'Chat model') {
+        n.credentials = { anthropicApi: ref(MODEL) };
+        n.disabled = true;
+      }
+      if (n.name === 'Approve steps') n.parameters.workflowId = { __rl: true, mode: 'list', value: 'w-t3-010', cachedResultName: 'RPA: 3 Approve steps' };
+      return n;
+    });
+    const wf: Wf = { id: 'w-010', name: 'RPA: 5 Import a bot', active: true, versionId: 'v-010', nodes, connections: t.connections, settings: { executionOrder: 'v1' } };
+    change?.(wf.nodes, wf);
+    return wf;
+  }
+  const n = (wf: { nodes: any[] }, name: string) => wf.nodes.find((x) => x.name === name);
+
+  it('setup/template-010.mts holds 0.1.0\'s template: every node but the sticky notes, and the connections (and the v0.1.0 tag, where the repository has it)', () => {
+    const shipped = { nodes: SHIPPED_010.nodes.filter((x: any) => !/stickyNote$/.test(x.type)).map(({ name, type, typeVersion, parameters }: any) => ({ name, type, typeVersion, parameters })), connections: SHIPPED_010.connections };
+    expect(TEMPLATE_010).toEqual(shipped);
+    let tagged: string | undefined;
+    try {
+      tagged = execFileSync('git', ['show', 'v0.1.0:packages/n8n-nodes-rpa/templates/5-import-a-bot.json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      tagged = undefined; // a checkout without the tag (a shallow clone)
+    }
+    if (tagged !== undefined) expect(JSON.parse(tagged)).toEqual(SHIPPED_010);
+  });
+
+  it('without a terminal: says it was made by RPA 0.1.0, that nothing was changed by hand, never "undo that change"; nothing written', async () => {
+    const fake = await n8n({ credentials: CREDS, workflows: [form010()] });
+    const before = JSON.stringify(fake.state.workflows);
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('The form "RPA: 5 Import a bot" (id w-010) was made by RPA 0.1.0, from its template "RPA: 5 Import a bot", and differs from this version\'s template:');
+    expect(r.out).toContain('  Changed by hand since:     nothing. It is the form 0.1.0 made, with what you set in it.');
+    expect(r.out).toContain('  At an older node version:  "Import a bot", "Import steps"');
+    expect(r.out).toContain('  Lost with it: the node "Chat model", which the template does not have.');
+    expect(r.out).toContain('imports are then approved and signed on this form, with your project\'s RPA Step Signing key, "RPA Step Signing account" (id c-010). It keeps');
+    expect(r.out).toContain('Not updated: without a terminal this command does not ask. To update it, run this command again at a terminal and answer y.');
+    expect(r.out).not.toMatch(/undo that change|differs from the template:/);
+    expect(JSON.stringify(fake.state.workflows)).toBe(before);
+    expect(fake.posts()).toEqual([]);
+    expect(fake.state.credentials).toHaveLength(CREDS.length);
+  });
+
+  it('y at a terminal, with --form-login basic: updated in place with its Basic Auth login, address and credentials; Sign steps signs with the 0.1.0 key for its Site Login; nothing new made', async () => {
+    const fake = await n8n({ credentials: CREDS, workflows: [form010()] });
+    const yes = await runAtTerminal(basicSetup(fake.url, '--browser-url', 'ws://browser:3000/', '--allow-private-network'), { ...ENV, RPA_BROWSER_TOKEN: BROWSER_TOKEN }, [[/Connect a Windows machine now/, 'n'], [QUESTION, 'y']]);
+    expect(yes.out).toContain('  It keeps its sign-in, Basic Auth, with its login.');
+    expect(yes.code, yes.out).toBe(0);
+    expect(fake.state.credentials.map((c) => c.id), 'no credential made: no second key, no second browser, no form login').toEqual(CREDS.map((c) => c.id));
+    expect(fake.state.workflows).toHaveLength(1);
+    const [after] = fake.state.workflows;
+    expect(after).toMatchObject({ id: 'w-010', name: 'RPA: 5 Import a bot', active: true });
+    expect(after.nodes.map((x) => x.name).sort()).toEqual(template().nodes.map((x: any) => x.name).sort());
+    expect(after.connections).toEqual(template().connections);
+    // Its sign-in and login, its address (the webhook id, no Form Path) and title, as 0.1.0 set them.
+    expect(n(after, 'Import a bot')).toMatchObject({ webhookId: n(form010(), 'Import a bot').webhookId, credentials: { httpBasicAuth: ref(LOGIN_010) }, parameters: { authentication: 'basicAuth', formTitle: 'Import a bot' } });
+    expect(n(after, 'Import a bot').parameters.options?.path).toBeUndefined();
+    expect(n(after, 'Import steps').typeVersion).toBe(2);
+    expect(n(after, 'Import steps').credentials).toEqual({ playwrightBrowserApi: ref(BROWSER_010), playwrightSiteLoginApi: ref(SITE_010), playwrightScriptSigningApi: ref(KEY_010) });
+    expect(n(after, 'Import steps').parameters.options.allowPrivateNetwork).toBe(true);
+    expect(n(after, 'Sign steps').credentials).toEqual({ playwrightScriptSigningApi: ref(KEY_010), playwrightSiteLoginApi: ref(SITE_010) });
+    expect(n(after, 'Sign steps').parameters.approverAllowlist).toBe('ops@example.com');
+    expect(n(after, 'Approve steps').parameters.workflowId.value).toBe('w-t3-010');
+    expect(yes.out).toContain('updated  workflow "RPA: 5 Import a bot" (id w-010): its nodes and connections are this version\'s template, with what you set kept');
+    expect(yes.out).toContain('         its new node "Sign steps" signs with "RPA Step Signing account" (id c-010), for the Site Login "RPA Site Login account" (id c-s010); approver ops@example.com. Imports are approved on this form now (Settings → approval).');
+    expect(yes.out).toContain('reused   credential "RPA Step Signing account" (id c-010): its key stays as it is');
+    expect(yes.out).toContain(`  Address:    ${fake.url}/form/${n(after, 'Import a bot').webhookId}`);
+    expect(yes.out).toContain('reused   credential "Import form login" (id c-l010): its password was made earlier and stays as it is');
+    expect(yes.out).toContain('  Sign-in:    Basic Auth, with the user name and password in "Import form login" (id c-l010), as before. n8n does not show the password again.');
+    expect(yes.out).toContain('  2. Open the form address in your browser and sign in with the user name and password of that credential.');
+    expect(yes.out).toContain('  Signing key: in "RPA Step Signing account" (id c-010), made earlier');
+    expect(yes.out).toContain('The import form is ready.');
+    expectNoSecrets(yes.out, [KEY_010.data.secretKey, 'made-up-form-pw', 'made-up-site-pw', 'made-up-model-key']);
+    // Run again: it matches now, nothing asked or made. A new password is not set on a login this command did not make.
+    const again = await run(basicSetup(fake.url), ENV);
+    expect(again.code, again.out).toBe(0);
+    expect(again.out).toMatch(/reused +workflow "RPA: 5 Import a bot" \(id w-010\): it matches the template/);
+    expect(fake.state.credentials).toHaveLength(CREDS.length);
+    const password = await run(basicSetup(fake.url, '--new-form-password'), ENV);
+    expect(password.code).toBe(2);
+    expect(password.out).toContain('--new-form-password sets a new password only on the form login this command made, "RPA import form". The form uses "Import form login" (id c-l010): change its password in n8n. Nothing was changed.');
+    expect(fake.state.credentials.find((c) => c.id === 'c-l010')!.data).toEqual(LOGIN_010.data);
+  });
+
+  it("y at a terminal, the guide's command (n8n's sign-in): the question says its sign-in becomes n8n's, and the form then opens with n8n's sign-in", async () => {
+    const fake = await n8n({ credentials: CREDS, workflows: [form010()] });
+    const yes = await runAtTerminal(setup(fake.url), ENV, [[/Connect a Windows machine now/, 'n'], [QUESTION, 'y']]);
+    expect(yes.code, yes.out).toBe(0);
+    expect(yes.out).toContain("  Its sign-in becomes n8n's sign-in, as this run sets up: people open the form with their n8n login, and its Basic Auth login is no longer used. To keep Basic Auth, answer n and run this again with --form-login basic.");
+    const [after] = fake.state.workflows;
+    expect(after.id).toBe('w-010');
+    expect(n(after, 'Import a bot').parameters).toMatchObject({ authentication: 'n8nUserAuth', requireExecuteAccess: true });
+    expect(n(after, 'Import a bot')).not.toHaveProperty('credentials');
+    expect(n(after, 'Import a bot').webhookId).toBe(n(form010(), 'Import a bot').webhookId);
+    expect(n(after, 'Sign steps').credentials).toEqual({ playwrightScriptSigningApi: ref(KEY_010), playwrightSiteLoginApi: ref(SITE_010) });
+    expect(fake.state.credentials.map((c) => c.id)).toEqual(CREDS.map((c) => c.id));
+    expect(fake.state.credentials.find((c) => c.id === 'c-l010')!.data, 'the old login is left as it is').toEqual(LOGIN_010.data);
+    expect(yes.out).toContain('  Sign-in:    the form opens with your n8n sign-in.');
+    expect(yes.out).toContain('The import form is ready.');
+    const again = await run(setup(fake.url), ENV);
+    expect(again.code, again.out).toBe(0);
+    expect(again.out).toMatch(/reused +workflow "RPA: 5 Import a bot" \(id w-010\): it matches the template/);
+    expect(fake.state.workflows).toHaveLength(1);
+  });
+
+  it('what a person changed in it is said as their change, by 0.1.0\'s own template, and lost only after y', async () => {
+    const changed = form010((nodes, wf) => {
+      n(wf, 'Import a bot').parameters.formDescription = 'Upload the bot for the finance team.';
+      nodes.push({ id: 'x1', name: 'Tell the team', type: 'n8n-nodes-base.noOp', typeVersion: 1, position: [0, 0], parameters: {} });
+      wf.nodes = nodes.filter((x: any) => x.name !== 'Imported');
+      delete wf.connections['Workflow file?'];
+      wf.connections['Workflow file?'] = { main: [[{ node: 'Imported, with the workflow file', type: 'main', index: 0 }], []] };
+    });
+    const fake = await n8n({ credentials: CREDS, workflows: [changed] });
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('was made by RPA 0.1.0, from its template "RPA: 5 Import a bot"');
+    expect(r.out).toContain('  Changed by hand since 0.1.0 made it:\n    Added by hand:           "Tell the team"\n    Removed by hand:         "Imported"\n    Set by hand:             "Import a bot"\n    Connected by hand:       the links between its nodes');
+    expect(r.out).toContain('What was changed by hand is lost.');
+    expect(r.out).not.toMatch(/undo that change|Changed by hand since: +nothing/);
+    // The model is 0.1.0's guide's choice, not a change: another provider on the model input counts as nothing.
+    const model = form010((nodes, wf) => {
+      wf.nodes = nodes.filter((x: any) => x.name !== 'Chat model').concat({ id: 'm1', name: 'OpenAI Chat Model', type: '@n8n/n8n-nodes-langchain.lmChatOpenAi', typeVersion: 1.2, position: [0, 0], parameters: { model: 'gpt-x' } });
+      delete wf.connections['Chat model'];
+      wf.connections['OpenAI Chat Model'] = { ai_languageModel: [[{ node: 'Import steps', type: 'ai_languageModel', index: 0 }]] };
+    });
+    const other = await n8n({ credentials: CREDS, workflows: [model] });
+    const m = await run(setup(other.url), ENV);
+    expect(m.code, m.out).toBe(0);
+    expect(m.out).toContain('  Changed by hand since:     nothing.');
+  });
+
+  it('one it cannot update (a credential of another project on it) stops without blaming a change; one whose sign-in was turned off is left alone, and a fresh one made', async () => {
+    const elsewhere = { ...LOGIN_010, id: 'c-l-other', projectId: 'P-other' };
+    const fake = await n8n({ credentials: [...CREDS, elsewhere], workflows: [form010((nodes) => { n({ nodes }, 'Import a bot').credentials = { httpBasicAuth: ref(elsewhere) }; })] });
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('The workflow "RPA: 5 Import a bot" (id w-010) in your project was made by RPA 0.1.0, and this run cannot update it: a credential on "Import a bot" (id c-l-other) belongs to another project or user. This run changed nothing: that form is still published at its address. To keep its address, pick credentials of your project on it in n8n, or delete that workflow, and run this again.');
+    expect(r.out).not.toContain('undo that change');
+    const open010 = await n8n({ credentials: CREDS, workflows: [form010((nodes) => { delete n({ nodes }, 'Import a bot').parameters.authentication; })] });
+    const o = await run(setup(open010.url), ENV);
+    expect(o.code, o.out).toBe(0);
+    expect(o.out).toContain('not used workflow "RPA: 5 Import a bot" (id w-010): its form uses no sign-in, and this run sets up n8n\'s sign-in. This run makes a fresh one: unpublish the old one in n8n when you no longer use it.');
+    expect(open010.state.workflows).toHaveLength(2);
+    expect(n(open010.state.workflows[1], 'Sign steps').credentials.playwrightScriptSigningApi).toEqual(ref(KEY_010));
+  });
+
+  it('an archived form is not counted: n8n lists it, and a fresh form takes the template\'s name and /form/rpa-import', async () => {
+    const archived = form010((nodes, wf) => {
+      wf.isArchived = true;
+      wf.active = false;
+      n({ nodes }, 'Import a bot').parameters.options = { path: 'rpa-import' };
+    });
+    const fake = await n8n({ credentials: CREDS, workflows: [archived] });
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).not.toMatch(/0\.1\.0|differs|left alone workflow/);
+    const fresh = fake.state.workflows.find((w) => w.id !== 'w-010')!;
+    expect(fresh.name).toBe('RPA: 5 Import a bot');
+    expect(r.stdout).toContain(`  Address:    ${fake.url}/form/rpa-import\n`);
+    expect(fake.state.workflows.find((w) => w.id === 'w-010')).toEqual({ ...archived, projectId: HOME });
+  });
+
+  it("through n8n's command line: the same offer, the update in place by its id, and an archived one not counted", async () => {
+    const f = await cliN8n({ credentials: CREDS, workflows: [{ ...form010(), activeVersionId: 'v-010' }] });
+    const guide = (x: CliFake) => ['setup', '--url', x.url, '--approver', 'ops@example.com'];
+    const no = await run(guide(f), f.env);
+    expect(no.code, no.out).toBe(0);
+    expect(no.out).toContain('was made by RPA 0.1.0');
+    expect(imports(f)).toEqual([]);
+    const yes = await runAtTerminal(guide(f), f.env, [[/Connect a Windows/, 'n'], [QUESTION, 'y']]);
+    expect(yes.code, yes.out).toBe(0);
+    const [after] = f.state().workflows;
+    expect(after.id).toBe('w-010');
+    expect(after.activeVersionId).toBe(after.versionId);
+    expect(n(after, 'Sign steps').credentials).toEqual({ playwrightScriptSigningApi: ref(KEY_010), playwrightSiteLoginApi: ref(SITE_010) });
+    expect(f.state().credentials.map((c) => c.id)).toEqual(CREDS.map((c) => c.id));
+    expectFilesGone(f);
+    const g = await cliN8n({ credentials: CREDS, workflows: [{ ...form010(), isArchived: true }] });
+    const fresh = await run(guide(g), g.env);
+    expect(fresh.code, fresh.out).toBe(0);
+    expect(fresh.out).not.toContain('0.1.0');
+    expect(g.state().workflows.find((w) => w.id !== 'w-010').name).toBe('RPA: 5 Import a bot');
   });
 });

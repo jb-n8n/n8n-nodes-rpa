@@ -31,7 +31,7 @@ if (state.fail === command) {
 const project = (id) => state.projects[id];
 const credentialItem = (c) => ({ id: c.id, name: c.name, type: c.type, data: 'U2FsdGVkX1+madeUpEncryptedData==', isManaged: false });
 const workflowItem = (w) => ({
-  id: w.id, name: w.name, active: false, isArchived: false, nodes: w.nodes, connections: w.connections, settings: w.settings, versionId: w.versionId,
+  id: w.id, name: w.name, active: false, isArchived: w.isArchived === true, nodes: w.nodes, connections: w.connections, settings: w.settings, versionId: w.versionId,
   activeVersionId: w.activeVersionId ?? null, updatedAt: w.updatedAt,
   shared: [{ role: 'workflow:owner', workflowId: w.id, projectId: w.projectId, project: project(w.projectId) }],
 });

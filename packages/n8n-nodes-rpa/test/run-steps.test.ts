@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { CODE_WORKFLOW_GUIDANCE, CONFIG_GUIDANCE, GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, CONFIG_GUIDANCE, GUIDANCE, LOCKED_BEFORE_UPGRADE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
 import { APPROVER } from './fixtures.js';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
 import { describeStep, isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
@@ -517,15 +517,32 @@ describe('one Site Login, many accounts: a username and password set by expressi
     expect(errorOf(data[3])).toMatch(/^locked_out: The password of this account was changed earlier in this execution/);
     expect(users(engine)).toEqual(ACCOUNTS);
   });
-  it('a breaker kept under the credential id alone (0.2.0) still stops every account, until a new reset key', async () => {
+  // A breaker 0.1.0 opened: under the static-data key site-login:<credential id> (no account part), with no fingerprint.
+  const BEFORE = 'locked_out: A login failure on example.com before the upgrade stopped every account of this Site Login, so no login was tried.';
+  it('a breaker kept under the credential id alone (0.1.0) still stops every account, until a new reset key, and says so', async () => {
     const staticData: IDataObject = { [BREAKER_KEY]: { 'site-login:site-a': { code: 'account_locked', at: '2026-10-01T00:00:00.000Z', resetKey: '', message: 'locked' } } };
     const engine = fakeEngine(() => scriptOk());
     const [data] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(), staticData, continueOnFail: true }), engine);
-    expect(data.map(errorOf)).toEqual([LOCKED, LOCKED, LOCKED]);
+    expect(data.map(errorOf)).toEqual([BEFORE, BEFORE, BEFORE]);
+    expect(details(data[0]).guidance).toBe(LOCKED_BEFORE_UPGRADE_GUIDANCE);
     expect(engine.calls).toHaveLength(0);
     const [reset] = await executeRunSteps(ctx({ params: params({}, { breakerResetKey: '2026-11-12' }), items: many(3), itemCredentials: perAccount(), staticData, continueOnFail: true }), engine);
     expect(reset.map(errorOf)).toEqual([undefined, undefined, undefined]);
     expect(staticData[BREAKER_KEY]).toEqual({});
+  });
+  it('a login_failed breaker 0.1.0 opened (no fingerprint): a corrected login does not clear it, and the message and guidance say what does', async () => {
+    const staticData: IDataObject = { [BREAKER_KEY]: { 'site-login:site-a': { code: 'login_failed', at: '2026-10-01T00:00:00.000Z', resetKey: '', message: 'rejected' } } };
+    const engine = rejectWrong();
+    const [data] = await executeRunSteps(ctx({ items: many(2), itemCredentials: perAccount(), staticData, continueOnFail: true }), engine);
+    expect(data.map(errorOf)).toEqual([BEFORE, BEFORE]);
+    expect(details(data[1]).guidance).toBe(LOCKED_BEFORE_UPGRADE_GUIDANCE);
+    expect(engine.calls).toHaveLength(0);
+    // A breaker of this version (its own account's key): the message is unchanged.
+    const login = await loginFingerprints({ username: 'ann.north', password: 'pass-ann.north' }).create();
+    const now: IDataObject = { [BREAKER_KEY]: { [siteLoginKey('site-a', 'ann.north')]: { code: 'login_failed', at: '2026-10-01T00:00:00.000Z', resetKey: '', message: 'rejected', login } } };
+    const [own] = await executeRunSteps(ctx({ items: many(1), itemCredentials: perAccount(), staticData: now, continueOnFail: true }), rejectWrong());
+    expect(errorOf(own[0])).toBe(LOCKED);
+    expect(details(own[0]).guidance).toBe(GUIDANCE.locked_out);
   });
   it('a login_failed breaker kept under the credential id alone gives a different login its one try, as before', async () => {
     const login = await loginFingerprints({ username: 'ann.north', password: WRONG }).create();

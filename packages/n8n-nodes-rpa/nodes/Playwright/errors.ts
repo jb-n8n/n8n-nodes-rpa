@@ -52,6 +52,12 @@ export const SITE_ADDRESS_GUIDANCE =
 /** policy_violation because a field did not take a step's value (the engine's valueNotTaken: text in a date field). */
 export const VALUE_NOT_TAKEN_GUIDANCE =
   "A step's value does not fit its field; the message says which step and field. Correct that value in the steps (on the import form: Change values), or record the step again, and approve the new version.";
+/**
+ * locked_out because of a breaker RPA 0.1.0 opened (execute.ts siteLoginLockedOutBeforeUpgrade): kept per Site Login, with
+ * no login fingerprint, so a corrected login never clears it; only a new reset key does.
+ */
+export const LOCKED_BEFORE_UPGRADE_GUIDANCE =
+  'A login failure before the upgrade stopped every account of this Site Login: type a new value (any text) in Options → Login Breaker Reset Key. Correcting the username or password alone does not clear it.';
 /** locked_out because a run changed the Site Login's password earlier in this execution (execute.ts SITE_LOGIN_PASSWORD_CHANGED). */
 export const PASSWORD_CHANGED_GUIDANCE =
   'A run changed this Site Login\'s password earlier in this execution. Store the new password where the Site Login reads it, then run again.';
@@ -78,6 +84,7 @@ export function guidanceFor(code: ErrorCode, message: string): string {
   if (code === 'policy_violation' && SAYS_WHAT_TO_DO.some((words) => message.includes(words))) return '';
   if (code === 'site_down' && /net::ERR_(NAME_NOT_RESOLVED|CONNECTION_REFUSED|CERT_|SSL_)/.test(message)) return SITE_ADDRESS_GUIDANCE;
   if (code === 'locked_out' && message.includes('was changed earlier in this execution')) return PASSWORD_CHANGED_GUIDANCE;
+  if (code === 'locked_out' && message.includes('before the upgrade stopped every account')) return LOCKED_BEFORE_UPGRADE_GUIDANCE;
   return GUIDANCE[code];
 }
 

@@ -186,7 +186,8 @@ keys hold a short SHA-256 of the username, so they can also test a guessed usern
 n8n saves the breaker with the workflow's static data only for production runs, not for manual executions: a breaker
 tripped in a manual execution holds until n8n restarts. With RPA Redis it is kept in Redis. The Site Login and username
 also key the run lock: two workflows with the same Site Login and username share it (`busy`). A breaker that opened in
-0.1.0 is kept under the Site Login alone and stops every account until you type a new reset key. A Site
+0.1.0 is kept under the Site Login alone and stops every account until you type a new reset key; its message says
+`before the upgrade`. A Site
 Login that n8n reports without an id is a configuration error (`The RPA Site Login credential has no id. Save the credential, then select it again on this node.`).
 
 ## Other settings

@@ -31,8 +31,8 @@ Coming from 0.1.0, read [Upgrading from 0.1.0](#upgrading-from-010) first.
 ### New: set up, import and approve
 
 - **The setup command**, `n8n-nodes-rpa setup` (the package's bin): it makes the **RPA Step Signing** key, with a Connection Line the **RPA Desktop Runner** credential, and imports and publishes **RPA: 5 Import a bot** at `/form/rpa-import` (an address with an id when another form has that one). Run where n8n runs, as n8n's user, it needs no API key: it works through n8n's own command line, after checking that it reaches the running n8n's database. Elsewhere, or with `--api-key`, it uses n8n's public API and an API key.
-- **Setup options**: `--approver`, `--form-login basic` (a user name and password instead of n8n's sign-in), `--site-login <name>` and `--allow-private-network` for **Import steps** and **Sign steps**, `--desktop-runner <name>`, and `--new-workflow --site-login <name>` for a second form, that Site Login's own, at an address of its own.
-- **Setup run again** reuses what your project owns, asks before it replaces a Connection Line, lists how a form it made differs from this version's template and asks `Update this form to this version? (y/N)`, and ends by saying whether the Windows machine is connected (n8n's command line cannot test it, and the command says so), and what to do.
+- **Setup options**: `--approver`, `--form-login basic` (a user name and password instead of n8n's sign-in), `--site-login <name>` and `--allow-private-network` for **Import steps** and **Sign steps**, `--desktop-runner <name>`, `--signing-key <name>` when your project has several RPA Step Signing credentials, and `--new-workflow --site-login <name>` for a second form, that Site Login's own, at an address of its own.
+- **Setup run again** reuses what your project owns (its RPA Step Signing and RPA Browser whatever their names), asks before it replaces a Connection Line, lists how a form it made, or RPA 0.1.0 made, differs from this version's template and asks `Update this form to this version? (y/N)`, and ends by saying whether the Windows machine is connected (n8n's command line cannot test it, and the command says so), and what to do.
 - **Approve on the import form**: **RPA: 5 Import a bot** opens with n8n's sign-in, shows each imported step list on a review page and signs what you approve, recording the n8n user who approved, who must be on **Sign steps → Approver Allowlist**. Approval by email (template 3) stays an option for a second person (`approval` in the template's **Settings**).
 - **The review page** shows each step as a sentence built from the step itself (its action, target and value), the author's description beside it (grey, or red when it names another action, another site or a value the step does not hold), the Site Login it signs for, a mark on a step that finds its control by its row or place, and the steps that save, post or submit as tick boxes.
 - **Every import ends in a workflow that runs the bot**, for every source: a UiPath project, a Chrome Recorder export, Playwright code, an RPA recording or a step document (steps you wrote). **Import Steps** works out the source from the file.
@@ -65,7 +65,7 @@ Coming from 0.1.0, read [Upgrading from 0.1.0](#upgrading-from-010) first.
 - **Messages**: a step list that does not parse reads `invalid steps: …` (was `invalid script: …`); a blocked request names its method, host and path and where to allow it; a site the browser cannot reach and a value a field refuses are said in plain words (the latter is `policy_violation`); `locked_out` says "this account"; guidance is shorter and fits its cause.
 - **The RPA Browser credential is no longer marked required** on the node: desktop steps run without it. A browser operation without it fails with `This operation runs in a browser: attach an RPA Browser credential.`
 - **The RPA Site Login's Forms It May Submit and Requests That Only Read take no expression**, as its sites and pages do.
-- **The compose stack** runs n8n 2.45.3 (0.1.0: 2.41.0), builds the package in a `node:26-alpine` stage, and runs Mailpit 1.32.
+- **The compose stack** runs n8n 2.45.3 (0.1.0: 2.41.0), builds the package in a `node:26-alpine` stage, runs Mailpit 1.32 with its mail in the `mailpit_data` volume, and sets `N8N_WEBHOOK_URL` (n8n 2.45 warns that `WEBHOOK_URL` is deprecated).
 - The README and the guides are rewritten around three ways in; the reference moved to `docs/reference/`.
 
 ### Fixed
@@ -89,16 +89,48 @@ Coming from 0.1.0, read [Upgrading from 0.1.0](#upgrading-from-010) first.
 ### Upgrading from 0.1.0
 
 Nothing stored is renamed: the node type `playwright`, the four 0.1.0 credential types and their fields, the Data Tables
-`playwright_steps` and `playwright_runs`, and the signatures of approved browser steps are read as before.
+`playwright_steps` and `playwright_runs`, and the signatures of approved browser steps are read as before. In this order:
 
-- **Import the templates again.** Template 3 (**RPA: 3 Approve steps**) for the email fix above and the desktop branch, then pick the SMTP credential on its new email nodes. Template 2 changed too. For template 5, import it again or run the setup command; the command leaves a form it did not make alone, and stops while one named **RPA: 5 Import a bot** differs from the template: delete the 0.1.0 one first, or add `--new-workflow`. Template 1 is gone: delete it.
-- **Approvals waiting in 0.1.0's template 3** can still be approved after the upgrade: Sign Steps signs an item made by 0.1.0, which carries no list of shown sentences to compare. Their emails were written by 0.1.0's template (see Security).
-- **A login breaker that opened in 0.1.0** is kept under the Site Login alone and stops every account of it until you type a new **Login Breaker Reset Key**.
-- **Queue mode**: a saved node stays at version 1 and keeps its RPA Redis. On a version 2 node (a new one, or from the templates), turn on **Share Login Breaker Across Workers (RPA Redis)** before RPA Redis can be picked.
-- **`playwright_runs` made by 0.1.0** keeps its columns: the generated workflow writes only the columns the table has ([Data Tables](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/reference/templates.md#data-tables)). A table made now has the new columns.
-- **Forms It May Submit and Requests That Only Read** set with an expression stop runs with a configuration error that names the field: type the lists in again.
-- **The browser image**: use `rpa-browser:0.2.0` for the gate's TLS, token file or listen address.
-- **The compose stack** moved to n8n 2.45.3.
+1. **Before you upgrade, answer every approval email that is still open**: approve or reject it in **RPA: 3 Approve
+   steps**. The 0.1.0 compose stack's Mailpit keeps no mail, so the upgrade deletes open approval emails. An approval
+   answered after the upgrade is still signed, but one whose email is gone can only expire (after `approvalTimeoutHours`
+   in template 3's **Settings**, 72 by default), and until then the data feed reports a changed site instead of
+   repairing it. From this version on, Mailpit keeps its mail in the `mailpit_data` volume.
+2. **Upgrade the node and the browser together.** On the compose stack: keep `.env`, update the repository, and run
+   `docker compose up --build -d`. This moves n8n to 2.45.3 (from 2.41.0), builds the browser of this version and moves
+   Mailpit to 1.32. Your workflows, credentials, Data Tables and login breakers are kept. Sign in to n8n again
+   afterwards. Elsewhere, use the image `rpa-browser:0.2.0`: the gate's TLS, token file and listen address need it.
+3. **Your 0.1.0 workflows keep running.** Their RPA nodes stay at version 1 with their credentials, signed bots keep
+   running on their schedule, and `playwright_runs` keeps its columns. A new RPA node is version 2. One exception: a
+   Site Login whose **Forms It May Submit** or **Requests That Only Read** is set with an expression stops runs with a
+   configuration error that names the field. Type the lists in again.
+4. **A login breaker that opened in 0.1.0** still stops every account of that Site Login after the upgrade, even with
+   the credential corrected: 0.1.0 kept it under the Site Login alone. Its message says so (`before the upgrade`).
+   Type a new value in **Options → Login Breaker Reset Key** on the node to let the next run log in.
+5. **Bots made by 0.1.0's import have no sign-in check.** In 0.1.0 a wrong password failed later, as a changed site.
+   Now it fails `login_failed` at the sign-in and opens the breaker.
+6. **Import templates 2 and 3 again**, as new workflows. Template 3 has the security fix above and shows each step as
+   a sentence. The 0.1.0 template 3 keeps working, so nothing reminds you. In the new template 3, pick what its
+   **Set once** note names: the SMTP credential on its email nodes, and on its RPA nodes the same RPA Step Signing and
+   RPA Site Login your data feed uses. Point **Approve steps** in your data feed at the new template 3, then unpublish
+   the 0.1.0 templates 3 and 2.
+   Template 1 is gone: the templates create the Data Tables themselves, and use your 0.1.0 tables as they are.
+7. **Set up the import form with the setup command**, or import template 5 again. The command uses your project's
+   **RPA Step Signing** credential whatever its name (0.1.0 had n8n name it `RPA Step Signing account`), so your
+   bots still fit the form; it names the credential in its last lines. With several, it asks which one, or takes
+   `--signing-key "<its name>"`. It reuses your **RPA Browser** the same way.
+8. **The 0.1.0 form**: with 0.1.0's **RPA: 5 Import a bot** in your project, the command says that RPA 0.1.0 made
+   it, lists what was changed in it by hand since, and asks `Update this form to this version? (y/N)`. `y` keeps
+   its address, title, the credentials picked on its nodes, Allow Private Network and the workflow on Approve steps,
+   and its new **Sign steps** signs with your key for the Site Login on **Import steps**. Its sign-in becomes n8n's
+   sign-in; add `--form-login basic` to keep its Basic Auth login. Imports are then approved on the form; its sticky
+   **Approval by email** says how to send them to template 3 instead. Without a terminal it asks nothing and changes
+   nothing. An archived workflow is not counted.
+9. **Queue mode**: on a version 2 node, turn on **Share Login Breaker Across Workers (RPA Redis)** before you can pick
+   RPA Redis. Version 1 nodes keep their RPA Redis credential.
+10. **Workflows the import form makes** write their run log to the `playwright_runs` table you have. A table made by
+    0.1.0 has no `account` column, so that value is not logged there
+    ([Data Tables](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/reference/templates.md#data-tables)).
 
 ## 0.1.0 (2026-10-28)
 

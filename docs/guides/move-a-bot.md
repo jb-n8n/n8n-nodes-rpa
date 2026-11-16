@@ -34,7 +34,7 @@ reads them, it writes their name and id into the workflow it hands over. A bot t
 the command picks that one of your project by its name, and never makes one or reads its values. For a site on this
 computer or your own network, `--allow-private-network` turns on **Allow Private Network** on **Import steps**. Both
 apply when the command makes the workflow: one there already is left as it is, and the command says what to set on it
-in n8n. After an upgrade, it offers to bring a form it made up to date in place, keeping what you set on it. A bot that signs in with many accounts needs only one Site Login: see [One bot, many accounts](many-accounts.md). The
+in n8n. After an upgrade, it offers to bring a form it made, or RPA 0.1.0 made, up to date in place, keeping what you set on it. A bot that signs in with many accounts needs only one Site Login: see [One bot, many accounts](many-accounts.md). The
 [desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command) shows the output, and
 [Templates](../reference/templates.md#set-it-up-by-hand) the way by hand.
 

@@ -233,8 +233,9 @@ after `approvalTimeoutHours` (72), then:
 - Approve: **Sign steps** signs, the row becomes `active`, older `active` rows of the name become `superseded`, and
   **Email signed steps** confirms. Reject or a refused signature: `rejected`. No answer in time: `expired`.
 - Rejected Repaired steps can come back unchanged if the next repair produces the same steps. They reuse their row.
-- Approval links need a real desktop browser: n8n ignores clicks from link scanners. Mailpit keeps no mail across a
-  restart of the compose stack. If an approval email is lost, wait for `expiresAt`, or delete the `pending` row.
+- Approval links need a real desktop browser: n8n ignores clicks from link scanners. The compose stack's Mailpit keeps
+  its mail in the `mailpit_data` volume, across a restart or an upgrade (`docker compose down -v` deletes it). If an
+  approval email is lost, wait for `expiresAt`, or delete the `pending` row.
 
 ## Data Tables
 

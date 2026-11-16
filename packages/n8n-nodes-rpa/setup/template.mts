@@ -7,6 +7,7 @@ import { clean } from './n8n-api.mjs';
 import { Stop } from './io.mjs';
 import { BROWSER, type Options, RUNNER, SIGNING, WORKFLOW_NAME } from './options.mjs';
 import { ownerProject, type Ref } from './ownership.mjs';
+import { TEMPLATE_010 } from './template-010.mjs';
 
 // The template's name, or the dated name --new-workflow gives.
 export const WORKFLOW_NAMES = /^RPA: 5 Import a bot(?: \(\d{4}-\d{2}-\d{2}(?: \d{2}-\d{2})?\))?$/;
@@ -39,6 +40,8 @@ export const formPathOf = (node: any): string => String(node?.parameters?.option
  */
 export function formPathTaken(workflows: any[], path: string): string | undefined {
   for (const w of workflows) {
+    // An archived workflow cannot be published until someone restores it: n8n does not count it, nor does this.
+    if (w?.isArchived === true) continue;
     if (!Array.isArray(w?.nodes)) return `n8n does not list the nodes of the workflow "${clean(w?.name, w?.id)}" (id ${clean(w?.id)})`;
     if (w.nodes.some((n: any) => /\.formTrigger$/.test(String(n?.type)) && formPathOf(n).toLowerCase() === path)) {
       return `the workflow "${clean(w.name, w.id)}" (id ${clean(w.id)}) has a form at /form/${path}`;
@@ -179,9 +182,9 @@ export interface Changes { added: string[]; removed: string[]; changed: string[]
  * its address without one) and title, every credential picked on a node, Allow Private Network, the values of the
  * template's Settings node and the workflow picked on Approve steps (both set for approval by email).
  */
-export function updatedNodes(workflow: any): Record<string, any>[] {
+export function updatedNodes(workflow: any, template: { nodes: Record<string, any>[] } = loadTemplate()): Record<string, any>[] {
   const old = new Map<string, any>((workflow.nodes as any[]).map((n) => [String(n?.name), n]));
-  return loadTemplate().nodes.map((node: Record<string, any>) => {
+  return template.nodes.map((node: Record<string, any>) => {
     const n: Record<string, any> = structuredClone(node);
     delete n.credentials;
     const o = old.get(n.name);
@@ -215,9 +218,12 @@ export function updatedNodes(workflow: any): Record<string, any>[] {
   });
 }
 
-/** How a workflow differs from this version's template with what the person set kept; undefined when it holds the template. */
-export function templateChanges(workflow: any): Changes | undefined {
-  const want = updatedNodes(workflow);
+/**
+ * How a workflow differs from this version's template (or another, such as 0.1.0's) with what the person set kept;
+ * undefined when it holds the template.
+ */
+export function templateChanges(workflow: any, template: { nodes: Record<string, any>[]; connections: unknown } = loadTemplate()): Changes | undefined {
+  const want = updatedNodes(workflow, template);
   const have = new Map<string, any>((Array.isArray(workflow?.nodes) ? workflow.nodes : []).map((n: any) => [String(n?.name), n]));
   const wantNames = new Set(want.map((n) => n.name));
   const added = want.filter((n) => !have.has(n.name)).map((n) => n.name);
@@ -232,7 +238,67 @@ export function templateChanges(workflow: any): Changes | undefined {
     return h && (h.type !== n.type || (h.typeVersion !== n.typeVersion && !older.includes(n.name)) || !holds(h.parameters ?? {}, n.parameters ?? {}));
   }).map((n) => n.name);
   const a = edges(workflow?.connections);
-  const b = edges(loadTemplate().connections);
+  const b = edges(template.connections);
   const connections = a.size !== b.size || [...a].some((e) => !b.has(e));
   return added.length || removed.length || changed.length || older.length || connections ? { added, removed, changed, older, connections } : undefined;
+}
+
+/**
+ * A form RPA 0.1.0 made from its template "RPA: 5 Import a bot": its form trigger "Import a bot", "Import steps" (an RPA
+ * node at version 1, which 0.1.0 had) and "Approve steps" (a sub-workflow call), and no "Sign steps" (0.1.0 signed in
+ * template 3). A form this command made always has "Sign steps" (isOwnForm), so the two never overlap.
+ */
+const NODES_010: [string, RegExp][] = [[NODE.form, /\.formTrigger$/], [NODE.importSteps, /^n8n-nodes-rpa\.playwright$/], ['Approve steps', /\.executeWorkflow$/]];
+export const isForm010 = (w: any) => Array.isArray(w?.nodes)
+  && !w.nodes.some((n: any) => n?.name === NODE.signSteps)
+  && NODES_010.every(([name, type]) => w.nodes.some((n: any) => n?.name === name && type.test(String(n?.type))))
+  && w.nodes.find((n: any) => n?.name === NODE.importSteps)?.typeVersion === 1;
+
+/**
+ * What a person changed in a form 0.1.0 made, as 0.1.0's own template tells it (setup/template-010.mts, from the v0.1.0
+ * tag): every node other than a sticky note is compared by name, type, version and parameters, and every link between
+ * them, against what 0.1.0 shipped. So what 0.1.0 made is never taken for a person's change, and every other
+ * difference is one: nothing is guessed. Not compared: what an update keeps (updatedNodes: the sign-in, address and
+ * title, the credentials, Allow Private Network, the workflow on Approve steps), sticky notes (text only), and the chat
+ * model on Import steps' model input, which 0.1.0's guide had people choose and which an update removes. In the
+ * returned Changes, `added` are nodes 0.1.0 had that are gone, `removed` nodes added by hand.
+ */
+export function handChanges010(workflow: any): Changes | undefined {
+  const main = (w: { nodes: any[]; connections: any }) => {
+    const models = new Set(Object.entries(w.connections ?? {}).filter(([, kinds]) => {
+      const k = Object.keys((kinds ?? {}) as object);
+      return k.length > 0 && k.every((x) => x === 'ai_languageModel');
+    }).map(([from]) => from));
+    const connections = Object.fromEntries(Object.entries(w.connections ?? {}).filter(([from]) => !models.has(from)));
+    return { nodes: w.nodes.filter((n: any) => !/\.stickyNote$/.test(String(n?.type)) && !models.has(String(n?.name))), connections };
+  };
+  return templateChanges(main(workflow), main(TEMPLATE_010));
+}
+
+/**
+ * A form 0.1.0 made, brought up to date (updatedNodes): its new Sign steps signs with this run's key, for the Site Login
+ * picked on Import steps (0.1.0's guide had people pick the same one on Sign steps in template 3, which bots were
+ * signed with), with the approver on its Approver Allowlist; Import steps passes the key on to the workflow file. With
+ * toN8nSignIn its form moves from Basic Auth to n8n's sign-in, as the run sets up.
+ */
+export function wire010(nodes: Record<string, any>[], signing: Ref, approver: string, toN8nSignIn: boolean, login?: Ref): Record<string, any>[] {
+  const site = nodes.find((n) => n.name === NODE.importSteps)?.credentials?.[CREDENTIALS.siteLogin];
+  const form = loadTemplate().nodes.find((n: any) => n.name === NODE.form);
+  return nodes.map((node) => {
+    // n8n's sign-in, as the template has it, when this run sets that up: its Basic Auth login comes off the node.
+    if (node.name === NODE.form && toN8nSignIn) {
+      const { httpBasicAuth: _login, ...credentials } = node.credentials ?? {};
+      const out: Record<string, any> = { ...node, parameters: { ...node.parameters, authentication: form.parameters.authentication, requireExecuteAccess: form.parameters.requireExecuteAccess } };
+      if (Object.keys(credentials).length) out.credentials = credentials;
+      else delete out.credentials;
+      return out;
+    }
+    // Basic Auth kept: its login stays; one without a login gets this run's.
+    if (node.name === NODE.form && login && !node.credentials?.httpBasicAuth) return { ...node, credentials: { ...node.credentials, httpBasicAuth: login } };
+    if (node.name === NODE.signSteps) {
+      return { ...node, parameters: { ...node.parameters, approverAllowlist: approver }, credentials: { [SIGNING.type]: signing, ...(site ? { [CREDENTIALS.siteLogin]: site } : {}) } };
+    }
+    if (node.name === NODE.importSteps) return { ...node, credentials: { ...node.credentials, [SIGNING.type]: signing } };
+    return node;
+  });
 }
