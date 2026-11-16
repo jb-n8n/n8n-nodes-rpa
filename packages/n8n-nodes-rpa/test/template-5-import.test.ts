@@ -686,6 +686,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(notRun[0].html).toContain('<br>Not run by the import: check every step, each form&#39;s target and each download before you approve.</p><p><b>The steps</b></p><ol>');
     expect(notRun[0].html).toContain(`<b>Evidence:</b> ${escapeHtml(NOT_REPLAYED_LINE)}</em></p><p><em><b>What changed (as written; these steps were never run):</b>`);
     expect(notRun[0].html).not.toContain('Screenshots');
+    // A forced password change says how the change form is reached and that the step signs in again, as the step does.
+    const change = (extra: object) => ({ intent: 'Sign in', signIn: { username: { label: 'User' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' },
+      changePassword: { detect: { text: 'Password expired' }, new: [{ label: 'New password' }], submit: { role: 'button', name: 'Save' }, value: '{{var.newPassword}}', ...extra } } });
+    expect(reviewSteps([change({}), change({ via: [{ role: 'link', name: 'Modify password' }, { text: 'Continue' }], signInAgain: { via: [{ role: 'button', name: 'OK' }] } }), change({ signInAgain: {} })], { desktop: false, shownUrl }).map((r) => r.text)).toEqual([
+      'Sign in, and set a new password if the site asks for one',
+      'Sign in, and set a new password if the site asks for one, reached with Modify password, then Continue, then sign in again with it',
+      'Sign in, and set a new password if the site asks for one, then sign in again with it',
+    ]);
     // A variable written with spaces gets its mark too (the page's own regex used to miss it).
     expect(reviewSteps([{ intent: 'Type the note', fill: { field: { label: 'Note' }, value: '{{ var.note }}' } }], { desktop: false, shownUrl }))
       .toEqual([{ text: 'Type into Note: a variable', describedAs: 'Type the note', quiet: true, marks: ['variable note'] }]);

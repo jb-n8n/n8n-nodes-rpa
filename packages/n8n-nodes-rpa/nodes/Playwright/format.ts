@@ -347,7 +347,11 @@ function browserAction(s: Json, shownUrl: (url: string) => string): { core: stri
   }
   if (s.signIn !== undefined) {
     const sign = asJson(s.signIn);
-    return { core: sign.totp ? 'Sign in with an authentication code' : 'Sign in', more: sign.changePassword ? ', and set a new password if the site asks for one' : '' };
+    // A change form behind a link (`via`) and a sign-in again after the change (`signInAgain`) are said as the step does them.
+    const change = sign.changePassword === undefined ? undefined : asJson(sign.changePassword);
+    const via = Array.isArray(change?.via) && change.via.length ? `, reached with ${change.via.map(browserTarget).join(', then ')}` : '';
+    const again = change?.signInAgain !== undefined ? ', then sign in again with it' : '';
+    return { core: sign.totp ? 'Sign in with an authentication code' : 'Sign in', more: change ? `, and set a new password if the site asks for one${via}${again}` : '' };
   }
   if (s.click !== undefined) {
     const held = Array.isArray(s.modifiers) && s.modifiers.length ? `, holding ${s.modifiers.map((m) => clean(m, 10)).join('+')}` : '';
