@@ -212,6 +212,7 @@ export async function failureItem(
     traceRef: binary?.trace ? 'trace' : null,
     durationMs: full?.durationMs ?? 0,
     llmTokens: full?.tokens ?? 0,
+    llmCalls: full?.llmCalls ?? 0,
     log: full ? shownLog(full.log) : [],
     submitted: full?.submitted === true,
     ...(f.passwordChanged ? { passwordChanged: true as const } : {}),

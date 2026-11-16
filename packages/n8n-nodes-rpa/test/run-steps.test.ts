@@ -906,7 +906,7 @@ describe('outputs', () => {
       error: 'incomplete: run cancelled', message: 'run cancelled',
       details: {
         code: 'incomplete', message: 'run cancelled', name: 'items', version: 3, hash: 'c3'.repeat(32), lane: 'script', stepIntent: 'Send the form',
-        traceRef: 'trace', durationMs: 900, llmTokens: 0, log: [{ index: 0, intent: 'Open the form', status: 'ok', ms: 5 }], submitted: true,
+        traceRef: 'trace', durationMs: 900, llmTokens: 0, llmCalls: 0, log: [{ index: 0, intent: 'Open the form', status: 'ok', ms: 5 }], submitted: true,
         guidance: GUIDANCE.incomplete, account: USER,
       },
     });
@@ -917,7 +917,7 @@ describe('outputs', () => {
   it('an agent-lane failure carries its duration and the chat model tokens it used (run log columns)', async () => {
     const engine = fakeEngine(() => taskFail('incomplete', 'the proof did not pass', { lane: 'agent', llmCalls: 4, tokens: 4321, durationMs: 15_000 }));
     const [data] = await executeRunSteps(ctx({ model: STUB_MODEL, params: repairParams(), continueOnFail: true }), engine);
-    expect(details(data[0])).toMatchObject({ code: 'incomplete', lane: 'agent', durationMs: 15_000, llmTokens: 4321 });
+    expect(details(data[0])).toMatchObject({ code: 'incomplete', lane: 'agent', durationMs: 15_000, llmTokens: 4321, llmCalls: 4 });
   });
   it('without continue-on-fail the failure is thrown with the code first and the guidance as description', async () => {
     const err = await executeRunSteps(ctx(), fakeEngine(() => taskFail('site_down', 'HTTP 503 at the start page'))).catch((e: unknown) => e);

@@ -11,7 +11,7 @@ error output as an item with three fields (n8n sends an item to the error output
 - `error`: `"<code>: <message>"`
 - `message`: the message without the code
 - `details`: everything else: `code`, `message`, `name`, `version`, `lane`, `hash`, `stepIntent`, `durationMs`,
-  `llmTokens` (chat model tokens the run used), `submitted` (`true` once a submit was sent), `log` (the steps that
+  `llmTokens` (chat model tokens the run used), `llmCalls` (chat model calls it made), `submitted` (`true` once a submit was sent), `log` (the steps that
   finished), `traceRef` (the binary field that holds the scrubbed trace) and `guidance`: what to do, the same text as
   the error's description in n8n, which n8n does not show for an item on the error output. It is empty when the
   message itself says what to do (a secret not allowed where it would be typed, an app the runner may not start). With an RPA Site Login,
