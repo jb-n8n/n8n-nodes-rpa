@@ -71,6 +71,10 @@ function writeStatic(staticData: IDataObject, records: Record<string, RepairStop
   staticData[REPAIR_STOP_KEY] = Object.fromEntries(kept);
 }
 
+/** Field-by-field equality of two records (a write only when something differs: static data is saved when it changes). */
+const sameStop = (a: RepairStop | undefined, b: RepairStop): boolean =>
+  a !== undefined && a.at === b.at && a.resetKey === b.resetKey && a.version === b.version && a.code === b.code && a.llmCalls === b.llmCalls && a.tokens === b.tokens;
+
 async function within<T>(ctx: NodeContext, itemIndex: number, deps: GuardStoreDeps, use: (place: StopPlace) => Promise<T>): Promise<T> {
   const place = await openPlace(ctx, itemIndex, deps);
   try {
@@ -92,9 +96,10 @@ export async function heldRepair(ctx: NodeContext, itemIndex: number, deps: Guar
     return await within(ctx, itemIndex, deps, async ({ store, staticData }) => {
       const fromStatic = persisted(staticData)[key];
       const fromStore = await store.getRepairStop(key);
-      const record = [fromStore, fromStatic].find((r) => r !== undefined);
-      if (!record) return undefined;
-      if (record.resetKey.trim() !== current) {
+      const records = [fromStore, fromStatic].filter((r): r is RepairStop => r !== undefined);
+      if (records.length === 0) return undefined;
+      const record = records.find((r) => r.resetKey.trim() === current);
+      if (!record) {
         await store.deleteRepairStop(key);
         if (staticData && fromStatic) {
           const all = persisted(staticData);
@@ -103,8 +108,8 @@ export async function heldRepair(ctx: NodeContext, itemIndex: number, deps: Guar
         }
         return undefined;
       }
-      if (!fromStore) await store.setRepairStop(key, record);
-      if (staticData && !fromStatic) writeStatic(staticData, { ...persisted(staticData), [key]: record });
+      if (!sameStop(fromStore, record)) await store.setRepairStop(key, record);
+      if (staticData && !sameStop(fromStatic, record)) writeStatic(staticData, { ...persisted(staticData), [key]: record });
       return record;
     });
   } catch (error) {

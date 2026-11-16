@@ -900,6 +900,20 @@ describe('a repair that failed does not try again until a person acts', () => {
     await run(engine, { staticData: fresh });
     expect(held(engine)).toEqual([undefined, HELD_V3, HELD_V3]);
     expect(Object.keys(fresh.playwrightRepairStops as IDataObject)).toHaveLength(1);
+    // A held run where static data already has the record leaves static data as it was (n8n saves it only on a change).
+    const before = staticData.playwrightRepairStops;
+    await run(engine, { staticData });
+    expect(staticData.playwrightRepairStops).toBe(before);
+  });
+
+  it('a record kept under another reset key in this process does not undo the one static data holds under the current key', async () => {
+    const staticData: IDataObject = {};
+    const engine = failing();
+    await run(engine, { staticData, params: repairParams({}, { repairResetKey: 'a' }) });
+    // A manual run under key b, whose static data n8n did not save, failed too: this process now knows the b record.
+    await run(engine, { staticData: {}, params: repairParams({}, { repairResetKey: 'b' }) });
+    await run(engine, { staticData, params: repairParams({}, { repairResetKey: 'a' }) });
+    expect(held(engine)).toEqual([undefined, undefined, HELD_V3]);
   });
 
   it('which failures are remembered: any after a model call, and rows without proven steps; not a cancel, a login, a configuration error or no model call', async () => {
