@@ -717,7 +717,7 @@ public sealed class ServiceTests : IDisposable
         var e = _h.Err("act", Probe(Id("btnPost")), RpcErrors.PolicyRefusedCode);
         Assert.Equal("policy_refused: the target is a declared write control; probe mode never acts on it", e["message"]!.GetValue<string>());
         e = _h.Err("act", Probe(Id("btnInner"), "click", new { mode = "probe", write = true }), RpcErrors.PolicyRefusedCode);
-        Assert.Equal("policy_refused: probe mode never carries write: true", e["message"]!.GetValue<string>());
+        Assert.Equal("policy_refused: probe mode never sends a write step (write is not allowed with it)", e["message"]!.GetValue<string>());
         Assert.Empty(_h.Desktop.Performed);
     }
 

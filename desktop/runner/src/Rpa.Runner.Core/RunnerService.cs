@@ -294,7 +294,7 @@ public sealed class RunnerService
         {
             // Clicks only: an inserted or retargeted step that types, selects or checks waits for approval.
             if (action is not (ActionKind.Click or ActionKind.DoubleClick)) throw RpcErrors.PolicyRefused(ProbeRefusal);
-            if (write) throw RpcErrors.PolicyRefused("probe mode never carries write: true");
+            if (write) throw RpcErrors.PolicyRefused("probe mode never sends a write step (write is not allowed with it)");
             if (run.Probes >= MaxProbesPerRun) throw RpcErrors.PolicyRefused($"a run may make at most {MaxProbesPerRun} probe acts");
         }
         if (chord is not null && IsSystemChord(chord))
