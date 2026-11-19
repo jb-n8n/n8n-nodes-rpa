@@ -717,3 +717,93 @@ const REPAIR_WAITING =
       ? $('Get pending').all().map((i) => i.json).filter((r) => r.hash && DateTime.fromISO(r.expiresAt) > $now)
       : []
   );
+
+// The approved version a desktop AI repair started from, lined up with the repaired steps, or null: only a row of that
+// name and base version that was approved (active or superseded, with a signature and Approved By) and whose signature
+// fits (Check the approved version, Check Only), as COMPARED_WITH_BASE finds it. `at[i]` is the index of the approved
+// step that repaired step i is (the same step, its write mark aside; -1 for a step the repair changed or added), from
+// the longest common run of steps; `write[i]` is that approved step's own write mark. Never from the item: its own
+// claims (evidence.proof) only label steps. Template 3, the desktop approval email and form.
+const DESKTOP_REPAIR_BASE =
+  (repaired) => (
+    (approvedRow) => {
+      if (!approvedRow) return null;
+      const parse = (s) => { try { return JSON.parse(String(s)); } catch (e) { return undefined; } };
+      const was = parse(approvedRow.steps);
+      const now = repaired.steps;
+      if (was === null || typeof was !== 'object' || !Array.isArray(was.steps)) return null;
+      if (now === null || typeof now !== 'object' || !Array.isArray(now.steps)) return null;
+      const canon = (v) => (
+        Array.isArray(v)
+          ? '[' + v.map(canon).join(',') + ']'
+          : v !== null && typeof v === 'object'
+          ? '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}'
+          : JSON.stringify(v === undefined ? null : v)
+      );
+      const bare = (s) => canon(
+        s !== null && typeof s === 'object'
+          ? Object.fromEntries(Object.keys(s).filter((k) => k !== 'write').map((k) => [k, s[k]]))
+          : s
+      );
+      const a = was.steps.map(bare);
+      const b = now.steps.map(bare);
+      const L = [];
+      for (let i = a.length; i >= 0; i--) {
+        L[i] = [];
+        for (let j = b.length; j >= 0; j--) L[i][j] = i === a.length || j === b.length
+          ? 0
+          : a[i] === b[j]
+          ? L[i + 1][j + 1] + 1
+          : Math.max(L[i + 1][j], L[i][j + 1]);
+      }
+      const at = b.map(() => -1);
+      let i = 0;
+      let j = 0;
+      while (i < a.length && j < b.length) {
+        if (a[i] === b[j]) { at[j] = i; i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) i++; else j++;
+      }
+      return {
+        version: approvedRow.version,
+        at,
+        write: at.map((k) => k >= 0 && was.steps[k] !== null && typeof was.steps[k] === 'object' && was.steps[k].write === true),
+        bare: (doc) => JSON.stringify(
+          Object.assign({}, doc, { steps: doc.steps.map((s) => JSON.parse(bare(s))) })
+        ),
+        was
+      };
+    }
+  )(
+    typeof repaired.baseVersion !== 'number' || !$('The approved version').isExecuted || !$('Check the approved version').isExecuted
+      ? undefined
+      : (
+        (storedRows, signatureChecks) => storedRows.filter(
+          (stored, at) => stored.name === repaired.name
+            && stored.version === repaired.baseVersion
+            && ['active', 'superseded'].includes(stored.status)
+            && typeof stored.steps === 'string'
+            && stored.steps !== ''
+            && typeof stored.signature === 'string'
+            && stored.signature !== ''
+            && typeof stored.approvedBy === 'string'
+            && stored.approvedBy !== ''
+            && signatureChecks.length === storedRows.length
+            && ((check) => Boolean(check && check.approvedVersion && check.approvedVersion.signatureFits === true))(signatureChecks[at])
+        ).sort(
+          (first, second) => (first.status === 'active' ? 0 : 1) - (second.status === 'active' ? 0 : 1)
+        )[0]
+      )(
+        $('The approved version').all().map((found) => found.json),
+        $('Check the approved version').all().map((checked) => checked.json)
+      )
+  );
+
+// A desktop Repaired steps item's proof (an AI repair's evidence.proof, the run's own report of it), or null for an
+// import's item. Template 3, the desktop approval email and form.
+const DESKTOP_PROOF =
+  (repaired) => (
+    repaired.evidence !== null && typeof repaired.evidence === 'object'
+      && repaired.evidence.proof !== null && typeof repaired.evidence.proof === 'object'
+      && typeof repaired.baseVersion === 'number'
+      ? repaired.evidence.proof
+      : null
+  );

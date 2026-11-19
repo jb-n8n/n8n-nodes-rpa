@@ -263,7 +263,7 @@ the chat model's provider. A variable nobody supplied fails the run with `missin
 
 ## AI Repair
 
-AI repair works on two kinds of browser steps: data feeds (steps that read rows with `extract`) and file downloads
+AI repair works on two kinds of browser steps, and on desktop steps (below): data feeds (steps that read rows with `extract`) and file downloads
 (steps that download one checked file). When a step no longer matches the page, a connected chat model takes over the
 same browser session, a fresh browser with no model and no writes proves the repaired steps, and the result goes to
 the **Repaired Steps** output. Nothing repaired runs until Sign Steps signs it.
@@ -293,6 +293,32 @@ the **Repaired Steps** output. Nothing repaired runs until Sign Steps signs it.
 - The model sees a masked snapshot of the page, including what text fields and drop-downs hold (not password or
   credential-looking fields, and nothing on a login page), and the run's variable names and values that are not
   secret. That data goes to the chat model's provider.
+
+**Desktop steps.** AI repair works on signed desktop steps too, with the same switches: a chat model on the Model
+input, **AI Repair** on and a **Goal**. When a step no longer finds its control (a button renamed, a command moved to
+another menu, a new dialog in the way), the model looks at the app's window as UI Automation describes it (names,
+types and ids, typed values masked, no screenshot) and fixes the steps from there:
+- It may point a failed step at another control, open menus and expand items to look, and add up to 2 steps (a click
+  through a new dialog). It never changes a declared write step, never moves a step that types a secret variable, and
+  gives up with its reason when a fix would need either.
+- It does not write before approval. Exploring runs in the runner's repair mode (menus, tabs and list items only,
+  nothing that reads like a write or like delete, cancel, reject or sign out, no combo box item, Escape only to close
+  a menu). A changed click runs once in probe mode: a button, menu item, link, tab, list or tree item whose name, id,
+  window title and window text have no write word. Anything else is added for the approver without being run.
+- The steps go on after a fix up to the first step that is a declared write or looks like one (what the review page
+  flags as a candidate write): that step's control is found and not run. A key Enter or a click in the field a secret
+  variable was typed into in the step before, and the sign-in window's own OK or Submit right after it, sign in and post nothing:
+  they run.
+- The proof starts the app afresh on the same runner (the runner keeps itself for it for 30 seconds), replays the
+  repaired steps up to that first write-like step, and only finds that one. A step the repair changed must match on
+  its first locator.
+- The result is version N+1 on **Repaired Steps**, with every step listed and no write marks: the approver ticks the
+  writes again (see [RPA: 3 Approve steps](templates.md#rpa-3-approve-steps)). Its evidence line says which steps
+  ran in the proof, where it stopped and why, and which steps the repair retargeted or added. Data gets the run's
+  values and file only when the proof ran every step.
+- Not tried: a run that failed after a write step ran, a control that was found but did not respond, a file whose
+  checks failed, unsigned steps. Once per execution, the cost sentence, the hold after a failed repair and **AI Repair
+  Reset Key** work as for browser steps. **Deliver Unconfirmed Rows** is refused for desktop steps.
 
 **Known limits.**
 - AI-built and AI-repaired steps extract IDs only. Rows from those steps carry `id` and no other fields. When you need record content, write the extract step yourself (Extract Data or Run Steps fields). Repair then refuses to rewrite field extraction.
@@ -358,7 +384,8 @@ Desktop steps say `"surface": "desktop"` and name the app instead of a start URL
   of the app left open on the machine: a step that finds its window in a copy the run did not start fails
   `policy_violation`.
 - `timeoutMs` on a desktop step is 100 to 120000.
-- **Not there yet** for desktop steps: AI repair, a replay before approval, an RPA Site Login, row checks, pop-up
+- **AI repair** works on signed desktop steps: see [AI Repair](#ai-repair).
+- **Not there yet** for desktop steps: a replay before approval of an import, an RPA Site Login, row checks, pop-up
   handlers (`interrupts`), loops, right-click, scroll, drag and hover, `when` on hidden elements or variables, a
   screenshot step, putting a file on the machine, and more than one app per run.
 

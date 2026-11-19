@@ -90,8 +90,8 @@ explicit ACL: the runner's user, SYSTEM and Administrators only.
 
 A run acts only on windows of processes it launched whose executable is allowed. If another application's window holds
 the foreground and the runner cannot bring the run's window back, the action is refused; OS surfaces (notifications, the
-taskbar, the Start menu) are ignored. Two act modes serve AI repair (only the engine's desktop repair sends them; the
-node does not offer AI repair for desktop steps yet):
+taskbar, the Start menu) are ignored. Two act modes serve AI repair (only the engine's desktop repair sends them, when Run Steps has
+AI Repair on and a chat model connected):
 
 - `mode: "repair"` explores. It allows only `expand`, `read`, `key` with the value `Escape` and no target, and
   `click` on tabs, list items and tree items. It never moves the focus (a focus change runs the app's leave and

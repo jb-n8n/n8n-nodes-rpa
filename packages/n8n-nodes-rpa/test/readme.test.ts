@@ -406,7 +406,7 @@ describe('the security reference', () => {
     for (const text of ['what they send is not checked', '(with `next`, both of its pages)']) expect(row('| Run Steps with a Site Login |'), text).toContain(text);
     for (const text of ['refused before the browser opens', 'never delivered', 'never imported']) expect(row('| Import Steps |'), text).toContain(text);
     const typed = section(doc.security, '## Settings you must type').replace(/\s+/g, ' ');
-    for (const text of ['Eight settings must be set directly', '**Require Signed Steps**', '**Allow Private Network**', '**Allow Unsigned Writes**', '**Deliver Unconfirmed Rows**',
+    for (const text of ['Nine settings must be set directly', "**AI Repair Reset Key**", 'They hold for browser and desktop steps alike', '**Require Signed Steps**', '**Allow Private Network**', '**Allow Unsigned Writes**', '**Deliver Unconfirmed Rows**',
       "Run Steps' **Login Breaker Reset Key**", '**One-Time Code Workflow**', "Sign Steps' **Approver Allowlist** and **Approval Form Page**"]) expect(typed, text).toContain(text);
     for (const text of ['One shared signing key', 'GET side effects', 'images or canvas', 'Closed shadow roots']) expect(section(doc.security, '## Accepted risks'), text).toContain(text);
   });

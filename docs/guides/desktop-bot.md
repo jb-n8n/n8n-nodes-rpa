@@ -200,6 +200,21 @@ Each run writes one row to the `playwright_runs` Data Table (**Log run**). A fai
 on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow. To be told when a
 scheduled run fails, choose an Error Workflow in the workflow's settings.
 
+## When the app changes
+
+After an update of the app, a step may no longer find its control: the run fails `drift_detected` and names the step.
+To let the bot repair itself, follow the note on the RPA node: connect a chat model to its **Model** input, turn on
+**AI Repair** and write the **Goal** in plain words (for example "Export the line items of company 1000 for 2026 as a
+CSV file"), then send its **Repaired Steps** output to **RPA: 3 Approve steps**. Repair stays off until you do.
+
+The next run that fails asks the model once. It looks at the app's window (no screenshot), points the failed steps at
+the controls they moved to, starts the app again and replays the steps to prove them, without running anything that
+looks like a save. The result is the next version of the steps, which waits for you: the approval email lists every
+step, says which ones the repair changed or added and which ones it proved, and you tick the steps that save, send or
+submit again. Ticks start from your approved version on the steps it did not change. Once you approve, the next run
+uses the new version without the model. A repair that fails is not tried again until you approve a new version,
+change the Goal, or change **Options → AI Repair Reset Key**. Details: [Steps](../reference/steps.md#ai-repair).
+
 ## Next
 
 - Your own app: install it for all users, record it the same way, and allow it with **Allow this app…**, which also

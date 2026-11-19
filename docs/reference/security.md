@@ -68,10 +68,10 @@ Entra's `GetCredentialType` is one): declare that path as a login page too (or i
 
 ## Settings you must type
 
-Eight settings must be set directly on the node. Set with an expression, they are a configuration error, so item data
+Nine settings must be set directly on the node. Set with an expression, they are a configuration error, so item data
 cannot switch them: **Require Signed Steps**, **Allow Private Network**, **Allow Unsigned Writes**, **Deliver
-Unconfirmed Rows**, Run Steps' **Login Breaker Reset Key**, **One-Time Code Workflow**, and Sign Steps' **Approver
-Allowlist** and **Approval Form Page**. If the whole Options collection is set with one expression, n8n drops it before the node runs, and these
+Unconfirmed Rows**, Run Steps' **Login Breaker Reset Key** and **AI Repair Reset Key**, **One-Time Code Workflow**,
+and Sign Steps' **Approver Allowlist** and **Approval Form Page**. They hold for browser and desktop steps alike. If the whole Options collection is set with one expression, n8n drops it before the node runs, and these
 switches stay off. Type the RPA Browser credential's Endpoint URL, Token and Certificate Fingerprint directly too.
 
 ## Signing and approval
@@ -145,6 +145,13 @@ a file only its user can read, which is removed right after, never in a command'
   approval emails show the same sentences and the same marks. Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.
 - **Desktop writes.** The review page asks "Which of these steps save, send or submit?". The ticked steps are signed as
   writes. A write mark only matters where the runner's policy lists the control or key (see [Desktop runs](#desktop-runs)).
+- **A desktop AI repair** comes to approval as a whole new version, as an import does: every step is listed, none is
+  marked a write, and the approver ticks the writes again. In the approval email each step says whether it is as
+  approved in the version the repair started from, retargeted by the repair or added by it, and whether the proof ran
+  it. "As approved" and the starting ticks come only from that version's row in `playwright_steps` when Sign Steps'
+  check says its signature fits; otherwise the email says the steps could not be compared and no box starts ticked.
+  Sign Steps signs only a version higher than its base with a well-formed proof, rebuilds the evidence line from the
+  proof, and refuses an item that marks a write.
 - **Changing or signing again on the form.** With **Bot file** left empty, the form's next page shows the steps of the
   `active` row of the name typed, and a name it does not find ends on a page that lists every approved bot's name.
   When that row's signature does not fit the form, the person first says why, on a page that shows no step: a bot
@@ -258,6 +265,22 @@ the gated keys and the export folder. n8n cannot switch it off.
 - The installer adds the browser beside the runner only with `-WithBrowser`. With it, whoever holds the browser token
   acts as the bot user through the browser, which the runner's policy does not limit. Add it only when your bots need a
   browser on that machine. The [Windows guide](../install/windows.md#who-can-reach-the-ports) says more.
+- **AI repair of desktop steps** looks at the app through UI Automation only (names, types, ids; typed values,
+  secrets and clipboard texts masked; never a screenshot). Ordinary app data on the window, such as grid values, goes
+  to the chat model's provider. Before approval it acts only in two runner modes, both refused on a declared write
+  control and on anything whose name or id reads like a write (save, post, submit, confirm, ok and the like) or like
+  delete, cancel, reject or sign out, with invisible characters and look-alike letters read through:
+  - repair mode opens menus and selects tabs, list and tree items (never a combo box item), reads text, and presses
+    Escape only while a menu is open; it never moves the focus;
+  - probe mode clicks a control the repair chose, once: only a button, menu item, link, tab, list or tree item, in a
+    window whose title and text have no write word, at most 12 times a run.
+  A step that would type, choose, check or press another key on a new control is never run before approval, nor is a
+  declared write step, a step the review page flags as a candidate write (a click on a control with a write word, or
+  Enter or a save shortcut), or anything after one. The exception is signing in: Enter or a click in the field a
+  secret variable was typed into in the step before, and the sign-in window's own OK or Submit right after it. AI repair never
+  changes a declared write step and never moves a step that types a secret variable. The proof starts the app again
+  and replays the steps up to that point. Its claims are the runner's, as for browser evidence (accepted risks below).
+  Until an app's write controls are in the policy, these word rules are what stands between a repair and a write.
 - In the mode where nobody is signed in, the supervisor signs the bot user in when a connection arrives at the
   runner's port (or the browser's, when it is installed). It does not read the connection or check the sender's
   address first, and the token is checked afterwards by the runner or the browser. So anyone who can reach those ports

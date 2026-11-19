@@ -172,9 +172,37 @@ export const writeStepOutOfRange = (n: number, count: number) => `Write Steps: t
 export const writeStepNotAllowed = (n: number, verb: string) => `Write Steps: step ${n} is a ${verb} step, which cannot be a write (only click, doubleClick, fill, select, check and key steps can)`;
 export const DESKTOP_FLAGS_INCOMPLETE = 'the safety flags do not list the app, the returned files, the clipboard reads, the declared writes and the candidate writes the steps have';
 export const DESKTOP_CHANGES_MISMATCH = 'the change list does not show every step of the steps, in order, as added';
-export const DESKTOP_NEEDS_FIRST_VERSION = 'desktop steps have no repair yet, so a desktop proposal must be a first version (no base version) that shows every step';
+export const DESKTOP_NEEDS_FIRST_VERSION = 'a desktop proposal without the proof of an AI repair must be a first version (no base version) that shows every step';
+export const DESKTOP_REPAIR_VERSION = 'the version of repaired desktop steps must be higher than the version they were repaired from';
+export const DESKTOP_PROOF_INVALID = "the proof of the desktop repair is malformed or does not fit the steps (steps replayed, the step it stopped at and why, the steps changed and added)";
 export const DESKTOP_WRITES_PRESET = 'the reviewed steps already mark a write: writes are marked only when the steps are approved';
 export const DESKTOP_EVIDENCE_INVALID = 'desktop steps are not replayed at import, so their evidence must be empty (no rows, no file)';
+
+/** What a desktop repair's proof may say it stopped for (DesktopProofEvidence.stoppedBecause). */
+const PROOF_STOPS: readonly unknown[] = ['declared write', 'looks like a write', 'held for approval'];
+
+/**
+ * Why a desktop repair's proof (evidence.proof, as the run reported it) cannot stand for steps of `count` steps, or
+ * undefined. Shape and consistency only (the claims are the runner's, an accepted risk): exactly the five fields;
+ * `replayed` a whole number up to the steps; `stoppedAt` null with nothing to stop for, or the step right after the
+ * replayed ones with a known reason; `changedSteps` and `addedSteps` step numbers, ascending, without repeats, none in
+ * both. The reviewer's line is built from these numbers, so nothing else may ride along.
+ */
+export function desktopProofProblem(proof: unknown, count: number): string | undefined {
+  if (proof === null || typeof proof !== 'object' || Array.isArray(proof)) return DESKTOP_PROOF_INVALID;
+  const p = proof as Record<string, unknown>;
+  const keys = Object.keys(p).sort().join(',');
+  if (keys !== 'addedSteps,changedSteps,replayed,stoppedAt,stoppedBecause') return DESKTOP_PROOF_INVALID;
+  const whole = (v: unknown, min: number, max: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
+  if (!whole(p.replayed, 0, count)) return DESKTOP_PROOF_INVALID;
+  if (p.stoppedAt === null) {
+    if (p.stoppedBecause !== null || p.replayed !== count) return DESKTOP_PROOF_INVALID;
+  } else if (!whole(p.stoppedAt, 1, count) || p.stoppedAt !== p.replayed + 1 || !PROOF_STOPS.includes(p.stoppedBecause)) return DESKTOP_PROOF_INVALID;
+  const list = (v: unknown): v is number[] => Array.isArray(v) && v.every((n, i) => whole(n, 1, count) && (i === 0 || n > (v[i - 1] as number)));
+  if (!list(p.changedSteps) || !list(p.addedSteps)) return DESKTOP_PROOF_INVALID;
+  if (p.changedSteps.some((n) => (p.addedSteps as number[]).includes(n))) return DESKTOP_PROOF_INVALID;
+  return undefined;
+}
 
 /** Write Steps as typed by the approver: step numbers separated by commas or spaces; '' or only spaces is none. */
 export function parseWriteSteps(text: string): number[] | { error: string } {
@@ -213,9 +241,10 @@ const sameSet = (a: string[], b: string[]): boolean => {
 /**
  * Re-checks a desktop proposal (an untrusted Repaired steps item) and signs it with the owner's declared writes. In
  * order: the review digest is required; the steps parse as a desktop step set with a name and version; the hash,
- * name, version and digest match what was reviewed; it is a first version (no base); the safety flags are exactly
+ * name, version and digest match what was reviewed; it is a first version (no base) without a proof, or an AI repair:
+ * a higher version of its base with a well-formed proof (desktopProofProblem); the safety flags are exactly
  * desktopSafetyFlags of the steps and the change list is exactly desktopStepChanges of the steps (one entry per step,
- * in order: an unkeyed digest alone could hide a step); the evidence is empty. Then Write Steps are added (declareWrites) and the result is signed with `pw-steps/2`, bound to the app
+ * in order: an unkeyed digest alone could hide a step); the evidence is empty apart from a repair's proof. Then Write Steps are added (declareWrites) and the result is signed with `pw-steps/2`, bound to the app
  * (sign.ts desktopBinding) and the approver. No Site Login is bound: desktop runs refuse one. Never throws.
  */
 export function signDesktopSteps(input: {
@@ -251,8 +280,18 @@ export function signDesktopSteps(input: {
   if (proposal.hash !== hash) reasons.push(STEPS_HASH_MISMATCH);
   if (name !== proposal.name) reasons.push(STEPS_NAME_MISMATCH);
   if (version !== proposal.version) reasons.push(STEPS_VERSION_MISMATCH);
-  // Desktop steps have no repair yet: every desktop proposal is a first version, reviewed whole.
-  if (proposal.baseVersion !== null) reasons.push(DESKTOP_NEEDS_FIRST_VERSION);
+  // An import is a first version, reviewed whole. An AI repair (version N+1 of base N) is reviewed whole too, as an
+  // import is: every step listed as added, no write mark, and the proof of what ran in a fresh start of the app.
+  const e = proposal.evidence as unknown as Record<string, unknown> | undefined;
+  const proof = e !== undefined && e !== null && typeof e === 'object' ? e.proof : undefined;
+  if (proposal.baseVersion === null) {
+    if (proof !== undefined) reasons.push(DESKTOP_PROOF_INVALID);
+  } else if (proof === undefined) reasons.push(DESKTOP_NEEDS_FIRST_VERSION);
+  else {
+    if (!Number.isInteger(proposal.baseVersion) || proposal.baseVersion < 1 || version <= proposal.baseVersion) reasons.push(DESKTOP_REPAIR_VERSION);
+    const bad = desktopProofProblem(proof, script.steps.length);
+    if (bad) reasons.push(bad);
+  }
   let digest = '';
   try {
     digest = proposalDigest(proposal);
@@ -271,9 +310,8 @@ export function signDesktopSteps(input: {
     return e !== null && typeof e === 'object' && e.was === null && e.now === expectedChanges[i].now;
   });
   if (!exact) reasons.push(DESKTOP_CHANGES_MISMATCH);
-  const e = proposal.evidence as unknown as Record<string, unknown> | undefined;
   const d = e?.diff as { missing?: unknown[]; extra?: unknown[] } | undefined;
-  if (!e || e.count !== 0 || e.total !== null || e.file !== undefined || e.readPosts !== undefined || !d || d.missing?.length !== 0 || d.extra?.length !== 0) {
+  if (!e || e.count !== 0 || e.total !== null || Object.keys(e).some((k) => !['count', 'total', 'diff', 'proof'].includes(k)) || !d || d.missing?.length !== 0 || d.extra?.length !== 0) {
     reasons.push(DESKTOP_EVIDENCE_INVALID);
   }
   // The import never marks a write: a reviewed document that carries one did not come from it.

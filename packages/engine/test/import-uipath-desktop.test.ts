@@ -12,7 +12,7 @@ import {
   ctrlControlType, CTRL_ROLE_TO_CONTROL_TYPE, readDesktopSelector, uiaControlType, UIA_ROLE_TO_CONTROL_TYPE,
 } from '../src/import/uipath-desktop-selector.js';
 import {
-  declareWrites, describeDesktopStep, desktopProposal, desktopSafetyFlags, parseWriteSteps, signDesktopSteps, type DesktopProposal,
+  declareWrites, describeDesktopStep, DESKTOP_PROOF_INVALID, desktopProposal, desktopSafetyFlags, parseWriteSteps, signDesktopSteps, type DesktopProposal,
 } from '../src/proposal/desktop.js';
 import { proposalDigest } from '../src/proposal/proposal.js';
 import { parseDesktopScript } from '../src/steps/parse.js';
@@ -463,7 +463,12 @@ describe('approving and signing an imported desktop draft', () => {
       expect(reasons(sign(crafted, [], proposalDigest(crafted))), what).toEqual([MISMATCH]);
     }
     const based = { ...p, baseVersion: 0 };
-    expect(reasons(sign(based, [], proposalDigest(based)))).toContain('desktop steps have no repair yet, so a desktop proposal must be a first version (no base version) that shows every step');
+    expect(reasons(sign(based, [], proposalDigest(based)))).toContain('a desktop proposal without the proof of an AI repair must be a first version (no base version) that shows every step');
+    // A proof on a first version, or extra evidence fields, are refused too.
+    const proofless = { ...p, evidence: { ...p.evidence, proof: { replayed: 17, stoppedAt: null, stoppedBecause: null, changedSteps: [], addedSteps: [] } } } as DesktopProposal;
+    expect(reasons(sign(proofless, [], proposalDigest(proofless)))).toContain(DESKTOP_PROOF_INVALID);
+    const extra = { ...p, evidence: { ...p.evidence, note: 'all good' } } as DesktopProposal;
+    expect(reasons(sign(extra, [], proposalDigest(extra)))).toContain('desktop steps are not replayed at import, so their evidence must be empty (no rows, no file)');
     const proven = { ...p, evidence: { ...p.evidence, count: 12 } };
     expect(reasons(sign(proven, [], proposalDigest(proven)))).toContain('desktop steps are not replayed at import, so their evidence must be empty (no rows, no file)');
     expect(reasons(sign(p, [1]))).toEqual(['Write Steps: step 1 is a waitFor step, which cannot be a write (only click, doubleClick, fill, select, check and key steps can)']);

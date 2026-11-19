@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRunner } from '../src/desktop/client.js';
 import { CHANGED_STEP_DESTRUCTIVE, CHANGED_STEP_NOT_RUN } from '../src/desktop/handlers.js';
-import { looksDestructive, probeBlock } from '../src/desktop/repair/session.js';
+import { firstStopIndex, looksDestructive, probeBlock, signsInOnly } from '../src/desktop/repair/session.js';
 import { buildTree } from '../src/desktop/repair/tree.js';
 import { createDesktopSurface, type ChangedStep, type DesktopViewItem } from '../src/desktop/surface.js';
 import { runDesktopTask, type DesktopTaskResult } from '../src/desktop/task.js';
@@ -192,5 +192,49 @@ describe('the per-fix cap', () => {
     expect(r.agentLog?.[3]).toMatchObject({ tool: 'add_step', ok: false });
     expect(r.agentLog?.[3]?.note).toContain('a fix may add at most 3 steps');
     expect(runner.requests.some((q) => q.method === 'act' && q.params.mode === 'probe')).toBe(false);
+  });
+});
+
+describe('DR10: a step that only signs in does not stop the repair or the proof', () => {
+  const LOGIN = { exe: 'erpdemo.exe', title: 'ERP Demo - Sign in' };
+  const pwd = at(LOGIN, { controlType: 'Edit', automationId: 'txtPassword', name: 'Password' });
+  const doc = (next: DesktopStep, fillValue = '{{var.password}}'): DesktopScript => ({
+    surface: 'desktop', app: { exe: 'ErpDemo.exe' },
+    steps: [
+      { intent: 'Type into Password', fill: { field: pwd, value: fillValue } },
+      next,
+      { intent: 'Click Save', click: at(MAIN, { controlType: 'Button', automationId: 'btnSave', name: 'Save' }) },
+    ],
+  });
+  const secret = (n: string) => n === 'password';
+  it('Enter in the field, Enter with no target, a click on the field, OK or Submit in the sign-in window: run', () => {
+    for (const next of [
+      { intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } },
+      { intent: 'Press Enter', key: { key: 'Enter' } },
+      { intent: 'Click Password', click: pwd },
+      { intent: 'Click OK', click: at(LOGIN, { controlType: 'Button', automationId: 'btnOk', name: 'OK' }) },
+      { intent: 'Click Submit', click: at(LOGIN, { controlType: 'Button', automationId: 'btnSubmit', name: 'Submit' }) },
+    ] as DesktopStep[]) {
+      expect(signsInOnly(doc(next), 1, { isSecretVar: secret }), next.intent).toBe(true);
+      expect(firstStopIndex(doc(next), 0, { isSecretVar: secret }), next.intent).toBe(2);
+    }
+  });
+  it('anything else that looks like a write still stops them (DR9)', () => {
+    const cases: [DesktopScript, string][] = [
+      [doc({ intent: 'Press Ctrl+Enter', key: { key: 'Ctrl+Enter', target: pwd } }), 'another key'],
+      [doc({ intent: 'Press Enter in Date', key: { key: 'Enter', target: at(LOGIN, { automationId: 'txtDate' }) } }), 'another field'],
+      [doc({ intent: 'Click Save', click: at(LOGIN, { controlType: 'Button', automationId: 'btnSave', name: 'Save' }) }), 'a save in the sign-in window'],
+      [doc({ intent: 'Click OK and post', click: at(LOGIN, { controlType: 'Button', automationId: 'btnOk', name: 'OK' }) }), 'an intent that posts'],
+      [doc({ intent: 'Click OK', click: at(MAIN, { controlType: 'Button', automationId: 'btnOk', name: 'OK' }) }), 'another window'],
+      [doc({ intent: 'Click OK', click: at(LOGIN, { controlType: 'Button', automationId: 'btnCancelOk', name: 'OK' }) }), 'a destructive id'],
+      [doc({ intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } }, '{{var.user}}'), 'not a secret'],
+      [doc({ intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } }, 'x{{var.password}}'), 'not a whole secret fill'],
+      [{ ...doc({ intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } }), steps: [{ intent: 'Wait', waitFor: { target: pwd } }, { intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } }] }, 'not right after a fill'],
+    ];
+    for (const [d, why] of cases) expect(firstStopIndex(d, 0, { isSecretVar: secret }), why).toBe(1);
+    const enter = doc({ intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } });
+    expect(firstStopIndex(enter, 0, {}), 'no secrets known').toBe(1);
+    expect(firstStopIndex(enter, 0, { isSecretVar: secret, changed: new Set([1]) }), 'changed by the repair').toBe(1);
+    expect(firstStopIndex({ ...enter, steps: [enter.steps[0]!, { ...enter.steps[1]!, write: true }] }, 0, { isSecretVar: secret }), 'a declared write').toBe(1);
   });
 });

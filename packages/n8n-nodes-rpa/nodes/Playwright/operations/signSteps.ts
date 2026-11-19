@@ -5,7 +5,7 @@ import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson } from '../errors.js';
 import {
-  changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, importAddedSteps, isDesktopProposal, isFileDocument, leftOutList,
+  changeList, DESKTOP_EVIDENCE_LINES, desktopRepairProof, evidenceLine, fullSafetyFlags, hasDownloadStep, importAddedSteps, isDesktopProposal, isFileDocument, leftOutList,
   modelSteps, NOT_REPLAYED_EVIDENCE_LINE, POSITION_MARKS, reviewChanges, reviewSteps, safetyLine, type ReviewStep,
 } from '../format.js';
 import { configErrorItem } from '../output.js';
@@ -117,7 +117,8 @@ function shownTextChanged(engine: Engine, p: Proposal | DesktopProposal, shown: 
     const value = shown[name];
     if (value === undefined) continue;
     // A desktop item's evidence line names where its steps came from, which the evidence does not record: any of them passes.
-    if (name === 'evidenceLine' && isDesktopProposal(p) && typeof value === 'string' && DESKTOP_EVIDENCE_LINES.includes(value)) continue;
+    // An AI repair's line is rebuilt from its proof instead, so an import's line never stands for a repair.
+    if (name === 'evidenceLine' && isDesktopProposal(p) && desktopRepairProof(p) === undefined && typeof value === 'string' && DESKTOP_EVIDENCE_LINES.includes(value)) continue;
     // Browser steps that were not replayed: signOne checks the conditions under which this line may stand.
     if (name === 'evidenceLine' && !isDesktopProposal(p) && value === NOT_REPLAYED_EVIDENCE_LINE) continue;
     let expected: string | undefined;
@@ -552,7 +553,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
 }
 
 /**
- * Desktop steps (an imported desktop draft's Repaired steps item): the approver's Write Steps are added to exactly the
+ * Desktop steps (an imported desktop draft's or a desktop AI repair's Repaired steps item): the approver's Write Steps are added to exactly the
  * listed steps and the result is signed, bound to the app the steps launch (engine signDesktopSteps, which re-checks
  * the hash, the digest, the safety flags and the change list). The lines the approver read must be the ones the fields
  * give. No Site Login is bound (desktop runs refuse one); its secrets still keep a record that names one out.
@@ -576,6 +577,8 @@ function signDesktop(
   // Desktop steps are reviewed as written, so the change list the approver read must be there (shownTextChanged skips a
   // missing one, which older browser items need).
   if (typeof p.shownText.changeList !== 'string' || p.shownText.changeList === '') return c.refuse([SHOWN_TEXT_CHANGED]);
+  // An AI repair's proof is what the approver weighed: its evidence line must be there too (rebuilt above).
+  if (desktopRepairProof(proposal) !== undefined && typeof p.shownText.evidenceLine !== 'string') return c.refuse([SHOWN_TEXT_CHANGED]);
   let expected: string[] | undefined;
   try {
     expected = engine.desktopSafetyFlags(engine.parseDesktopScript(p.steps));

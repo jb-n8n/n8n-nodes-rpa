@@ -40,6 +40,8 @@ export interface DesktopProveInput {
   marks: Map<number, ChangedStep>;
   stop: RepairStop | null;
   vars: Record<string, string>;
+  /** Which variables are secrets: a step that only signs in after a secret fill is replayed (DR10). Absent: none is. */
+  isSecretVar?(name: string): boolean;
   /** The step context's masker for the proof (token, key, secret variables). */
   stepMasker: Masker;
   /** Every secret of the run, for messages. */
@@ -68,7 +70,7 @@ export async function proveDesktopRepair(input: DesktopProveInput): Promise<Desk
   let surface: DesktopSurface | undefined;
   // The proof replays from step 1, so it stops at the first step that writes or looks like a write (DR9), or where the
   // repair stopped, whichever comes first: such a step is only resolved, never run a second time.
-  const flagged = firstStopIndex(doc, 0);
+  const flagged = firstStopIndex(doc, 0, { ...(input.isSecretVar ? { isSecretVar: input.isSecretVar } : {}), changed: new Set([...input.changed, ...input.added, ...input.marks.keys()]) });
   const stopAt = Math.min(flagged, input.stop ? input.stop.index : doc.steps.length);
   const stopped = stopAt < doc.steps.length;
   const because: DesktopProofEvidence['stoppedBecause'] = !stopped ? null

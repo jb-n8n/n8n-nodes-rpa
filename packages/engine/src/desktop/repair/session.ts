@@ -12,6 +12,7 @@ import { neutralize } from '../../agent/tools.js';
 import { looksDestructive } from '../../policy/destructive.js';
 import { hasWriteWord, looksLikeWrite } from '../../proposal/desktop.js';
 import { maskClipped, type Masker } from '../../secrets/mask.js';
+import { canonicalize } from '../../sign.js';
 import { runSteps, type StepContext } from '../../steps/run.js';
 import type { DesktopLocator, DesktopScript, DesktopStep, ErrorCode, RunState, Step, WindowSel } from '../../types.js';
 import { PolicyRefusedError, RunnerError, type RunnerAction, type RunnerWindow } from '../protocol.js';
@@ -100,12 +101,57 @@ function actionOf(step: DesktopStep): RunnerAction | undefined {
   return undefined;
 }
 
+/** A fill whose whole value is one secret variable (`{{var.password}}`): the only way a signed step types a secret. */
+const SECRET_FILL_VALUE_RE = /^\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}$/;
+/** The write words a sign-in window's own button may carry and still only sign in (OK, Submit). */
+const SIGN_IN_WRITE_WORDS = /\b(ok|submit)\b/gi;
+const camelWords = (t: string): string => t.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_.\-]+/g, ' ');
+
+/**
+ * DR10, the sign-in exemption from DR9: whether step `i` only signs in. True only for a step that is not a declared write,
+ * that the repair did not change (`changed`), right after an unchanged fill whose whole value is one secret variable,
+ * and that is one of:
+ * - the key Enter in that same field (its primary target is the fill's, or it has no target, so the key goes to the field
+ *   the secret was just typed into);
+ * - a click on that same field;
+ * - a click in the same window as that field (both primary targets name the same window) whose only write words, in its
+ *   intent and in the names and ids of its locator, are OK or Submit: the sign-in window's own submit button.
+ * Signing in posts nothing, so such a step is run in the repair and in the proof. Anything else that looks like a write
+ * stops them as DR9 says. Without `isSecretVar` nothing is exempt (fails closed).
+ */
+export function signsInOnly(doc: DesktopScript, i: number, o: { isSecretVar?: (name: string) => boolean; changed?: ReadonlySet<number> } = {}): boolean {
+  const step = doc.steps[i];
+  const prev = doc.steps[i - 1];
+  if (!o.isSecretVar || !step || !prev || step.write === true || prev.write === true || o.changed?.has(i) || o.changed?.has(i - 1)) return false;
+  if (!('fill' in prev)) return false;
+  const v = SECRET_FILL_VALUE_RE.exec(prev.fill.value);
+  if (!v || !o.isSecretVar(v[1]!)) return false;
+  const field = prev.fill.field.uia;
+  const same = (a: unknown, b: unknown): boolean => {
+    try { return canonicalize(a) === canonicalize(b); } catch { return false; }
+  };
+  if ('key' in step) return step.key.key === 'Enter' && (step.key.target === undefined || same(step.key.target.uia, field));
+  if (!('click' in step)) return false;
+  const target = step.click.uia;
+  if (same(target, field)) return true;
+  if (field.window === undefined || target.window === undefined || !same(target.window, field.window)) return false;
+  const conds = [target, ...(step.click.fallbacks ?? []).map((f) => f.uia)].flatMap((t) => t.path);
+  const texts = [step.intent, ...conds.flatMap((c) => [c.name ?? '', camelWords(c.automationId ?? '')])];
+  if (texts.some((t) => looksDestructive(t, ''))) return false;
+  return !texts.some((t) => hasWriteWord(camelWords(t).replace(SIGN_IN_WRITE_WORDS, ' ')));
+}
+
 /**
  * The index of the first step at or after `from` that is a declared write or looks like one (looksLikeWrite: what the
  * review page flags as a candidate write), or the number of steps. Repair and proof run no such step: they resolve it.
+ * A step that only signs in (signsInOnly, DR10) does not stop them.
  */
-export function firstStopIndex(doc: DesktopScript, from = 0): number {
-  for (let i = from; i < doc.steps.length; i++) if (doc.steps[i]!.write === true || looksLikeWrite(doc.steps[i]!)) return i;
+export function firstStopIndex(doc: DesktopScript, from = 0, o: { isSecretVar?: (name: string) => boolean; changed?: ReadonlySet<number> } = {}): number {
+  for (let i = from; i < doc.steps.length; i++) {
+    const s = doc.steps[i]!;
+    if (s.write === true) return i;
+    if (looksLikeWrite(s) && !signsInOnly(doc, i, o)) return i;
+  }
   return doc.steps.length;
 }
 
@@ -490,7 +536,7 @@ export class DesktopRepairSession {
 
   /** After a fix: the steps go on up to the first step that writes or looks like a write (resolved only), or to the end. */
   private async goOn(from: number, done: string): Promise<string> {
-    const stopAt = firstStopIndex(this.doc, from);
+    const stopAt = firstStopIndex(this.doc, from, { isSecretVar: (n) => this.h.isSecretVar(n), changed: new Set(this.markMap().keys()) });
     if (from < stopAt) {
       const res = await this.runRange(from, stopAt);
       if (!res.ok) {

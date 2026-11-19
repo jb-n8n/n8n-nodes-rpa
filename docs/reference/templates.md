@@ -244,6 +244,13 @@ after `approvalTimeoutHours` (72), then:
   never reads the stored row the emails compare with.
 - **Desktop steps**: one email, `Approve desktop steps v<version> for <name>?`, with the numbered steps and a
   **Review and decide** button, to a form with **Decision** and the candidate writes as tick boxes, none ticked to start.
+  A desktop AI repair (version N+1 of N, with its proof) is reviewed whole, as an import is, and the email adds: the
+  proof's evidence line; what changed from version N, only when **The approved version** finds its row and **Check the
+  approved version** says its signature fits (otherwise that it could not be compared); and, on each step, whether it
+  is as approved in version N, retargeted or added by the repair, and whether the proof ran it, only found it, or did
+  not reach it. "As approved" comes from that verified row, never from the item. The steps the repair did not change
+  start ticked as version N marked them (a candidate write as a tick, another write by its number), only from that
+  verified row; otherwise none starts ticked. Writes are always ticked again: Sign Steps signs only the ticked ones.
 - Approve: **Sign steps** signs, the row becomes `active`, older `active` rows of the name become `superseded`, and
   **Email signed steps** confirms. Reject or a refused signature: `rejected`. No answer in time: `expired`.
 - Rejected Repaired steps can come back unchanged if the next repair produces the same steps. They reuse their row.

@@ -7,11 +7,16 @@ import {
   DESKTOP_REPAIR_NEEDS_SIGNED, PROOF_RESERVE_MS, runDesktopTask, type DesktopRepairSuccess, type DesktopTaskInput, type DesktopTaskResult,
 } from '../src/desktop/task.js';
 import { REPAIR_ALREADY_RAN } from '../src/messages.js';
-import { desktopProposal, signDesktopSteps } from '../src/proposal/desktop.js';
+import {
+  DESKTOP_NEEDS_FIRST_VERSION, DESKTOP_PROOF_INVALID, DESKTOP_REPAIR_VERSION, DESKTOP_WRITES_PRESET, desktopProposal, desktopSafetyFlags, desktopStepChanges, signDesktopSteps,
+  type DesktopProposal,
+} from '../src/proposal/desktop.js';
 import { proposalDigest } from '../src/proposal/proposal.js';
+import { scriptHash } from '../src/sign.js';
 import { stepTarget } from '../src/desktop/repair/session.js';
 import type { DesktopScript, DesktopStep } from '../src/types.js';
 import { fakeModel, type FakeTurn } from './fake-model.js';
+import { call, on, V2_TURNS } from './erp-v2-turns.js';
 import { ERP_PASSWORD, ERP_POLICY, FakeRunner, RUNNER_TOKEN, type ErpChange } from './fake-runner.js';
 import { EXPECTED, VARS } from './fixtures/erp-steps.js';
 
@@ -23,18 +28,6 @@ afterEach(async () => {
   await runner?.close();
   runner = undefined;
 });
-
-/** The ref of the element `ControlType "name"` in the latest view of a tool result (the view's lines are indented). */
-function ref(text: string, controlType: string, name: string): string {
-  const view = text.slice(text.lastIndexOf('<page_content>'));
-  const m = [...view.matchAll(/^\s*\[(e\d+)\] (\S+) "([^"]*)"/gm)].find((x) => x[2] === controlType && x[3] === name);
-  if (!m) throw new Error(`no ${controlType} "${name}" in the view:\n${view}`);
-  return m[1]!;
-}
-/** The latest view the model saw (a refused tool call carries none: the view before it still holds). */
-const latestView = (messages: { content: string }[]): string => [...messages].reverse().find((m) => m.content.includes('<page_content>'))?.content ?? '';
-const on = (tool: string, controlType: string, name: string): FakeTurn => (_t, messages) => ({ name: tool, args: { ref: ref(latestView(messages), controlType, name) } });
-const call = (tool: string, args: Record<string, unknown> = {}): FakeTurn => () => ({ name: tool, args });
 
 /**
  * The sample's v1 steps with sign-in by a click on Sign in instead of Enter in Password. The UiPath sample presses
@@ -85,17 +78,6 @@ function assertNoWriteAndNoUnapprovedStepAct(r: FakeRunner): void {
     if (mode === 'probe') expect(['click', 'doubleClick']).toContain(q.params.action);
   }
 }
-
-/**
- * The ERP Demo v2 repair as the live model did it: Find for Search, Reports opened without closing File first (the
- * stale "Click File" folds, B7), Export line items..., Continue added.
- */
-const V2_TURNS: FakeTurn[] = [
-  on('use_target', 'Button', 'Find'),
-  on('expand', 'MenuItem', 'Reports'),
-  on('use_target', 'MenuItem', 'Export line items...'),
-  on('add_step', 'Button', 'Continue'),
-];
 
 describe('desktop self-repair on the fake runner', () => {
   it('v2: repairs Find and the Reports menu, adds Continue without clicking it, proves up to it and proposes version 2', async () => {
@@ -158,16 +140,67 @@ describe('desktop self-repair on the fake runner', () => {
     expect(model.invocations[0]![1]!.content).toContain('<page_content>');
   });
 
-  it('with the UiPath sample (sign-in by Enter) the proof stops at step 4, which looks like a write (DR9)', async () => {
+  it('the repaired version signs like an import (writes ticked again) and the next run on v2 needs no model (DR11)', async () => {
+    const { r } = await run(V2_TURNS);
+    const out = repaired(r);
+    const p = out.proposal as unknown as DesktopProposal;
+    const reasons = (x: ReturnType<typeof signDesktopSteps>) => (x.ok ? [] : x.reasons);
+    // Signed with Save (17) and Continue (14) ticked as writes, version 2 of base 1.
+    const signed = signDesktopSteps({ proposal: p, key: KEY, approverId: OWNER, reviewedDigest: out.digest, writeSteps: [14, 17] });
+    expect(reasons(signed)).toEqual([]);
+    if (!signed.ok) return;
+    expect(signed.row).toMatchObject({ name: 'erp-1', version: 2, writeSteps: [14, 17] });
+    // Crafted items: a proof that claims more than the steps, a version not above its base, a write preset, no proof.
+    const craft = (q: DesktopProposal) => reasons(signDesktopSteps({ proposal: q, key: KEY, approverId: OWNER, reviewedDigest: proposalDigest(q), writeSteps: [] }));
+    const proof = out.proof;
+    expect(craft({ ...p, evidence: { ...p.evidence, proof: { ...proof, replayed: 30 } } } as DesktopProposal)).toContain(DESKTOP_PROOF_INVALID);
+    expect(craft({ ...p, evidence: { ...p.evidence, proof: { ...proof, stoppedAt: 15 } } } as DesktopProposal)).toContain(DESKTOP_PROOF_INVALID);
+    expect(craft({ ...p, evidence: { ...p.evidence, proof: { ...proof, changedSteps: [12, 9] } } } as DesktopProposal)).toContain(DESKTOP_PROOF_INVALID);
+    expect(craft({ ...p, evidence: { ...p.evidence, proof: { ...proof, note: 'trust me' } } } as DesktopProposal)).toContain(DESKTOP_PROOF_INVALID);
+    expect(craft({ ...p, evidence: { ...p.evidence, proof: { ...proof, stoppedBecause: 'looks fine' } } } as DesktopProposal)).toContain(DESKTOP_PROOF_INVALID);
+    expect(craft({ ...p, baseVersion: 2 })).toContain(DESKTOP_REPAIR_VERSION);
+    const { proof: _gone, ...noProof } = p.evidence as unknown as Record<string, unknown>;
+    expect(craft({ ...p, evidence: noProof } as unknown as DesktopProposal)).toContain(DESKTOP_NEEDS_FIRST_VERSION);
+    const preset = structuredClone(p);
+    preset.steps.steps[16]!.write = true;
+    expect(craft({ ...preset, hash: scriptHash(preset.steps), safetyFlags: desktopSafetyFlags(preset.steps), changes: desktopStepChanges(preset.steps) }))
+      .toContain(DESKTOP_WRITES_PRESET);
+
+    // The next run, on v2, with version 2: the script lane, no model call.
+    await runner?.close();
+    runner = await FakeRunner.start({ app: 'erp', policy: ERP_POLICY, erpUi: 'v2' });
+    const model = fakeModel([]);
+    const next = await runDesktopTask({
+      script: JSON.parse(JSON.stringify(signed.row.steps)), trust: { required: true, signature: signed.row.signature, approvedBy: OWNER, key: KEY, expect: { name: 'erp-1', version: 2 } },
+      runner: runner.endpoint, vars: VARS, secretVars: ['password'], defaultStepTimeoutMs: 400, budgetMs: 60_000,
+      repair: { model, goal: 'Export the line items of a company as a CSV file' },
+    });
+    if (!next.ok) throw new Error(`${next.code}: ${next.message}`);
+    expect(next.lane).toBe('script');
+    expect(model.invocations).toHaveLength(0);
+    expect(next.files.map((f) => f.fileName)).toEqual(['line-items.csv']);
+  });
+
+  it('with the UiPath sample (sign-in by Enter in Password) the proof replays the sign-in and goes on (DR10)', async () => {
     const { r, runner: fr } = await run(V2_TURNS, { script: EXPECTED });
     const out = repaired(r);
-    expect(out.proof).toEqual({ replayed: 3, stoppedAt: 4, stoppedBecause: 'looks like a write', changedSteps: [9, 13], addedSteps: [12, 14] });
+    expect(out.proof).toEqual({ replayed: 13, stoppedAt: 14, stoppedBecause: 'looks like a write', changedSteps: [9, 13], addedSteps: [12, 14] });
     assertNoWriteAndNoUnapprovedStepAct(fr);
     const begins = fr.requests.filter((q) => q.method === 'run.begin').map((q) => q.params.runId);
     const proofReqs = fr.requests.slice(fr.requests.findIndex((q) => q.method === 'run.begin' && q.params.runId === begins[1]));
-    expect(proofReqs.filter((q) => q.method === 'act').map((q) => q.params.action)).toEqual(['type', 'type']);
-    expect(proofReqs.some((q) => q.method === 'resolve' && JSON.stringify(q.params.target).includes('txtPassword'))).toBe(true);
-    expect(out.note).toContain('the proof stopped at step 4 (looks like a write: found, not run)');
+    // Enter in the field the password was just typed into signs in: sent in step mode, without a write mark.
+    const enter = proofReqs.find((q) => q.method === 'act' && q.params.action === 'key');
+    expect(enter?.params).toMatchObject({ action: 'key', value: 'Enter' });
+    expect(enter?.params.mode ?? 'step').toBe('step');
+    expect(enter?.params.write).toBeUndefined();
+    expect(out.note).toContain('the proof stopped at step 14 (looks like a write: found, not run)');
+  });
+
+  it('without the secret variables named, the sign-in Enter still stops the proof (DR10 fails closed)', async () => {
+    const { r } = await run(V2_TURNS, { script: EXPECTED, more: { secretVars: [] } });
+    // The password is no secret here, so nothing marks step 4 as a sign-in: DR9 stops the proof there.
+    const out = repaired(r);
+    expect(out.proof.stoppedAt).toBe(4);
   });
 
   it('without the confirm dialog the repair goes on to the declared write, resolves it and stops there', async () => {

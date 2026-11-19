@@ -160,7 +160,8 @@ function lint(w: WorkflowJson): void {
     expect(data.at(-1), n.name).toBe('Log run');
     expect(data.length, n.name).toBeLessThanOrEqual(2);
     expect(error, n.name).toEqual(['Log failed run']);
-    if (!n.credentials?.rpaDesktopRunnerApi) expect(n.notes, n.name).toContain(REPAIR_NOTE);
+    // DR13: a desktop Run steps gets the same how-to, for the app instead of the site (repair stays off as generated).
+    expect(n.notes, n.name).toContain(n.credentials?.rpaDesktopRunnerApi ? REPAIR_NOTE.replace('when the site changes', 'when the app changes') : REPAIR_NOTE);
   }
   // The run log is there exactly when a Run steps is.
   for (const name of LOG_NODES) expect(w.nodes.some((x) => x.name === name), name).toBe(runs.length > 0);
@@ -850,7 +851,7 @@ describe('buildWorkflow', () => {
     const build = (d: ReturnType<typeof desktop>) => buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [d], source: 'recording' });
     const none = build(desktop([], []));
     expect(none.nodes.some((n) => n.name.startsWith('Fill in the variables'))).toBe(false);
-    expect(byName(none, 'd').notes).toBe('Runs the signed desktop steps d on the desktop runner. Pick RPA Desktop Runner and RPA Step Signing here.');
+    expect(byName(none, 'd').notes).toBe('Runs the signed desktop steps d on the desktop runner. Pick RPA Desktop Runner and RPA Step Signing here.\nTo let it repair itself when the app changes:\n1. Connect a chat model to its Model input (after step 2).\n2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.\n3. Connect its Repaired Steps output to an Execute Workflow node that calls RPA: 3 Approve steps, and its error output to Log failed run again.');
     const about = content(byName(none, 'About this import'));
     // Two colours (the two notes): no legend. A desktop bot has no repair line.
     expect(about).not.toMatch(/Gold|Green:|repair/);

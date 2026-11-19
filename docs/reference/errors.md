@@ -36,7 +36,7 @@ guidance reading `Check the node parameters and the RPA credentials.` A Sign Ste
 | `auth_blocked` | The site asked for a second factor this run could not answer. The message says which: no TOTP Secret, or the One-Time Code Workflow gave no code (for example because it is not published). | Add the TOTP Secret to the Site Login, or fix and publish the One-Time Code Workflow. A push message or a hardware key needs a person to sign in. |
 | `site_down` | The site did not answer, returned a server error, or the first page did not load in time. | Try again later. |
 | `browser_unavailable` | The browser could not be reached, refused the token or the certificate. | Check the RPA Browser credential ([Where the browser runs](../../README.md#where-the-browser-runs)). On a Windows machine, run `rpa status` there. |
-| `drift_detected` | A step did not find what it expected: no element, more than one, or one that could not take the action. For a browser control that is not there, the message also says what the page shows instead. | Correct the step, or record it again and approve the new version. Browser steps can repair themselves with AI Repair. |
+| `drift_detected` | A step did not find what it expected: no element, more than one, or one that could not take the action. For a browser control that is not there, the message also says what the page shows instead. | Correct the step, or record it again and approve the new version. Browser and desktop steps can repair themselves with AI Repair. |
 | `not_found` | The page or the data was not found. | Check the URL, the Goal and the trace. |
 | `incomplete` | Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled. | Check the trace. Raise **Options → Max Seconds** if runs time out. When self-repair stopped, see [A repair that stops](#a-repair-that-stops). |
 | `script_untrusted` | Nothing ran: the steps are not signed, or the signature does not fit (another Step Signing key, Site Login, name, version or start site), or their row was changed after they were approved. | Approve the steps again after reading every step on the form. If nobody changed the setup, check who edited the `playwright_steps` table. See [Security](security.md#if-the-signing-key-is-lost-or-changed) for a changed key. |
@@ -96,6 +96,10 @@ The messages you meet most, word for word:
 | App not installed | `runner_unavailable`: `the desktop runner could not start ErpDemo.exe: it is not installed at the path the runner's policy names (allowedApps[].path). ...` |
 | Runner busy | `busy`: `the desktop runner is busy with another run` |
 | Missing variable | `missing input "<name>"`, followed by `(a secret goes in an RPA Secret Variables credential, any other value in Options → Variables)` |
+| Desktop repair gave up | `drift_detected`: the step's own failure, then `AI repair did not fix it: the repair gave up: <the model's reason>. It used 1 chat model call and … tokens.` and the not-again sentence. Also when a fix would change a declared write step or move a step that types a secret variable: update that step by hand. |
+| Desktop repair not tried | `drift_detected`: the step's own failure, then the reason in brackets: `(AI repair of desktop steps needs signed steps)`, `(AI repair is not available once a write step ran in this run)`, `(AI repair not attempted: the control was found but did not respond)` or `(AI repair not attempted: the file's checks failed)`. No chat model call. |
+| Desktop repair not proven | `drift_detected`: `repaired steps withheld: the proof in a fresh session did not pass. Reason: …` and what it used. Nothing goes to approval. |
+| Deliver Unconfirmed Rows on desktop steps | `Deliver Unconfirmed Rows applies to browser steps only: turn it off for desktop steps.` (a configuration error) |
 
 Windows-side failures (the supervisor, the installer, the policy tool) are in the
 [Windows guide](../install/windows.md#11-when-something-fails).
@@ -139,7 +143,8 @@ A repair tries again when:
 
 The record is kept where the login breaker is kept: in the workflow (its static data) and in n8n's memory, or in Redis
 when the node shares its login breaker across workers (**Share Login Breaker Across Workers (RPA Redis)**, keys
-`playwrightGuard:repair:…`). In queue mode without Redis, each worker remembers its own failures. A repair that worked
+`playwrightGuard:repair:…`). A desktop Run Steps has no RPA Redis slot: its record is kept in the workflow and in
+n8n's memory, and in queue mode each worker remembers its own. In queue mode without Redis, each worker remembers its own failures. A repair that worked
 and waits for approval also holds the next repairs in the data feed: the template turns AI Repair off while a version
 waits, until someone decides or the request expires. A failed one holds them until someone acts as above.
 

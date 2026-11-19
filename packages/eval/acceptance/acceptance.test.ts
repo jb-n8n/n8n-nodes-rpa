@@ -13,6 +13,10 @@ import type { ICredentialDataDecryptedObject, IDataObject, INodeExecutionData } 
 import { adoptDraft, importSource, runTask, signSteps, UNVERIFIED_COUNT_FLAG, type ChatMessage, type ChatModel, type Script, type TaskInput, type TaskResult } from 'n8n-rpa-engine';
 import { SANDBOX, startPortal, type SandboxPortal } from 'n8n-rpa-sandbox/testing.js';
 import { clickNamed, done, fakeModel, refByName, use, type FakeTurn } from '../../engine/test/fake-model.js';
+import { V2_TURNS as ERP_V2_TURNS } from '../../engine/test/erp-v2-turns.js';
+import { ERP_PASSWORD, ERP_POLICY, FakeRunner } from '../../engine/test/fake-runner.js';
+import { EXPECTED, VARS as ERP_VARS } from '../../engine/test/fixtures/erp-steps.js';
+import { harness as desktopHarness } from '../../n8n-nodes-rpa/test/harness.js';
 import { APPROVER as ENGINE_APPROVER, ERP_CHECK, erpScript, LOCAL as ENGINE_LOCAL, SAP_VARS, sapPolicy, SECRETS as ENGINE_SECRETS, signedLaneInput, TEST_KEY } from '../../engine/test/helpers.js';
 import { loadEngine, type Engine } from '../../n8n-nodes-rpa/nodes/Playwright/engine.js';
 import { resetGuardsForTests } from '../../n8n-nodes-rpa/nodes/Playwright/guard.js';
@@ -554,6 +558,50 @@ describe('approving imported desktop steps through template 3 (I1)', () => {
     expect(JSON.parse(String(active(table)[0].steps)).steps.some((st: IDataObject) => st.write === true)).toBe(false);
     expect(table.rows.map((r) => r.status)).toEqual(['superseded', 'superseded', 'active']);
   });
+});
+
+describe('a desktop AI repair through Run Steps and template 3 (deterministic, DR11)', () => {
+  it('v1 approved, v2 drifts, repairs, is approved with its writes ticked again, and the next run makes 0 LLM calls', async () => {
+    const table = new MemoryTable();
+    const feed: Feed = { template: DATA_FEED, site: portal };
+    // Version 1: the sample project as the import gives it, approved with Save (16) ticked.
+    const imported = { json: desktopRepairedStepsJson(engine, engine.desktopProposal(EXPECTED)) };
+    expect((await approvalRun(table, imported, 'approve', feed, { ticked: ['Step 16: Click Save'] })).outcome).toBe('active');
+    const v1 = table.rows.find((r) => r.status === 'active')!;
+    // ERP Demo v2: Run Steps with AI Repair on and a chat model (the live model's turns, played back).
+    const fake = await FakeRunner.start({ app: 'erp', policy: ERP_POLICY, erpUi: 'v2' });
+    try {
+      const run = async (row: IDataObject, model: ReturnType<typeof fakeModel>) => executeRunSteps(desktopHarness({
+        params: {
+          operation: 'runSteps', runsOn: 'desktop', steps: String(row.steps), requireSignedSteps: true, signature: row.signature, approvedBy: row.approvedBy,
+          aiRepair: true, goal: 'Export the line items of company 1000 for 2026 as a CSV file',
+          options: { name: 'erp-1', expectedVersion: row.version, variables: { values: Object.entries(ERP_VARS).filter(([k]) => k !== 'password').map(([name, value]) => ({ name, value })) }, timeout: 1, maxSeconds: 120 },
+        },
+        credentials: {
+          rpaDesktopRunnerApi: { ...fake.endpoint }, playwrightScriptSigningApi: { secretKey: KEY },
+          rpaSecretVariablesApi: { variables: { values: [{ name: 'password', value: ERP_PASSWORD }] } },
+        },
+        continueOnFail: true, model,
+      }), engine);
+      const repairModel = fakeModel(ERP_V2_TURNS);
+      const [data, repaired] = await run(v1, repairModel);
+      expect(data).toEqual([]);
+      expect(repaired).toHaveLength(1);
+      expect(repaired[0]!.json).toMatchObject({ name: 'erp-1', baseVersion: 1, version: 2 });
+      // Template 3: Continue (14) and Save (17) ticked again.
+      const approved = await approvalRun(table, repaired[0]!, 'approve', feed, { ticked: ['Step 14: Click Continue', 'Step 17: Click Save'] });
+      expect(approved).toMatchObject({ outcome: 'active', signed: { version: 2, writeLine: 'Signed as writes: step 14 (Click Continue), step 17 (Click Save)' } });
+      expect(table.rows.filter((r) => r.status === 'active').map((r) => r.version)).toEqual([2]);
+      const v2 = table.rows.find((r) => r.status === 'active')!;
+      const next = fakeModel([]);
+      const [nextData] = await run(v2, next);
+      expect(nextData[0]!.json).toMatchObject({ name: 'erp-1', version: 2, lane: 'script', llmCalls: 0 });
+      expect(next.invocations).toHaveLength(0);
+      expect(JSON.stringify([repaired, nextData, table.rows])).not.toContain(ERP_PASSWORD);
+    } finally {
+      await fake.close();
+    }
+  }, 120_000);
 });
 
 describe('pending lifecycle', () => {

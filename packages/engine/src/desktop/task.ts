@@ -485,7 +485,7 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
       await client.call('run.end', { runId: id, reserveFor: proofId, reserveMs: PROOF_RESERVE_MS }, END_WAIT_MS).catch(() => undefined);
       runId = undefined;
       const proof = await proveDesktopRepair({
-        client, runId: proofId, doc: end.doc, changed: end.changed, added: end.added, marks: end.marks, stop: end.stop, vars,
+        client, runId: proofId, doc: end.doc, changed: end.changed, added: end.added, marks: end.marks, stop: end.stop, vars, isSecretVar,
         stepMasker: (() => { const pm = createMasker([input.runner?.token, input.trust.key]); registerSecretVars(input.secretVars, vars, pm); return pm; })(),
         mask: (ps) => createMasker([...sessionMask().secrets, ...(ps ? outputMasker([], ps).secrets : [])]),
         leaseMs, busyUntil: Math.min(Date.now() + PROOF_RESERVE_MS + 5_000, deadline), defaultStepTimeoutMs: ctx.defaultTimeoutMs, signed: gate.signed,
