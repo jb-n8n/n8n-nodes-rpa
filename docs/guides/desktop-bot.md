@@ -185,7 +185,9 @@ you use n8n from, and open the form there. [Record a bot](record-a-bot.md) expla
 3. The third slot is yours: the password. On that node, create an **RPA Secret Variables** credential and copy into it
    the three values the last page and the gold note give: one variable named `password`, with the value `demo1234`,
    and `ErpDemo.exe` in its **May Be Typed Into**, which keeps the password to this app. **Options → Variables** already holds
-   the company code you ticked, starting with the value you recorded.
+   the company code you ticked, starting with the value you recorded. The credential is named
+   `RPA Secret Variables account` unless you rename it. A later bot's workflow file names that credential, and n8n
+   selects it by itself when exactly one has that name: add the later bot's variables to it.
 4. Run the workflow (the **Execute** button at the bottom of the canvas). On the Windows machine nobody needs to be
    signed in: the service signs the bot user in, ERP Demo opens, works and closes, and the bot user is signed out
    again. The output holds the values you read with F9 under `values`, and the exported file in the **Binary** tab.

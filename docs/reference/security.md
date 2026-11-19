@@ -185,8 +185,11 @@ exactly `{{var.name}}`. Any other use of a value is refused. Each value must be 
 **Where its values may be typed.** The credential is not tied to the steps that were approved. A signature binds the
 steps, not the secret variables that a workflow attaches.
 So whoever can approve steps, and can select this credential on a Run Steps node, chooses where its values go. With
-approval on the import form, that is anyone who can open the form. The credential's optional field **May Be Typed
-Into** lets the owner of the secrets limit that. List one entry per line:
+approval on the import form, that is anyone who can open the form. The workflow file an import hands over names this
+credential by name only, `RPA Secret Variables account` (the name n8n gives the first one made), on each Run Steps
+whose steps type a secret variable, and n8n selects it when exactly one credential in the project has that name: the
+person importing does not pick it, and **May Be Typed Into** is what limits where its values go. That optional field
+lets the owner of the secrets limit it. List one entry per line:
 - an app's program file name for desktop steps, such as `ErpDemo.exe` (compared without case, by file name, as the
   runner compares it),
 - a site's exact host for browser steps, such as `erp.example.com` (read as Also Allow These Sites reads a host: no
