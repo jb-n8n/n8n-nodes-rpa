@@ -18,7 +18,7 @@ import { isVisibleNow } from '../steps/locator.js';
 import { newRunState, type StepContext } from '../steps/run.js';
 import { stopTrace, wantTrace } from '../trace/trace.js';
 import { maskSessionSegments, shownMessage } from '../steps/urls.js';
-import type { ChatModel } from '../agent/model.js';
+import { countingModel } from '../agent/model.js';
 import type { ErrorCode, RunState, Script, StepFailure, Violation } from '../types.js';
 import { verifyRows } from '../verify/verify.js';
 import { runProve } from './prove-run.js';
@@ -93,16 +93,6 @@ export async function finishLane(input: TaskInput, runtime: LaneRuntime, result:
     await runtime.dispose();
   }
   return out;
-}
-
-/** The model with every invoke counted before it is sent: the count survives a throw anywhere in the agent lane. */
-function countingModel(model: ChatModel, calls: { n: number }): ChatModel {
-  return {
-    bindTools(defs) {
-      const bound = model.bindTools(defs);
-      return { invoke(messages, options) { calls.n++; return bound.invoke(messages, options); } };
-    },
-  };
 }
 
 export async function agentLane(input: TaskInput, original: RepairInput, h: Handoff): Promise<TaskResult> {
