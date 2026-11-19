@@ -405,7 +405,6 @@ public sealed class ServiceTests : IDisposable
     {
         _h.BeginWithApp();
         _h.Ok("act", Act(Harness.T(new { name = "Row A" }), "click", new { mode = "repair" }));
-        _h.Ok("act", Act(Id("txtUser"), "focus", new { mode = "repair" }));
         _h.Ok("act", Act(Id("lstResults"), "expand", new { mode = "repair" }));
         _h.Ok("act", Act(Id("txtUser"), "read", new { mode = "repair" }));
         _h.Err("act", Act(Id("btnSignIn"), "click", new { mode = "repair" }), RpcErrors.PolicyRefusedCode);
@@ -442,12 +441,12 @@ public sealed class ServiceTests : IDisposable
     }
 
     [Fact]
-    public void Repair_mode_Escape_on_a_window_with_a_write_control_needs_an_open_menu()
+    public void Repair_mode_Escape_needs_an_open_menu()
     {
         var w = _h.BeginWithApp();
         _h.Desktop.Focused = w.Find("txtUser");
         var e = _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
-        Assert.Equal("policy_refused: in repair mode Escape could press a declared write control of this window (a cancel button), so it is allowed only while a menu is open",
+        Assert.Equal("policy_refused: in repair mode Escape could press a cancel button of this window, so it is allowed only while a menu is open",
             e["message"]!.GetValue<string>());
         Assert.Empty(_h.Desktop.Performed);
         // With a popup menu owned by the window open, Escape only closes the menu.
@@ -521,19 +520,197 @@ public sealed class ServiceTests : IDisposable
     }
 
     [Fact]
-    public void Repair_mode_Escape_reaches_a_dialog_the_run_window_owns()
+    public void Repair_mode_Escape_never_closes_a_dialog_even_without_a_write_control()
     {
         var main = _h.BeginWithApp();
-        // UI Automation nests an owned dialog under its owner, while the window manager lists it as a top-level window.
-        var dialog = new FakeNode("Window", "Confirm export", "ConfirmExportForm");
-        dialog.Child("Button", "Continue", "btnConfirmExport");
+        // G1: a dialog's Escape presses its cancel button, which may discard or cancel something the policy does not list.
+        var dialog = new FakeNode("Window", "Export options", "OptionsForm");
+        dialog.Child("Button", "Next", "btnNext").Child("Button", "Discard", "btnDiscard");
         main.Add(dialog);
         _h.Desktop.Windows.Insert(0, dialog);
         _h.Desktop.Foreground = dialog;
-        _h.Desktop.Focused = dialog.Find("btnConfirmExport");
-        _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
+        _h.Desktop.Focused = dialog.Find("btnNext");
+        var e = _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("allowed only while a menu is open", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_never_moves_the_focus()
+    {
+        _h.BeginWithApp();
+        var e = _h.Err("act", Act(Id("txtUser"), "focus", new { mode = "repair" }), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: repair mode allows only expand, read, Escape without a target, and click on tabs, list items and tree items", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_never_chooses_a_combo_box_item()
+    {
+        var w = _h.BeginWithApp();
+        var combo = new FakeNode("ComboBox", "Company code", "cmbCompany");
+        var list = new FakeNode("List", "", "");
+        list.Child("ListItem", "2000", "");
+        combo.Add(list);
+        w.Add(combo);
+        var e = _h.Err("act", Act(Harness.T(new { automationId = "cmbCompany" }, new { name = "2000" }), "click", new { mode = "repair" }), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: repair mode never chooses an item of a combo box: that changes a form value", e["message"]!.GetValue<string>());
+        // A Win32 combo drop-down is a list of class ComboLBox (a window of its own).
+        var drop = new FakeNode("List", "", "", w.ProcessId) { ClassName = "ComboLBox" };
+        drop.Child("ListItem", "3000", "");
+        _h.Desktop.Windows.Add(drop);
+        _h.Err("act", Act(Harness.T(new { name = "3000" }), "click", new { mode = "repair" }), RpcErrors.PolicyRefusedCode);
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Theory]
+    [InlineData("MenuItem", "Save as...", "", "expand")]
+    [InlineData("MenuItem", "Tools", "mnuApproveAll", "expand")]
+    [InlineData("TabItem", "Approve", "", "click")]
+    [InlineData("ListItem", "OK", "", "click")]
+    public void Repair_mode_never_acts_on_what_reads_like_a_write(string type, string name, string id, string action)
+    {
+        var w = _h.BeginWithApp();
+        w.Child(type, name, id);
+        var target = id.Length > 0 ? Harness.T(new { automationId = id }) : Harness.T(new { controlType = type, name });
+        var e = _h.Err("act", Act(target, action, new { mode = "repair" }), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the target's name or automation id reads like a write (save, post, submit, confirm, ok and the like); repair mode never acts on it",
+            e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    /// <summary>A dialog of the run in front of the main window, nested in its tree as UI Automation shows it.</summary>
+    private FakeNode Dialog(FakeNode main, string title, string id, params (string Type, string Name, string Id)[] children)
+    {
+        var dialog = new FakeNode("Window", title, id);
+        foreach (var c in children) dialog.Child(c.Type, c.Name, c.Id);
+        main.Add(dialog);
+        _h.Desktop.Windows.Insert(0, dialog);
+        _h.Desktop.Foreground = dialog;
+        return dialog;
+    }
+
+    private static object Probe(object target, string action = "click", object? extra = null) => Act(target, action, extra ?? new { mode = "probe" });
+
+    [Fact]
+    public void Probe_mode_clicks_a_plain_button_in_a_plain_dialog()
+    {
+        var main = _h.BeginWithApp();
+        Dialog(main, "Export options", "OptionsForm", ("Text", "Export 12 line items as CSV.", "lblInfo"), ("Button", "Next", "btnNext"), ("Button", "Cancel", "btnCancel"));
+        _h.Ok("act", Probe(Harness.T(new { controlType = "Button", automationId = "btnNext" })));
         var op = Assert.Single(_h.Desktop.Performed);
-        Assert.Same(dialog, op.Window);
+        Assert.Equal("btnNext", op.Element.AutomationId);
+    }
+
+    [Fact]
+    public void Probe_mode_types_into_a_field_and_clicks_a_menu_item()
+    {
+        var main = _h.BeginWithApp();
+        var d = Dialog(main, "Export options", "OptionsForm", ("Edit", "File name", "txtFile"));
+        d.Child("MenuItem", "Export line items...", "");
+        _h.Ok("act", Probe(Harness.T(new { automationId = "txtFile" }), "type", new { mode = "probe", value = "a.csv" }));
+        _h.Ok("act", Probe(Harness.T(new { controlType = "MenuItem", name = "Export line items..." })));
+        Assert.Equal(2, _h.Desktop.Performed.Count);
+    }
+
+    [Fact]
+    public void Probe_mode_never_acts_on_a_declared_write_control_or_with_write()
+    {
+        _h.BeginWithApp();
+        var e = _h.Err("act", Probe(Id("btnPost")), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the target is a declared write control; probe mode never acts on it", e["message"]!.GetValue<string>());
+        e = _h.Err("act", Probe(Id("btnInner"), "click", new { mode = "probe", write = true }), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: probe mode never carries write: true", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Theory]
+    [InlineData("key")]
+    [InlineData("focus")]
+    [InlineData("expand")]
+    [InlineData("read")]
+    public void Probe_mode_refuses_keys_focus_expand_and_read(string action)
+    {
+        _h.BeginWithApp();
+        var e = _h.Err("act", Probe(Id("txtUser"), action, action == "key" ? new { mode = "probe", value = "Enter" } : null), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: probe mode allows only click, doubleClick, type, select, check and uncheck", e["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Probe_mode_refuses_the_v2_confirm_dialogs_continue_button()
+    {
+        // ERP Demo v2's Confirm export: Continue is the dialog's default button, its id is btnConfirmExport and the
+        // dialog's title is "Confirm export". "confirm" is a write word, so the runner does not click it before approval.
+        var main = _h.BeginWithApp();
+        Dialog(main, "Confirm export", "ConfirmExportForm",
+            ("Text", "Export 12 line items to a CSV file?", "lblConfirm"), ("Button", "Continue", "btnConfirmExport"), ("Button", "Cancel", "btnCancelExport"));
+        var e = _h.Err("act", Probe(Harness.T(new { automationId = "btnConfirmExport" })), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the target's name or automation id reads like a write (save, post, submit, confirm, ok and the like); probe mode never acts on it",
+            e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Theory]
+    [InlineData("Confirm delete", "Are you sure?")]
+    [InlineData("Export", "Send the report to the vendor?")]
+    [InlineData("Export", "Click OK to go on")]
+    public void Probe_mode_clicks_nothing_in_a_window_whose_title_or_text_reads_like_a_write(string title, string text)
+    {
+        var main = _h.BeginWithApp();
+        Dialog(main, title, "AskForm", ("Text", text, "lblAsk"), ("Button", "Continue", "btnNext"));
+        var e = _h.Err("act", Probe(Harness.T(new { automationId = "btnNext" })), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the window's title or text reads like a write (save, post, submit, confirm, ok and the like), so probe mode clicks nothing in it",
+            e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Theory]
+    [InlineData("Edit", "Notes", "txtNotes")]
+    [InlineData("CheckBox", "Remember me", "chkRemember")]
+    public void Probe_mode_clicks_only_buttons_menu_items_links_tabs_and_list_and_tree_items(string type, string name, string id)
+    {
+        var main = _h.BeginWithApp();
+        Dialog(main, "Export options", "OptionsForm", (type, name, id));
+        var e = _h.Err("act", Probe(Harness.T(new { automationId = id })), RpcErrors.PolicyRefusedCode);
+        Assert.Equal($"policy_refused: probe mode may click only buttons, menu items, links, tabs, list items and tree items, not a {type}", e["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Probe_mode_is_capped_per_run()
+    {
+        var main = _h.BeginWithApp();
+        Dialog(main, "Export options", "OptionsForm", ("Button", "Next", "btnNext"));
+        for (var i = 0; i < RunnerService.MaxProbesPerRun; i++) _h.Ok("act", Probe(Harness.T(new { automationId = "btnNext" })));
+        var e = _h.Err("act", Probe(Harness.T(new { automationId = "btnNext" })), RpcErrors.PolicyRefusedCode);
+        Assert.Equal($"policy_refused: a run may make at most {RunnerService.MaxProbesPerRun} probe acts", e["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Run_end_may_reserve_the_runner_for_the_next_run_id()
+    {
+        using var h = new Harness(realTime: false);
+        h.Begin();
+        h.Err("run.end", new { runId = Harness.RunId, reserveFor = "proof-1" }, RpcErrors.InvalidParams);
+        h.Err("run.end", new { runId = Harness.RunId, reserveFor = "proof-1", reserveMs = 30001 }, RpcErrors.InvalidParams);
+        h.Ok("run.end", new { runId = Harness.RunId, reserveFor = "proof-1", reserveMs = 20000 });
+        await h.Runs.WaitForCleanupAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        h.Err("run.begin", new { runId = "someone-else", leaseMs = 30000 }, RpcErrors.RunnerBusyCode);
+        h.Ok("run.begin", new { runId = "proof-1", leaseMs = 30000 });
+        h.Ok("run.end", new { runId = "proof-1" });
+        await h.Runs.WaitForCleanupAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        h.Ok("run.begin", new { runId = "someone-else", leaseMs = 30000 });
+    }
+
+    [Fact]
+    public async Task A_reservation_runs_out()
+    {
+        using var h = new Harness(realTime: false);
+        h.Begin();
+        h.Ok("run.end", new { runId = Harness.RunId, reserveFor = "proof-1", reserveMs = 5000 });
+        await h.Runs.WaitForCleanupAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        h.Err("run.begin", new { runId = "someone-else", leaseMs = 30000 }, RpcErrors.RunnerBusyCode);
+        h.Time!.Advance(TimeSpan.FromSeconds(6));
+        h.Ok("run.begin", new { runId = "someone-else", leaseMs = 30000 });
     }
 
     [Fact]

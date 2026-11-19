@@ -434,7 +434,7 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 await ExpectError(-32003, () => Act(TW(MainTitle, new { automationId = "txtDateFrom" }), "key", new { value = "Escape", mode = "repair" }));
             });
 
-            await Step("repair f1: the Confirm export dialog: windows, snapshot, and Escape (mode repair) cancels it", async () =>
+            await Step("repair f1: the Confirm export dialog: windows, snapshot; Escape (mode repair) and a probe click on Continue are refused", async () =>
             {
                 await OpenConfirmExport();
                 var list = await WaitWindows("with Confirm export open", l => l.Any(w => Str(w, "title") == "Confirm export"));
@@ -445,14 +445,16 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 Observe($"snapshot without window selector: title=\"{snap["window"]!["title"]}\", nodes: {Brief(snap, 12)}");
                 var mainF1 = await SaveSnapshot("snapshot-repair-confirm-mainform.json", new { title = MainTitle });
                 Observe($"main-form snapshot with Confirm export open: {Nodes(mainF1).Count} nodes, has btnConfirmExport: {Nodes(mainF1).Any(n => Str(n, "automationId") == "btnConfirmExport")}, has Window \"Confirm export\": {HasNode(mainF1, "Window", "Confirm export")}");
-                await RepairEscape();
-                list = await WaitWindows("after Escape on Confirm export", l => !l.Any(w => Str(w, "title") == "Confirm export"));
-                var gone = !list.Any(w => Str(w, "title") == "Confirm export");
-                Observe($"Escape cancels Confirm export: {gone}; first window now: {(list.Count > 0 ? Describe(list[0]) : "none")}");
-                Expect(gone, "Escape closed Confirm export");
+                // G1: no menu is open, so a repair-mode Escape (which would press the dialog's Cancel) is refused.
+                await ExpectError(-32003, () => Call("act", new { runId = _runId, action = "key", value = "Escape", mode = "repair", timeoutMs = 5000 }));
+                // G4/G5: Continue's id (btnConfirmExport) and the dialog's title have the write word "confirm".
+                await ExpectError(-32003, () => Act(TW("Confirm export", new { controlType = "Button", name = "Continue" }), "click", new { mode = "probe" }));
+                list = await WaitWindows("after the refused Escape and probe", l => l.Any(w => Str(w, "title") == "Confirm export"));
+                Expect(list.Any(w => Str(w, "title") == "Confirm export"), "Confirm export is still open");
+                Observe($"Escapes needed to clean up: {await CloseNewWindows(baseline)}");
             });
 
-            await Step("repair f2: Continue opens the Save dialog; Escape (mode repair) cancels it", async () =>
+            await Step("repair f2: Continue opens the Save dialog; Escape (mode repair) is refused there", async () =>
             {
                 // A Confirm export left open by f1 would stay behind a second one (the menu still works through UI
                 // Automation while the dialog is modal), so start from the main window alone.
@@ -468,11 +470,14 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 Observe($"snapshot without window selector: title=\"{snap["window"]!["title"]}\", root {NodeText(snap, 0)}, {Nodes(snap).Count} nodes{(snap["truncated"]?.GetValue<bool>() == true ? " (truncated)" : "")}");
                 var mainF2 = await SaveSnapshot("snapshot-repair-save-mainform.json", new { title = MainTitle }, maxNodes: 1500);
                 Observe($"main-form snapshot with the Save dialog open: {Nodes(mainF2).Count} nodes, has Edit 1001: {Nodes(mainF2).Any(n => Str(n, "controlType") == "Edit" && Str(n, "automationId") == "1001")}");
-                await RepairEscape();
-                list = await WaitWindows("after Escape on the Save dialog", l => !l.Any(w => Str(w, "title") == SaveTitle));
-                var gone = !list.Any(w => Str(w, "title") == SaveTitle);
-                Observe($"Escape cancels the Save dialog: {gone}; first window now: {(list.Count > 0 ? Describe(list[0]) : "none")}");
-                Expect(gone, "Escape closed the Save dialog");
+                await ExpectError(-32003, () => Call("act", new { runId = _runId, action = "key", value = "Escape", mode = "repair", timeoutMs = 5000 }));
+                Observe($"Escapes needed to clean up: {await CloseNewWindows(baseline)}");
+            });
+
+            await Step("repair g: a probe click on Button \"Find\" runs; a probe click on Post (a declared write control) is refused", async () =>
+            {
+                await Act(TW(MainTitle, new { controlType = "Button", automationId = "btnFind" }), "click", new { mode = "probe" });
+                await ExpectError(-32003, () => Act(TW(MainTitle, new { automationId = "btnPost" }), "click", new { mode = "probe" }));
             });
         }
         finally
@@ -589,7 +594,8 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         {
             var list = await WaitWindows($"cleanup check {i}", l => NewWindows(l, baseline).Count == 0, ms: 1000, print: false);
             if (NewWindows(list, baseline).Count == 0) return i;
-            await RepairEscape();
+            // A step-mode Escape (a navigation key): repair mode may press Escape only while a menu is open.
+            await Call("act", new { runId = _runId, action = "key", value = "Escape", timeoutMs = 5000 });
         }
         throw new InvalidOperationException("expected: four Escapes close every new window");
     }

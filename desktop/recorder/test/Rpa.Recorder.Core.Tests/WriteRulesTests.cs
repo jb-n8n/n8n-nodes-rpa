@@ -27,6 +27,8 @@ public class WriteRulesTests
         var ts = RepoFile("packages", "engine", "src", "proposal", "desktop.ts");
         var words = Regex.Match(ts, @"const WRITE_WORDS = /\\b\((?<w>[a-z|]+)\)\\b/i;").Groups["w"].Value;
         Assert.Equal(WriteRules.Words, words);
+        // The runner refuses repair and probe acts on the same words.
+        Assert.Equal(WriteRules.Words, WriteWords.Words);
         Assert.Contains("const words = (s: string): string => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_.\\-]+/g, ' ');", ts);
         Assert.Contains("return conds.map((c) => `${c.name ?? ''} ${words(c.automationId ?? '')}`).join(' ');", ts);
         Assert.Contains("if ('click' in step) return WRITE_WORDS.test(words(step.intent)) || WRITE_WORDS.test(locatorWords(step.click));", ts);
