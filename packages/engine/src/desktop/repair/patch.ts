@@ -21,7 +21,8 @@ export type FailedPart = 'target' | 'expect';
 
 /** What the repair agent did, in order, that the new step set must keep. */
 export type Recorded =
-  | { kind: 'openMenu'; loc: DesktopLocator; name: string }
+  /** `topLevel`: a header of the window's menu bar (File, Reports), not an item inside a drop-down. */
+  | { kind: 'openMenu'; loc: DesktopLocator; name: string; topLevel?: boolean }
   | { kind: 'select'; loc: DesktopLocator; name: string }
   | { kind: 'escape' }
   | { kind: 'inserted'; loc: DesktopLocator; name: string };
@@ -94,22 +95,36 @@ export function desktopIntent(step: DesktopStep, controlName: string, mask: (s: 
   return step.intent;
 }
 
-const isFoldable = (s: DesktopStep | undefined): boolean => {
+/**
+ * A step a fix may fold away: a plain click (intent and click only, not a write) on a top-level menu header, the kind of
+ * step that only opens a drop-down. `isTopHeader` says whether its control is a header of a menu bar (the session knows
+ * it from the views); a leaf command such as "Click Refresh" is never folded.
+ */
+const isFoldable = (s: DesktopStep | undefined, isTopHeader: (step: DesktopStep) => boolean): boolean => {
   if (!s || !('click' in s) || s.write) return false;
   if (Object.keys(s).some((k) => k !== 'intent' && k !== 'click')) return false;
-  return s.click.uia.path.at(-1)?.controlType === 'MenuItem';
+  return s.click.uia.path.at(-1)?.controlType === 'MenuItem' && isTopHeader(s);
 };
+
+/** What made each added step of a fix: an expanded menu, a selected item, an Escape, or an added click. */
+export type AddedKind = Recorded['kind'];
 
 /**
  * Replaces `doc.steps[from..failedIndex]` with the recorded steps and the failed step (retargeted when `loc` is set).
- * An expanded menu becomes a click, an Escape pops the last open menu; with none open it folds the menu-opening step
- * just before the range when it is a plain click (intent and click only; at most FOLD_MAX), else it stays as a key step.
+ * An expanded menu becomes a click, an Escape pops the last open menu. Opening a top-level menu closes the others (they
+ * drop out), and when no recorded menu was open or kept it folds the step just before the range if that step only opened
+ * a top-level menu (isFoldable); an Escape with no open menu folds such a step the same way. At most FOLD_MAX folds; any
+ * other Escape stays as a key step.
  */
 export function compileFix(
   doc: DesktopScript,
-  fix: { failedIndex: number; part: FailedPart; loc?: DesktopLocator; targetName?: string; recorded: Recorded[]; isSecretVar?: (name: string) => boolean },
+  fix: {
+    failedIndex: number; part: FailedPart; loc?: DesktopLocator; targetName?: string; recorded: Recorded[]; isSecretVar?: (name: string) => boolean;
+    isTopHeader?: (step: DesktopStep) => boolean;
+  },
   mask: (s: string) => string,
-): { doc: DesktopScript; from: number; retargetedIndex: number } {
+): { doc: DesktopScript; from: number; retargetedIndex: number; addedKinds: AddedKind[] } {
+  const isTopHeader = fix.isTopHeader ?? (() => false);
   const base = doc.steps[fix.failedIndex];
   if (!base) throw new PatchError(`step ${fix.failedIndex} does not exist`);
   // DR2: a failed write step is never repaired, not even by a step inserted before it.
@@ -118,17 +133,25 @@ export function compileFix(
   let folded = 0;
   const kept: Recorded[] = [];
   const open: Recorded[] = [];
+  const fold = (): boolean => {
+    if (kept.length > 0 || folded >= FOLD_MAX || from <= 0 || !isFoldable(doc.steps[from - 1], isTopHeader)) return false;
+    from -= 1;
+    folded += 1;
+    return true;
+  };
   for (const r of fix.recorded) {
     if (r.kind === 'openMenu') {
+      if (r.topLevel) {
+        // Opening a menu-bar header closes whatever menu was open: the stale opener before the range, or recorded ones.
+        if (open.length === 0) fold();
+        for (const o of open.splice(0)) kept.splice(kept.indexOf(o), 1);
+      }
       kept.push(r);
       open.push(r);
     } else if (r.kind === 'escape') {
       const last = open.pop();
       if (last) kept.splice(kept.indexOf(last), 1);
-      else if (kept.length === 0 && folded < FOLD_MAX && from > 0 && isFoldable(doc.steps[from - 1])) {
-        from -= 1;
-        folded += 1;
-      } else kept.push(r);
+      else if (!fold()) kept.push(r);
     } else kept.push(r);
   }
   if (kept.length > DESKTOP_MAX_INSERTED_PER_FIX) throw new PatchError(`a fix may add at most ${DESKTOP_MAX_INSERTED_PER_FIX} steps`);
@@ -149,5 +172,5 @@ export function compileFix(
   }
   const next = structuredClone(doc);
   next.steps.splice(from, fix.failedIndex - from + 1, ...added, failed);
-  return { doc: parseDesktopScript(next), from, retargetedIndex: from + added.length };
+  return { doc: parseDesktopScript(next), from, retargetedIndex: from + added.length, addedKinds: kept.map((r) => r.kind) };
 }

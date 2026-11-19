@@ -53,9 +53,14 @@ async function actOn(
   const s = desktopOf(ctx);
   // A step AI repair added or retargeted acts on a control nobody approved yet: a click goes out in probe mode, a read in
   // repair mode, and nothing else is sent (the repair stops before such a step instead).
-  const changed = s.probeSteps.has(ctx.stepIndex ?? -1);
-  const mode = !changed ? 'step' : action === 'click' || action === 'doubleClick' ? 'probe' : action === 'read' ? 'repair' : undefined;
-  if (mode === undefined || (changed && step.write === true)) throw new Error(CHANGED_STEP_NOT_RUN);
+  const mark = s.changedSteps.get(ctx.stepIndex ?? -1);
+  let mode: 'step' | 'probe' | 'repair' | undefined;
+  if (mark === undefined || mark === 'checkOnly') mode = 'step';
+  else if (mark === 'probe') mode = action === 'click' || action === 'doubleClick' ? 'probe' : action === 'read' ? 'repair' : undefined;
+  else if (mark === 'expand' && action === 'click') { mode = 'repair'; action = 'expand'; }
+  else if (mark === 'select' && action === 'click') mode = 'repair';
+  else if (mark === 'escape' && action === 'key' && loc === undefined && extra.value === 'Escape') mode = 'repair';
+  if (mode === undefined || (mark !== undefined && step.write === true)) throw new Error(CHANGED_STEP_NOT_RUN);
   const t0 = Date.now();
   const target = loc ? runnerTarget(loc) : undefined;
   const candidate = target ? (await s.rpc('resolve', { target, timeoutMs: timeout })).candidate : undefined;
@@ -73,7 +78,7 @@ async function actOn(
 }
 
 /** A step AI repair changed that would type, choose, check or press a key: it never runs before approval. */
-export const CHANGED_STEP_NOT_RUN = 'a step AI repair added or changed runs before approval only when it clicks or reads';
+export const CHANGED_STEP_NOT_RUN = 'a step AI repair added or changed runs before approval only as the click, read, menu, selection or Escape it was';
 
 const VAR_REF = /\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g;
 

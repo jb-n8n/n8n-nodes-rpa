@@ -35,6 +35,15 @@ const POLL_MS = 250;
  */
 export const MIN_MASKED_TYPED = 4;
 
+/**
+ * How a step AI repair added or changed acts before anyone approved it. 'probe': a retargeted or added click goes out in
+ * the runner's probe mode, a retargeted read in repair mode. 'expand' / 'select': a click compiled from the agent's
+ * repair-mode expand or select_item replays as that repair-mode act. 'escape': a kept Escape (no target) goes out in
+ * repair mode (the runner allows it only while a menu is open). 'checkOnly': only the step's check changed; its action
+ * is the approved one and acts in step mode.
+ */
+export type ChangedStep = 'probe' | 'expand' | 'select' | 'escape' | 'checkOnly';
+
 /** One element of a desktop view: what the repair agent sees of it, masked. */
 export interface DesktopViewItem {
   ref: string;
@@ -86,10 +95,10 @@ export interface DesktopSurface extends Surface {
    */
   readonly clipboard: string[];
   /**
-   * The step indices AI repair added or retargeted (empty outside a repair or its proof): their clicks go out in the
-   * runner's probe mode, their reads in repair mode, and any other action of theirs is refused before it is sent.
+   * The steps AI repair added or changed, by index, and how each acts before approval (empty outside a repair or its
+   * proof): see ChangedStep. Any action a mark does not allow is refused before it is sent.
    */
-  readonly probeSteps: Set<number>;
+  readonly changedSteps: Map<number, ChangedStep>;
   /** Tells the surface which top-level step is running, for `errors`. */
   trackStep(current: () => number | undefined): void;
   /** Records an error against the running step. */
@@ -173,7 +182,7 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
 
   const surface: DesktopSurface = {
     kind: 'desktop',
-    client, runId, app, errors, refs, typed, clipboard, probeSteps: new Set<number>(),
+    client, runId, app, errors, refs, typed, clipboard, changedSteps: new Map<number, ChangedStep>(),
     trackStep: (fn) => { current = fn; },
     record,
     rpc,

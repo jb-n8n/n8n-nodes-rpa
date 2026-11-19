@@ -11,6 +11,7 @@
 // protocol's error codes. Targets resolve as the runner's
 // TargetResolver does: across every run window the window selector matches, each element counted once. Error messages
 // never contain typed values (unless a test turns on `echoTypedInErrors`, to prove the engine masks them anyway).
+import { looksDestructive } from '../src/desktop/repair/session.js';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -625,6 +626,10 @@ export class FakeRunner {
   private checkProbe(win: Win, e: El, action: string): void {
     if (hasWriteWord(e.name) || hasWriteWord(e.automationId)) {
       throw new RpcError(E.policy_refused, `policy_refused: the target's name or automation id ${WRITE_LIKE}; probe mode never acts on it`);
+    }
+    // DestructiveWords: the engine's denylist (plus discard) on the name and the id.
+    if (looksDestructive(e.name, e.automationId)) {
+      throw new RpcError(E.policy_refused, "policy_refused: the target's name or automation id reads like it deletes, cancels, rejects or signs out; probe mode never acts on it");
     }
     if (!PROBE_CLICKABLE.includes(e.controlType)) {
       throw new RpcError(E.policy_refused, `policy_refused: probe mode may click only buttons, menu items, links, tabs, list items and tree items, not a ${e.controlType}`);

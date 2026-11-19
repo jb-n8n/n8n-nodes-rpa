@@ -67,7 +67,11 @@ describe('desktopIntent', () => {
 });
 
 describe('compileFix', () => {
-  const fixAt = (failedIndex: number, recorded: Recorded[], extra: object = {}) => ({ failedIndex, part: 'target' as const, recorded, ...extra });
+  /** Top-level menu headers, as the session knows them from its views. */
+  const HEADERS = new Set(['File', 'Help', 'Reports', 'A', 'B', 'C']);
+  const isTopHeader = (st: DesktopStep) => 'click' in st && HEADERS.has(st.click.uia.path.at(-1)?.name ?? '');
+  const fixAt = (failedIndex: number, recorded: Recorded[], extra: object = {}) => ({ failedIndex, part: 'target' as const, recorded, isTopHeader, ...extra });
+  const top = (name: string): Recorded => ({ kind: 'openMenu', loc: loc('MenuItem', name), name, topLevel: true });
 
   it('menu stack: expand Help, escape, expand Reports keeps only Click Reports', () => {
     const d = doc();
@@ -81,6 +85,31 @@ describe('compileFix', () => {
     expect(out.doc.steps.length).toBe(EXPECTED.steps.length + 1);
     expect(intents(out.doc).slice(8, 10)).toEqual(['Click Reports', 'Click Find']);
     expect(d).toEqual(EXPECTED);
+  });
+
+  it('opening another top-level menu folds the stale menu opener before the range (B7)', () => {
+    // v2: Click File opened File; Click Export... failed; the model opens Reports without closing File first.
+    const out = compileFix(doc(), fixAt(12, [top('Reports')], { loc: loc('MenuItem', 'Export line items...'), targetName: 'Export line items...' }), same);
+    expect(out.from).toBe(11);
+    expect(intents(out.doc).slice(11, 13)).toEqual(['Click Reports', 'Click Export line items...']);
+    expect(out.doc.steps.length).toBe(EXPECTED.steps.length);
+    expect(out.addedKinds).toEqual(['openMenu']);
+    // Opening another top-level menu drops the earlier recorded one: File, then Reports, keeps only Reports.
+    const two = compileFix(doc(), fixAt(8, [top('Help'), top('Reports')], { loc: loc('Button', 'Find'), targetName: 'Find' }), same);
+    expect(intents(two.doc).slice(8, 10)).toEqual(['Click Reports', 'Click Find']);
+  });
+
+  it('a leaf command is never folded (only top-level menu headers are)', () => {
+    const d = doc();
+    d.steps[11] = { intent: 'Click Refresh', click: loc('MenuItem', 'Refresh') } as DesktopStep;
+    for (const rec of [[top('Reports')], [{ kind: 'escape' } as Recorded]]) {
+      const out = compileFix(d, fixAt(12, rec, { loc: loc('MenuItem', 'Export line items...'), targetName: 'Export line items...' }), same);
+      expect(out.from).toBe(12);
+      expect(out.doc.steps[11]?.intent).toBe('Click Refresh');
+    }
+    // Without the session's knowledge of the menu bar nothing folds.
+    const none = compileFix(doc(), { ...fixAt(12, [{ kind: 'escape' }], { loc: loc('MenuItem', 'X'), targetName: 'X' }), isTopHeader: () => false }, same);
+    expect(none.from).toBe(12);
   });
 
   it('escape after a menu-opening step folds that step', () => {

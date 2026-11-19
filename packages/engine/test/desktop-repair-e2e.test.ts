@@ -10,7 +10,7 @@ import { REPAIR_ALREADY_RAN } from '../src/messages.js';
 import { desktopProposal, signDesktopSteps } from '../src/proposal/desktop.js';
 import { proposalDigest } from '../src/proposal/proposal.js';
 import { stepTarget } from '../src/desktop/repair/session.js';
-import type { DesktopStep } from '../src/types.js';
+import type { DesktopScript, DesktopStep } from '../src/types.js';
 import { fakeModel, type FakeTurn } from './fake-model.js';
 import { ERP_PASSWORD, ERP_POLICY, FakeRunner, RUNNER_TOKEN, type ErpChange } from './fake-runner.js';
 import { EXPECTED, VARS } from './fixtures/erp-steps.js';
@@ -36,18 +36,29 @@ const latestView = (messages: { content: string }[]): string => [...messages].re
 const on = (tool: string, controlType: string, name: string): FakeTurn => (_t, messages) => ({ name: tool, args: { ref: ref(latestView(messages), controlType, name) } });
 const call = (tool: string, args: Record<string, unknown> = {}): FakeTurn => () => ({ name: tool, args });
 
+/**
+ * The sample's v1 steps with sign-in by a click on Sign in instead of Enter in Password. The UiPath sample presses
+ * Enter, which the review page flags as a possible write (a key that can press a default button), so under DR9 its proof
+ * stops at step 4 (tested below); this variant lets the proof go on to the repaired steps.
+ */
+const CLICK_SIGN_IN: DesktopScript = (() => {
+  const d = structuredClone(EXPECTED);
+  d.steps[3] = { intent: 'Click Sign in', click: { uia: { window: { exe: 'erpdemo.exe', title: 'ERP Demo - Sign in' }, path: [{ controlType: 'Button', automationId: 'btnSignIn', name: 'Sign in' }] } } };
+  return d;
+})();
+
 /** The v1 steps as the owner approved them: Save (step 16) declared a write. */
-function signedV1(writeSteps = [16]): { script: unknown; trust: DesktopTaskInput['trust'] } {
-  const p = desktopProposal(EXPECTED);
+function signedV1(writeSteps = [16], script: DesktopScript = CLICK_SIGN_IN): { script: unknown; trust: DesktopTaskInput['trust'] } {
+  const p = desktopProposal(script);
   const signed = signDesktopSteps({ proposal: p, key: KEY, approverId: OWNER, reviewedDigest: proposalDigest(p), writeSteps });
   if (!signed.ok) throw new Error(signed.reasons.join('; '));
   return { script: JSON.parse(JSON.stringify(signed.row.steps)) as unknown, trust: { required: true, signature: signed.row.signature, approvedBy: OWNER, key: KEY } };
 }
 
-async function run(turns: FakeTurn[], opts: { erpChanges?: ErpChange[]; erpUi?: 'v1' | 'v2'; more?: Partial<DesktopTaskInput>; writeSteps?: number[] } = {}) {
+async function run(turns: FakeTurn[], opts: { erpChanges?: ErpChange[]; erpUi?: 'v1' | 'v2'; more?: Partial<DesktopTaskInput>; writeSteps?: number[]; script?: DesktopScript } = {}) {
   runner = await FakeRunner.start({ app: 'erp', policy: ERP_POLICY, erpUi: opts.erpUi ?? 'v2', ...(opts.erpChanges ? { erpChanges: opts.erpChanges } : {}) });
   const model = fakeModel(turns);
-  const v1 = signedV1(opts.writeSteps);
+  const v1 = signedV1(opts.writeSteps, opts.script);
   const r = await runDesktopTask({
     ...v1, runner: runner.endpoint, vars: VARS, secretVars: ['password'], defaultStepTimeoutMs: 400, budgetMs: 120_000,
     repair: { model, goal: 'Export the line items of a company as a CSV file' }, ...opts.more,
@@ -62,7 +73,7 @@ const repaired = (r: DesktopTaskResult): DesktopRepairSuccess => {
 };
 
 /** Every control the approved v1 steps act on, as runner targets. */
-const approvedTargets = new Set(EXPECTED.steps.map((s) => stepTarget(s)).filter((l) => l !== undefined).map((l) => JSON.stringify(runnerTarget(l!))));
+const approvedTargets = new Set([...EXPECTED.steps, ...CLICK_SIGN_IN.steps].map((s) => stepTarget(s)).filter((l) => l !== undefined).map((l) => JSON.stringify(runnerTarget(l!))));
 
 /** The fake runner's act requests: none carries write, and every step-mode act is on a control the owner approved. */
 function assertNoWriteAndNoUnapprovedStepAct(r: FakeRunner): void {
@@ -75,10 +86,12 @@ function assertNoWriteAndNoUnapprovedStepAct(r: FakeRunner): void {
   }
 }
 
-/** The ERP Demo v2 repair as a person would do it: Find for Search, Reports > Export line items..., Continue added. */
+/**
+ * The ERP Demo v2 repair as the live model did it: Find for Search, Reports opened without closing File first (the
+ * stale "Click File" folds, B7), Export line items..., Continue added.
+ */
 const V2_TURNS: FakeTurn[] = [
   on('use_target', 'Button', 'Find'),
-  call('escape'),
   on('expand', 'MenuItem', 'Reports'),
   on('use_target', 'MenuItem', 'Export line items...'),
   on('add_step', 'Button', 'Continue'),
@@ -88,7 +101,7 @@ describe('desktop self-repair on the fake runner', () => {
   it('v2: repairs Find and the Reports menu, adds Continue without clicking it, proves up to it and proposes version 2', async () => {
     const { r, model, runner: fr } = await run(V2_TURNS);
     const out = repaired(r);
-    expect(out.llmCalls).toBe(5);
+    expect(out.llmCalls).toBe(4);
     expect(model.tools.map((t) => t.function.name)).toEqual(['look', 'expand', 'select_item', 'read', 'escape', 'use_target', 'add_step', 'give_up']);
     expect(out.completed).toBe(false);
     expect(out.files).toEqual([]);
@@ -96,6 +109,8 @@ describe('desktop self-repair on the fake runner', () => {
 
     const steps = out.proposal.steps.steps;
     expect(steps).toHaveLength(EXPECTED.steps.length + 1);
+    // v1's "Click File" (step 12) folded away: Reports replaced it.
+    expect(steps.map((s) => s.intent).filter((i) => i === 'Click File')).toEqual([]);
     expect(steps.map((s) => s.intent).slice(8, 15)).toEqual([
       'Click Find', 'Read Result count as out_ResultCount', 'Read First document as out_FirstDocument', 'Click Reports', 'Click Export line items...',
       'Click Continue', 'Wait for the window Export line items',
@@ -104,11 +119,11 @@ describe('desktop self-repair on the fake runner', () => {
     expect(steps.filter((s: DesktopStep) => s.write !== undefined)).toEqual([]);
     expect(out.proposal).toMatchObject({ name: 'erp-1', baseVersion: 1, version: 2 });
     expect(out.digest).toBe(proposalDigest(out.proposal));
-    expect(out.proof).toEqual({ replayed: 13, stoppedAt: 14, stoppedBecause: 'held for approval', changedSteps: [9, 13], addedSteps: [12, 14] });
+    // DR9: Continue is held (write word in its id and title) and also looks like a write: the proof resolves it only.
+    expect(out.proof).toEqual({ replayed: 13, stoppedAt: 14, stoppedBecause: 'looks like a write', changedSteps: [9, 13], addedSteps: [12, 14] });
     expect(out.proposal.evidence.proof).toEqual(out.proof);
     // Continue and Save are flagged as candidate writes for the approver.
     expect(out.proposal.safetyFlags.filter((f) => f.startsWith('candidate write'))).toEqual([
-      'candidate write: step 4 (Press Enter in Password) may save, post or submit',
       'candidate write: step 14 (Click Continue) may save, post or submit', 'candidate write: step 17 (Click Save) may save, post or submit',
     ]);
 
@@ -117,7 +132,8 @@ describe('desktop self-repair on the fake runner', () => {
     assertNoWriteAndNoUnapprovedStepAct(fr);
     const acts = fr.requests.filter((q) => q.method === 'act');
     expect(acts.some((q) => JSON.stringify(q.params.target ?? {}).includes('btnConfirmExport'))).toBe(false);
-    expect(acts.filter((q) => q.params.mode === 'repair').map((q) => q.params.action)).toEqual(['key', 'expand']);
+    // Repair mode: the session's expand of Reports, and the proof's replay of "Click Reports" as that expand (B6).
+    expect(acts.filter((q) => q.params.mode === 'repair').map((q) => q.params.action)).toEqual(['expand', 'expand']);
     // The proof: the repair run ended with a reservation for the proof's run, which started the app again.
     expect(fr.reservations).toEqual([{ runId: expect.any(String), ms: PROOF_RESERVE_MS }, { runId: undefined, ms: undefined }]);
     const begins = fr.requests.filter((q) => q.method === 'run.begin').map((q) => q.params.runId);
@@ -128,8 +144,8 @@ describe('desktop self-repair on the fake runner', () => {
     const proofStart = fr.requests.findIndex((q) => q.method === 'run.begin' && q.params.runId === begins[1]);
     const proofReqs = fr.requests.slice(proofStart);
     expect(proofReqs.filter((q) => q.method === 'act').map((q) => [q.params.action, q.params.mode ?? 'step'])).toEqual([
-      ['type', 'step'], ['type', 'step'], ['key', 'step'], ['select', 'step'], ['type', 'step'], ['type', 'step'], ['click', 'probe'],
-      ['read', 'step'], ['read', 'step'], ['click', 'probe'], ['click', 'probe'],
+      ['type', 'step'], ['type', 'step'], ['click', 'step'], ['select', 'step'], ['type', 'step'], ['type', 'step'], ['click', 'probe'],
+      ['read', 'step'], ['read', 'step'], ['expand', 'repair'], ['click', 'probe'],
     ]);
     expect(proofReqs.some((q) => q.method === 'resolve' && JSON.stringify(q.params.target).includes('btnConfirmExport'))).toBe(true);
 
@@ -142,14 +158,26 @@ describe('desktop self-repair on the fake runner', () => {
     expect(model.invocations[0]![1]!.content).toContain('<page_content>');
   });
 
+  it('with the UiPath sample (sign-in by Enter) the proof stops at step 4, which looks like a write (DR9)', async () => {
+    const { r, runner: fr } = await run(V2_TURNS, { script: EXPECTED });
+    const out = repaired(r);
+    expect(out.proof).toEqual({ replayed: 3, stoppedAt: 4, stoppedBecause: 'looks like a write', changedSteps: [9, 13], addedSteps: [12, 14] });
+    assertNoWriteAndNoUnapprovedStepAct(fr);
+    const begins = fr.requests.filter((q) => q.method === 'run.begin').map((q) => q.params.runId);
+    const proofReqs = fr.requests.slice(fr.requests.findIndex((q) => q.method === 'run.begin' && q.params.runId === begins[1]));
+    expect(proofReqs.filter((q) => q.method === 'act').map((q) => q.params.action)).toEqual(['type', 'type']);
+    expect(proofReqs.some((q) => q.method === 'resolve' && JSON.stringify(q.params.target).includes('txtPassword'))).toBe(true);
+    expect(out.note).toContain('the proof stopped at step 4 (looks like a write: found, not run)');
+  });
+
   it('without the confirm dialog the repair goes on to the declared write, resolves it and stops there', async () => {
-    const { r, runner: fr } = await run(V2_TURNS.slice(0, 4), { erpUi: 'v1', erpChanges: ['rename', 'menu'] });
+    const { r, runner: fr } = await run([V2_TURNS[0]!, call('escape'), ...V2_TURNS.slice(1, 3)], { erpUi: 'v1', erpChanges: ['rename', 'menu'] });
     const out = repaired(r);
     expect(out.proof).toEqual({ replayed: 15, stoppedAt: 16, stoppedBecause: 'declared write', changedSteps: [9, 13], addedSteps: [12] });
     expect(out.proposal.steps.steps).toHaveLength(EXPECTED.steps.length);
     assertNoWriteAndNoUnapprovedStepAct(fr);
     // Save was resolved (twice: the repair and the proof) and never clicked.
-    const save = JSON.stringify(runnerTarget(stepTarget(EXPECTED.steps[15]!)!));
+    const save = JSON.stringify(runnerTarget(stepTarget(CLICK_SIGN_IN.steps[15]!)!));
     expect(fr.requests.filter((q) => q.method === 'resolve' && JSON.stringify(q.params.target) === save).length).toBeGreaterThanOrEqual(2);
     expect(fr.requests.some((q) => q.method === 'act' && JSON.stringify(q.params.target) === save)).toBe(false);
     expect(fr.lastExportDir === undefined || fr.requests.every((q) => q.method !== 'file.retrieve')).toBe(true);

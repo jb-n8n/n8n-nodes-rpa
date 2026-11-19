@@ -9,8 +9,8 @@ import { runSteps, type StepContext } from '../../steps/run.js';
 import type { DesktopScript, ErrorCode, PortalPolicy, Script, Step, StepLogEntry, StepOutput, DownloadedFile } from '../../types.js';
 import type { RunnerClient } from '../client.js';
 import { RunnerError } from '../protocol.js';
-import { createDesktopSurface, runnerTarget, type DesktopSurface } from '../surface.js';
-import { stepTarget, type RepairStop } from './session.js';
+import { createDesktopSurface, runnerTarget, type ChangedStep, type DesktopSurface } from '../surface.js';
+import { firstStopIndex, stepTarget, type RepairStop } from './session.js';
 
 /** What the proof showed, in step numbers (1-based), for the proposal and the reviewer. */
 export interface DesktopProofEvidence {
@@ -18,7 +18,7 @@ export interface DesktopProofEvidence {
   replayed: number;
   /** The step the proof resolved and did not run (the repair's stop), or null when every step ran. */
   stoppedAt: number | null;
-  stoppedBecause: 'declared write' | 'held for approval' | null;
+  stoppedBecause: 'declared write' | 'looks like a write' | 'held for approval' | null;
   /** Steps the repair retargeted, and steps it added. */
   changedSteps: number[];
   addedSteps: number[];
@@ -36,6 +36,8 @@ export interface DesktopProveInput {
   /** 0-based steps the repair retargeted, and steps it added. */
   changed: number[];
   added: number[];
+  /** How each of those acts before approval (ChangedStep). */
+  marks: Map<number, ChangedStep>;
   stop: RepairStop | null;
   vars: Record<string, string>;
   /** The step context's masker for the proof (token, key, secret variables). */
@@ -64,8 +66,16 @@ export async function proveDesktopRepair(input: DesktopProveInput): Promise<Desk
   let begun = false;
   let lease: ReturnType<RunnerClient['startLease']> | undefined;
   let surface: DesktopSurface | undefined;
-  const stopAt = input.stop ? input.stop.index : doc.steps.length;
+  // The proof replays from step 1, so it stops at the first step that writes or looks like a write (DR9), or where the
+  // repair stopped, whichever comes first: such a step is only resolved, never run a second time.
+  const flagged = firstStopIndex(doc, 0);
+  const stopAt = Math.min(flagged, input.stop ? input.stop.index : doc.steps.length);
+  const stopped = stopAt < doc.steps.length;
+  const because: DesktopProofEvidence['stoppedBecause'] = !stopped ? null
+    : stopAt === flagged ? (doc.steps[stopAt]!.write === true ? 'declared write' : 'looks like a write')
+    : input.stop!.reason === 'held' ? 'held for approval' : input.stop!.reason === 'write' ? 'declared write' : 'looks like a write';
   const changed = new Set([...input.changed, ...input.added]);
+  const probed = new Set([...input.marks].filter(([, m]) => m !== 'checkOnly').map(([i]) => i));
   const fail = (code: ErrorCode, reason: string, log: StepLogEntry[] = []): DesktopProof =>
     ({ ok: false, code, reason: input.mask(surface).mask(reason).slice(0, 500), log, ...(surface ? { surface } : {}) });
   try {
@@ -81,16 +91,16 @@ export async function proveDesktopRepair(input: DesktopProveInput): Promise<Desk
     };
     const s = surface;
     s.trackStep(() => ctx.stepIndex);
-    for (const i of changed) s.probeSteps.add(i);
+    for (const [i, m] of input.marks) s.changedSteps.set(i, m);
     const res = await runSteps(ctx, doc.steps.slice(0, stopAt) as unknown as Step[], {
       rows: [], evidence: [], downloads: [], outputs: [], detected: {}, lastCheckpoint: -1, log: [], credentialsSubmitted: false, submitClicked: false,
       extractRan: false, attributeFields: [], submitted: false,
     });
     if (!res.ok) return fail('drift_detected', `step ${res.failure.index + 1} (${res.failure.intent}) failed: ${res.failure.message}`, res.state.log);
     if (res.state.submitted) return fail('policy_violation', 'a write step ran during the proof', res.state.log);
-    const fallback = res.state.log.find((e) => changed.has(e.index) && e.status === 'ok' && (e.candidate ?? 0) > 0);
+    const fallback = res.state.log.find((e) => probed.has(e.index) && e.status === 'ok' && (e.candidate ?? 0) > 0);
     if (fallback) return fail('drift_detected', `step ${fallback.index + 1} matched only by a fallback during the proof`, res.state.log);
-    if (input.stop) {
+    if (stopped) {
       const target = stepTarget(doc.steps[stopAt]!);
       if (target) {
         try {
@@ -106,8 +116,7 @@ export async function proveDesktopRepair(input: DesktopProveInput): Promise<Desk
     return {
       ok: true, log: res.state.log, outputs: res.state.outputs, files: res.state.downloads, surface: s,
       evidence: {
-        replayed: stopAt, stoppedAt: input.stop ? stopAt + 1 : null,
-        stoppedBecause: input.stop ? (input.stop.reason === 'write' ? 'declared write' : 'held for approval') : null,
+        replayed: stopAt, stoppedAt: stopped ? stopAt + 1 : null, stoppedBecause: because,
         changedSteps: n(input.changed), addedSteps: n(input.added),
       },
     };

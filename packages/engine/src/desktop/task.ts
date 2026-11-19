@@ -485,7 +485,7 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
       await client.call('run.end', { runId: id, reserveFor: proofId, reserveMs: PROOF_RESERVE_MS }, END_WAIT_MS).catch(() => undefined);
       runId = undefined;
       const proof = await proveDesktopRepair({
-        client, runId: proofId, doc: end.doc, changed: end.changed, added: end.added, stop: end.stop, vars,
+        client, runId: proofId, doc: end.doc, changed: end.changed, added: end.added, marks: end.marks, stop: end.stop, vars,
         stepMasker: (() => { const pm = createMasker([input.runner?.token, input.trust.key]); registerSecretVars(input.secretVars, vars, pm); return pm; })(),
         mask: (ps) => createMasker([...sessionMask().secrets, ...(ps ? outputMasker([], ps).secrets : [])]),
         leaseMs, busyUntil: Math.min(Date.now() + PROOF_RESERVE_MS + 5_000, deadline), defaultStepTimeoutMs: ctx.defaultTimeoutMs, signed: gate.signed,
@@ -497,13 +497,15 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
       const pm = createMasker([...sessionMask().secrets, ...(proof.surface ? outputMasker([], proof.surface).secrets : [])]);
       if (!proof.ok) return failAgent(proof.code === 'runner_unavailable' ? 'runner_unavailable' : 'drift_detected', `${DESKTOP_REPAIR_WITHHELD}. Reason: ${proof.reason}`);
       const { proposal, digest } = desktopRepairProposal({ base: script, doc: end.doc, proof: proof.evidence, mask: (t) => pm.mask(t) });
-      const completed = end.stop === null;
-      const stopNote = end.stop ? `; the proof stopped at step ${end.stop.index + 1}: ${end.stop.why}` : '';
+      const completed = end.stop === null && proof.evidence.stoppedAt === null;
+      const ev = proof.evidence;
+      const stopNote = ev.stoppedAt !== null ? `; the proof stopped at step ${ev.stoppedAt} (${ev.stoppedBecause}: found, not run)` : '';
+      const repairNote = end.stop ? `; the repair stopped at step ${end.stop.index + 1}: ${end.stop.why}` : '';
       return {
         ok: true, lane: 'agent', surface: 'desktop', name: script.name ?? null, version: version ?? null, hash, completed,
         files: completed ? proof.files : [], outputs: completed ? maskedOutputs(proof.outputs, end.doc, secrets, proof.surface) : [],
         proposal, digest, proof: proof.evidence, agentLog, log: [...repairLog(), ...maskedLog(proof.log, pm)], tokens, llmCalls, transcript: loop.transcript,
-        durationMs: Date.now() - t0, note: pm.mask(`repaired ${end.fixes} step${end.fixes === 1 ? '' : 's'} and proved them in a fresh start of the app${stopNote}`).slice(0, 500),
+        durationMs: Date.now() - t0, note: pm.mask(`repaired ${end.fixes} step${end.fixes === 1 ? '' : 's'} and replayed the steps in a fresh start of the app${stopNote}${repairNote}`).slice(0, 500),
         submitted: false,
       };
     }

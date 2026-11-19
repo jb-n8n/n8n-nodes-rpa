@@ -306,8 +306,9 @@ describe('ERP Demo v2 in the fake runner', () => {
     expect(await failure(act(t({ title: 'Confirm export' }, { controlType: 'Button', name: 'Continue' }), 'click', { mode: 'probe' }))).toEqual({
       code: -32003, message: `policy_refused: the target's name or automation id ${WRITE_LIKE}; probe mode never acts on it`,
     });
+    // Cancel reads destructive (the engine's denylist), checked before the window's words.
     expect(await failure(act(t({ title: 'Confirm export' }, { controlType: 'Button', name: 'Cancel' }), 'click', { mode: 'probe' }))).toEqual({
-      code: -32003, message: `policy_refused: the window's title or text ${WRITE_LIKE}, so probe mode clicks nothing in it`,
+      code: -32003, message: "policy_refused: the target's name or automation id reads like it deletes, cancels, rejects or signs out; probe mode never acts on it",
     });
     await key('Escape');
     expect(await windows()).toEqual([{ title: 'ERP Demo - Line items', exe: ERP_EXE, automationId: 'MainForm', className: MAIN_CLASS, foreground: true }]);

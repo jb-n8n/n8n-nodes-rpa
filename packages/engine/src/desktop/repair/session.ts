@@ -15,9 +15,9 @@ import { maskClipped, type Masker } from '../../secrets/mask.js';
 import { runSteps, type StepContext } from '../../steps/run.js';
 import type { DesktopLocator, DesktopScript, DesktopStep, ErrorCode, RunState, Step, WindowSel } from '../../types.js';
 import { PolicyRefusedError, RunnerError, type RunnerAction, type RunnerWindow } from '../protocol.js';
-import { runnerTarget, type DesktopSurface, type DesktopView } from '../surface.js';
+import { runnerTarget, type ChangedStep, type DesktopSurface, type DesktopView } from '../surface.js';
 import { desktopCandidatesFor, TargetError } from './candidates.js';
-import { compileFix, PatchError, unrepairable, type FailedPart, type Recorded } from './patch.js';
+import { compileFix, PatchError, unrepairable, type AddedKind, type FailedPart, type Recorded } from './patch.js';
 import {
   DESKTOP_AGENT_TOOL_NAMES, DESKTOP_AGENT_TOOLS, DESKTOP_CIRCLE_NUDGE_TEXT, desktopNextFailureText, desktopRepairFirstMessage, desktopRepairSystemPrompt,
 } from './prompt.js';
@@ -54,11 +54,14 @@ export interface DesktopRepairHandoff {
   classify(index: number, message: string): FailureClass;
 }
 
-/** Why the repaired steps stop where they stop: a declared write, or a changed step held for approval. */
-export interface RepairStop { index: number; reason: 'write' | 'held'; why: string }
+/**
+ * Why the repaired steps stop where they stop: a declared write, a step the review page flags as looking like a write
+ * (DR9: an owner who left it unticked must not get it run twice), or a changed step held for approval.
+ */
+export interface RepairStop { index: number; reason: 'write' | 'flagged' | 'held'; why: string }
 
 export type DesktopSessionEnd =
-  | { kind: 'repaired'; doc: DesktopScript; changed: number[]; added: number[]; stop: RepairStop | null; fixes: number }
+  | { kind: 'repaired'; doc: DesktopScript; changed: number[]; added: number[]; marks: Map<number, ChangedStep>; stop: RepairStop | null; fixes: number }
   | { kind: 'gave_up'; note: string }
   | { kind: 'failed'; code: ErrorCode; message: string };
 
@@ -97,11 +100,25 @@ function actionOf(step: DesktopStep): RunnerAction | undefined {
   return undefined;
 }
 
-/** The index of the first declared write step, or the number of steps. */
-export function firstWriteIndex(doc: DesktopScript): number {
-  const i = doc.steps.findIndex((s) => s.write === true);
-  return i < 0 ? doc.steps.length : i;
+/**
+ * The index of the first step at or after `from` that is a declared write or looks like one (looksLikeWrite: what the
+ * review page flags as a candidate write), or the number of steps. Repair and proof run no such step: they resolve it.
+ */
+export function firstStopIndex(doc: DesktopScript, from = 0): number {
+  for (let i = from; i < doc.steps.length; i++) if (doc.steps[i]!.write === true || looksLikeWrite(doc.steps[i]!)) return i;
+  return doc.steps.length;
 }
+
+/** The engine's destructive denylist on a name and on an automation id read as words (btnReject → btn Reject). */
+export function looksDestructive(name: string, automationId: string): boolean {
+  const words = (t: string) => t.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_.\-]+/g, ' ');
+  return [name, words(automationId)].some((t) => isDestructive(t) || DISCARD.test(t));
+}
+/** Desktop dialogs say Discard where web pages say Delete; not in the shared denylist (the browser's stays as it is). */
+const DISCARD = /(?<![a-z])discard(?: ?all| ?changes)?(?![a-z])/i;
+
+/** How each kind of added step acts before approval. */
+const MARK_OF: Record<AddedKind, ChangedStep> = { openMenu: 'expand', select: 'select', escape: 'escape', inserted: 'probe' };
 
 /**
  * Why the runner's probe mode would refuse a click on this view node (the engine's copy of RunnerService.CheckProbe,
@@ -111,6 +128,7 @@ export function firstWriteIndex(doc: DesktopScript): number {
 export function probeBlock(node: TreeNode, roots: TreeNode[], windowTitle: string): string | undefined {
   const { item } = node;
   if (hasWriteWord(item.name) || hasWriteWord(item.automationId)) return `its name or id reads like a write (save, post, submit, confirm, ok and the like)`;
+  if (looksDestructive(item.name, item.automationId)) return 'its name or id reads like it deletes, cancels, rejects or signs out';
   if (!PROBE_CLICKABLE.has(item.controlType)) return `a ${item.controlType} is not a control the repair clicks`;
   for (let p = node.parent; p; p = p.parent) if (p.item.controlType === 'ComboBox' || p.item.className === 'ComboLBox') return 'it is an item of a combo box';
   const texts: TreeNode[] = [];
@@ -143,8 +161,8 @@ function renderView(view: DesktopView, others: string[]): string {
 
 export class DesktopRepairSession {
   doc: DesktopScript;
-  /** Per step of `doc`: true when it is the approved step as signed (not added, not retargeted). */
-  approved: boolean[];
+  /** Per step of `doc`: how a step the repair added or changed acts before approval; undefined for an approved step. */
+  marks: (ChangedStep | undefined)[];
   /** Per step of `doc`: true when AI repair added it (add_step, a recorded menu or tab). */
   isNew: boolean[];
   failure: DesktopRepairHandoff['failure'];
@@ -160,10 +178,12 @@ export class DesktopRepairSession {
   private windowTitle = '';
   private lastWindows: RunnerWindow[] = [];
   private progress = false;
+  /** Names of the menu-bar headers (MenuItem directly under a MenuBar) seen in any view. */
+  private topHeaders = new Set<string>();
 
   constructor(private readonly h: DesktopRepairHandoff) {
     this.doc = structuredClone(h.base);
-    this.approved = h.base.steps.map(() => true);
+    this.marks = h.base.steps.map(() => undefined);
     this.isNew = h.base.steps.map(() => false);
     this.failure = h.failure;
   }
@@ -180,6 +200,8 @@ export class DesktopRepairSession {
     if (window !== undefined && !chosen) throw new ToolError(`there is no window ${String(window).slice(0, 10)}; use a number from "Other windows"`);
     const view = await this.surface.view(this.masker, chosen ? { window: selectorOf(chosen) } : {});
     const raw = this.surface.rawItems();
+    const byRef = new Map(raw.map((i) => [i.ref, i]));
+    for (const i of raw) if (i.controlType === 'MenuItem' && i.parent && byRef.get(i.parent)?.controlType === 'MenuBar' && i.name) this.topHeaders.add(i.name);
     this.windowTitle = this.surface.nodeOf(view.items[0]?.ref ?? '')?.window.title ?? '';
     this.viewState = createHash('sha256').update(JSON.stringify([this.windowTitle, raw.map((i) => [i.controlType, i.name, i.automationId])])).digest('hex').slice(0, 32);
     if (!this.seen.has(this.viewState)) {
@@ -286,7 +308,9 @@ export class DesktopRepairSession {
         const { node } = this.nodeAt(ref);
         const loc = await this.locate(ref);
         await this.explore(loc, 'expand');
-        if (MENU_TYPES.has(node.item.controlType)) this.recorded.push({ kind: 'openMenu', loc, name: node.item.name });
+        if (MENU_TYPES.has(node.item.controlType)) {
+          this.recorded.push({ kind: 'openMenu', loc, name: node.item.name, topLevel: node.parent?.item.controlType === 'MenuBar' });
+        }
         return this.withLook(`Expanded ${ref}.`);
       }
       case 'select_item': {
@@ -322,28 +346,37 @@ export class DesktopRepairSession {
     }
   }
 
-  private changedIndices(approved = this.approved): Set<number> {
-    return new Set(approved.flatMap((a, i) => (a ? [] : [i])));
+  private markMap(marks = this.marks): Map<number, ChangedStep> {
+    return new Map(marks.flatMap((m, i): [number, ChangedStep][] => (m ? [[i, m]] : [])));
+  }
+
+  /** Whether a step clicks a menu-bar header seen in a view (the only kind of step a fix may fold). */
+  private isTopHeader(step: DesktopStep): boolean {
+    if (!('click' in step)) return false;
+    const path = step.click.uia.path;
+    const last = path.at(-1);
+    return path.length === 1 && last?.controlType === 'MenuItem' && last.name !== undefined && this.topHeaders.has(last.name);
   }
 
   /** The patch of one fix and the new per-step marks. Throws PatchError (engine text) when the patch breaks a rule. */
   private patch(fix: { loc?: DesktopLocator; targetName?: string; recorded: Recorded[] }) {
     const f = this.failure;
     const out = compileFix(this.doc, {
-      failedIndex: f.index, part: f.part, recorded: fix.recorded, isSecretVar: (n) => this.h.isSecretVar(n),
+      failedIndex: f.index, part: f.part, recorded: fix.recorded, isSecretVar: (n) => this.h.isSecretVar(n), isTopHeader: (st) => this.isTopHeader(st),
       ...(fix.loc ? { loc: fix.loc, targetName: fix.targetName } : {}),
     }, (s) => this.masker.mask(s));
-    const addedCount = out.retargetedIndex - out.from;
-    const approved = [...this.approved];
+    const marks = [...this.marks];
     const isNew = [...this.isNew];
-    approved.splice(out.from, f.index - out.from + 1, ...Array<boolean>(addedCount).fill(false), fix.loc ? false : this.approved[f.index]!);
-    isNew.splice(out.from, f.index - out.from + 1, ...Array<boolean>(addedCount).fill(true), this.isNew[f.index]!);
-    return { ...out, approved, isNew };
+    // A check-only change keeps the approved action (step mode); a retargeted action acts in probe mode.
+    const failedMark: ChangedStep | undefined = !fix.loc ? this.marks[f.index] : f.part === 'expect' ? (this.marks[f.index] ?? 'checkOnly') : 'probe';
+    marks.splice(out.from, f.index - out.from + 1, ...out.addedKinds.map((k) => MARK_OF[k]), failedMark);
+    isNew.splice(out.from, f.index - out.from + 1, ...out.addedKinds.map(() => true), this.isNew[f.index]!);
+    return { ...out, marks, isNew };
   }
 
   private commit(p: ReturnType<DesktopRepairSession['patch']>): void {
     this.doc = p.doc;
-    this.approved = p.approved;
+    this.marks = p.marks;
     this.isNew = p.isNew;
     this.fixes++;
     this.recorded = [];
@@ -353,21 +386,21 @@ export class DesktopRepairSession {
   /** Ends the session: the steps up to `stop` are repaired (stop null: all of them ran). */
   private finish(stop: RepairStop | null): void {
     this.end = {
-      kind: 'repaired', doc: this.doc, fixes: this.fixes, stop,
-      changed: [...this.changedIndices()].filter((i) => !this.isNew[i]), added: this.isNew.flatMap((n, i) => (n ? [i] : [])),
+      kind: 'repaired', doc: this.doc, fixes: this.fixes, stop, marks: this.markMap(),
+      changed: [...this.markMap().keys()].filter((i) => !this.isNew[i]), added: this.isNew.flatMap((n, i) => (n ? [i] : [])),
     };
   }
 
-  /** Runs steps [from, to) of the current doc on the live run; changed steps act in probe or repair mode. */
-  private async runRange(from: number, to: number, approved = this.approved, doc = this.doc) {
+  /** Runs steps [from, to) of the current doc on the live run; changed steps act as their marks say. */
+  private async runRange(from: number, to: number, marks = this.marks, doc = this.doc) {
     const s = this.surface;
-    s.probeSteps.clear();
-    for (const i of this.changedIndices(approved)) s.probeSteps.add(i);
+    s.changedSteps.clear();
+    for (const [i, m] of this.markMap(marks)) s.changedSteps.set(i, m);
     s.errors.clear();
     try {
       return await runSteps(this.h.ctx, doc.steps.slice(0, to) as unknown as Step[], this.h.state, { startAt: from });
     } finally {
-      s.probeSteps.clear();
+      s.changedSteps.clear();
     }
   }
 
@@ -384,9 +417,9 @@ export class DesktopRepairSession {
   private async useTarget(ref: string): Promise<string> {
     const f = this.failure;
     const { node } = this.nodeAt(ref);
-    // A step that did not look like a write is never moved onto a control that does, or onto a destructive one.
+    // A step that did not look like a write is never moved onto a control that does, or onto a destructive one (name or id).
     const writeLike = hasWriteWord(node.item.name) || hasWriteWord(node.item.automationId);
-    if ((writeLike && !looksLikeWrite(this.doc.steps[f.index]!)) || isDestructive(node.item.name)) {
+    if ((writeLike && !looksLikeWrite(this.doc.steps[f.index]!)) || looksDestructive(node.item.name, node.item.automationId)) {
       throw new ToolError(`refused: ${ref} reads like a write or a destructive action, and step ${f.index + 1} does not; choose another control or give_up`);
     }
     const loc = await this.locate(ref);
@@ -404,7 +437,7 @@ export class DesktopRepairSession {
       this.finish({ index: p.retargetedIndex, reason: 'held', why: hold });
       return `Step ${p.retargetedIndex + 1} now targets ${ref}; ${hold}. The repair stops here.`;
     }
-    const res = await this.runRange(p.retargetedIndex, p.retargetedIndex + 1, p.approved, p.doc);
+    const res = await this.runRange(p.retargetedIndex, p.retargetedIndex + 1, p.marks, p.doc);
     if (!res.ok) {
       const cause = this.surface.errors.get(p.retargetedIndex);
       if (cause instanceof PolicyRefusedError) {
@@ -421,14 +454,22 @@ export class DesktopRepairSession {
 
   private async addStep(ref: string): Promise<string> {
     if (this.added >= DESKTOP_MAX_ADDED) throw new ToolError(`a repair may add at most ${DESKTOP_MAX_ADDED} steps`);
+    // An added click goes before the failed step, which then runs again: after a failed check that would act twice.
+    if (this.failure.part === 'expect') {
+      throw new ToolError(`step ${this.failure.index + 1} acted and only its check failed: call use_target on the control the check should look at, or give_up`);
+    }
     const { node, roots } = this.nodeAt(ref);
     if (!PROBE_CLICKABLE.has(node.item.controlType)) throw new ToolError(`add_step takes a button, menu item, link, tab or list item, not a ${node.item.controlType}`);
-    if (isDestructive(node.item.name)) throw new ToolError(`refused: ${ref} looks like it deletes, cancels, pays, sends or otherwise changes something`);
+    // A destructive name is refused. A destructive automation id alone (an icon-only btnReject, or v2's btnConfirmExport
+    // behind "Continue") is never clicked either: probeBlock holds it, so it is added for the approver and the repair stops.
+    if (looksDestructive(node.item.name, '')) throw new ToolError(`refused: ${ref} looks like it deletes, cancels, pays, sends or otherwise changes something`);
     const loc = await this.locate(ref);
     const rec: Recorded = { kind: 'inserted', loc, name: node.item.name };
     const block = probeBlock(node, roots, this.windowTitle);
+    // Compiled before anything is clicked: a fix over its cap is refused without a click.
+    const withRec = this.patch({ recorded: [...this.recorded, rec] });
     const hold = (why: string) => {
-      const p = this.patch({ recorded: [...this.recorded, rec] });
+      const p = withRec;
       this.added++;
       this.commit(p);
       const at = p.retargetedIndex - 1;
@@ -445,16 +486,16 @@ export class DesktopRepairSession {
     this.added++;
     this.recorded.push(rec);
     // The failed step, unchanged, right after the added click.
-    const p = this.patch({ recorded: this.recorded });
-    const res = await this.runRange(p.retargetedIndex, p.retargetedIndex + 1, p.approved, p.doc);
+    const p = withRec;
+    const res = await this.runRange(p.retargetedIndex, p.retargetedIndex + 1, p.marks, p.doc);
     if (!res.ok) return this.withLook(`Clicked ${ref}, but step ${f1(this.failure.index)} still fails: ${this.masker.mask(res.failure.message).slice(0, 300)}.`);
     this.commit(p);
     return this.goOn(p.retargetedIndex + 1, `Added a click on ${ref}; step ${p.retargetedIndex + 1} passed.`);
   }
 
-  /** After a fix: the steps go on up to the first declared write (resolved only), or to the end. */
+  /** After a fix: the steps go on up to the first step that writes or looks like a write (resolved only), or to the end. */
   private async goOn(from: number, done: string): Promise<string> {
-    const stopAt = firstWriteIndex(this.doc);
+    const stopAt = firstStopIndex(this.doc, from);
     if (from < stopAt) {
       const res = await this.runRange(from, stopAt);
       if (!res.ok) {
@@ -465,7 +506,7 @@ export class DesktopRepairSession {
           this.end = { kind: 'failed', code: c.code, message: `step ${j + 1} (${step.intent}) failed after the repair: ${this.masker.mask(res.failure.message)}${c.why ? ` (${c.why})` : ''}` };
           return 'Stopped.';
         }
-        if (!this.approved[j]) {
+        if (this.marks[j] !== undefined) {
           this.end = { kind: 'failed', code: 'drift_detected', message: `step ${j + 1}, which the repair changed, failed again: ${this.masker.mask(res.failure.message)}` };
           return 'Stopped.';
         }
@@ -497,12 +538,14 @@ export class DesktopRepairSession {
           if (!(err instanceof RunnerError) || err instanceof PolicyRefusedError) throw err;
         }
       }
+      const declared = write.write === true;
+      const what = declared ? 'a declared write step' : 'a step that looks like a write (the review page flags it)';
       if (!found) {
-        this.end = { kind: 'gave_up', note: `step ${stopAt + 1} (${write.intent}) is a declared write step and no longer finds its control; AI repair never changes a write step: update it by hand` };
+        this.end = { kind: 'gave_up', note: `step ${stopAt + 1} (${write.intent}) is ${what} and no longer finds its control; AI repair does not run or change such a step: update it by hand` };
         return 'Stopped.';
       }
-      this.finish({ index: stopAt, reason: 'write', why: 'it is a declared write step: its control was found, and it was not run' });
-      return `${done} The steps ran up to step ${stopAt + 1}, a declared write, which was found and not run.`;
+      this.finish({ index: stopAt, reason: declared ? 'write' : 'flagged', why: `it is ${what}: its control was found, and it was not run` });
+      return `${done} The steps ran up to step ${stopAt + 1}, ${what}, which was found and not run.`;
     }
     this.finish(null);
     return `${done} Every step ran.`;
