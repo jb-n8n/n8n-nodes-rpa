@@ -480,6 +480,47 @@ describe('buildWorkflow', () => {
     expect((byName(fine, 'ok').parameters as { options: { variables: { values: Array<{ name: string }> } } }).options.variables.values).toEqual([{ name: 'invoice_no', value: '' }]);
   });
 
+  it('a Run steps whose steps type a secret variable names the RPA Secret Variables credential by name only (n8n selects it when exactly one has that name); none without one', () => {
+    const SV = { rpaSecretVariablesApi: { id: null, name: 'RPA Secret Variables account' } };
+    const PIN = { intent: 'Type the PIN', fill: { field: { label: 'PIN' }, value: '{{var.pin}}', secret: true } };
+    const PLAIN = { intent: 'Type the company', fill: { field: { label: 'Company' }, value: '{{var.company}}' } };
+    const OPEN = { intent: 'Open', goto: 'https://portal.example.com/' };
+    const browser = (steps: object[], opts: Partial<Parameters<typeof buildWorkflow>[2]> = {}) =>
+      byName(buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'bot', draft: 'bot' }], 'bot'), [draft('bot', steps)], { name: 'bot', source: 'steps', ...opts }), 'bot');
+    // Browser steps: a secret fill gets it, by name only; plain variables and no variables get none.
+    const secret = browser([OPEN, PIN, PLAIN]);
+    expect(secret.credentials).toEqual(SV);
+    expect(secret.notes).toContain('pin: put it in an RPA Secret Variables credential. n8n selects the one named "RPA Secret Variables account" here when exactly one has that name; otherwise make one or pick yours.');
+    expect(browser([OPEN, PLAIN]).credentials).toBeUndefined();
+    expect(browser([OPEN]).credentials).toBeUndefined();
+    expect(browser([OPEN, PLAIN]).notes).not.toContain('RPA Secret Variables');
+    // A many-accounts bot whose only secret is the new password (each account's own, from its item): none.
+    const SIGN = { intent: 'Sign in', signIn: { username: { label: 'User' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' },
+      changePassword: { detect: { text: 'Expired' }, new: [{ label: 'New password' }], submit: { role: 'button', name: 'Save' }, value: '{{var.newPassword}}' } } };
+    expect(browser([SIGN, OPEN], { accounts: true }).credentials).toBeUndefined();
+    expect(browser([SIGN, OPEN]).credentials).toEqual(SV);
+    // The credentials an import was given keep their id and name beside it; nothing but an id and a name is written.
+    const given = { browser: { id: 'b-1', name: 'My browser' }, siteLogin: { id: 's-1', name: 'My login' }, signing: { id: 'k-1', name: 'My key' } };
+    expect(browser([OPEN, PIN], { credentials: given }).credentials).toEqual({
+      playwrightBrowserApi: given.browser, playwrightSiteLoginApi: given.siteLogin, playwrightScriptSigningApi: given.signing, ...SV,
+    });
+    // Desktop steps: the same, beside the RPA Desktop Runner (by name, or the one given).
+    const desk = (secretVariables: string[]) => ({
+      name: 'd', writeCandidates: [], variables: ['company', ...secretVariables], secretVariables,
+      script: { surface: 'desktop' as const, name: 'd', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Click', click: { uia: { path: [{ name: 'x' }] } } }] },
+    });
+    const desktop = (secretVariables: string[], opts: Partial<Parameters<typeof buildWorkflow>[2]> = {}) =>
+      buildWorkflow(flowOf([{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }], 'd'), [], { name: 'd', desktopDrafts: [desk(secretVariables)], source: 'recording', ...opts });
+    const withSecret = desktop(['password']);
+    expect(byName(withSecret, 'd').credentials).toEqual({ rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' }, ...SV });
+    expect(content(byName(withSecret, 'Fill in the variables (d)'))).toContain('Secret: put these in an **RPA Secret Variables** credential. n8n selects the one named `RPA Secret Variables account` on **d** when exactly one has that name; otherwise make one, or add these to the one you have for this app, and pick it there.');
+    expect(content(byName(withSecret, 'Set once'))).toContain('- **RPA Secret Variables**: n8n selects the one named `RPA Secret Variables account` on the Run steps that name its variables when exactly one has that name; otherwise make one, or add these to the one you have for this app or site, and pick it there.');
+    expect(byName(desktop([]), 'd').credentials).toEqual({ rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } });
+    expect(content(byName(desktop([]), 'Set once'))).not.toContain('RPA Secret Variables');
+    const runner = { id: 'r-1', name: 'My runner' };
+    expect(byName(desktop(['password'], { credentials: { desktopRunner: runner } }), 'd').credentials).toEqual({ rpaDesktopRunnerApi: runner, ...SV });
+  });
+
   it('a Site Login\'s own form hands over a place for the accounts: Get accounts (off, no table picked) between Get active steps and Run steps, with a gold note; a new password from each account\'s item', () => {
     const SIGN = { intent: 'Sign in', signIn: { username: { label: 'User' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' },
       changePassword: { detect: { text: 'Expired' }, new: [{ label: 'New password' }], submit: { role: 'button', name: 'Save' }, value: '{{var.newPassword}}' } } };
@@ -508,7 +549,7 @@ describe('buildWorkflow', () => {
     // The new password is each account's: read from the item, not copied into the credential; a true single secret still is.
     const run = byName(many, 'bot');
     expect((run.parameters as { options: { variables: unknown } }).options.variables).toEqual({ values: [{ name: 'newPassword', value: '={{ $json.newPassword }}' }] });
-    expect(run.notes).toContain('pin: put it in an RPA Secret Variables credential and select it here. newPassword: each account\'s own, from its item (Options → Variables).');
+    expect(run.notes).toContain('pin: put it in an RPA Secret Variables credential. n8n selects the one named "RPA Secret Variables account" here when exactly one has that name; otherwise make one or pick yours. newPassword: each account\'s own, from its item (Options → Variables).');
     expect(content(byName(many, 'Set once'))).toContain('Name: pin');
     expect(content(byName(many, 'Set once'))).not.toContain('newPassword');
     // A desktop step list gets no accounts node.
@@ -816,13 +857,13 @@ describe('buildWorkflow', () => {
     const secretOnly = build(desktop(['password'], ['password']));
     expect(byName(secretOnly, 'd').notes).not.toContain('Fill in the Variables');
     expect(content(byName(secretOnly, 'Fill in the variables (d)'))).toBe(
-      '### Fill in the variables (gold)\nDesktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.\nSecret: make an **RPA Secret Variables** credential, or add these to the one you have for this app; select it on **d**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
+      '### Fill in the variables (gold)\nDesktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.\nSecret: put these in an **RPA Secret Variables** credential. n8n selects the one named `RPA Secret Variables account` on **d** when exactly one has that name; otherwise make one, or add these to the one you have for this app, and pick it there. Copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
     );
     // Handed over after approval (the import form approves before it hands the file over): the note does not ask to
     // import and approve the steps; Import Steps alone approves nothing, so by default it does.
     const approved = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop(['password'], ['password'])], source: 'recording', approvedBeforeHandOver: true });
     expect(content(byName(approved, 'Fill in the variables (d)'))).toBe(
-      '### Fill in the variables (gold)\nSecret: make an **RPA Secret Variables** credential, or add these to the one you have for this app; select it on **d**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
+      '### Fill in the variables (gold)\nSecret: put these in an **RPA Secret Variables** credential. n8n selects the one named `RPA Secret Variables account` on **d** when exactly one has that name; otherwise make one, or add these to the one you have for this app, and pick it there. Copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
     );
     // Made by a Site Login's own form (IB-4): the notes name that form and its address, not the default form.
     const formOpts = { name: 'RPA: 5 Import a bot (Sample *accounts*)', address: 'http://localhost:5720/form/rpa-import-sample-accounts' };
@@ -1108,7 +1149,7 @@ describe('buildWorkflow', () => {
     const set = (i: number) => content(byName(kinds[i][1], 'Set once'));
     expect(set(3)).toBe('### Set once\nNothing to pick: **RPA Browser**, **RPA Site Login** and **RPA Step Signing** are set on the RPA node.');
     expect(set(0)).toBe('### Set once\nNothing to pick: **RPA Desktop Runner** and **RPA Step Signing** are set on the RPA node.\n'
-      + '- **RPA Secret Variables**: make one, or add these to the one you have for this app or site; pick it on the Run steps that name its variables, and copy these into it. Type each value there, never in this workflow.\n'
+      + '- **RPA Secret Variables**: n8n selects the one named `RPA Secret Variables account` on the Run steps that name its variables when exactly one has that name; otherwise make one, or add these to the one you have for this app or site, and pick it there. Copy these into it. Type each value there, never in this workflow.\n'
       + '```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: ErpDemo.exe\n```');
   });
 

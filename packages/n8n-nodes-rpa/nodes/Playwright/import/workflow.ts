@@ -8,7 +8,8 @@
 // have none yet) and the variables its steps type, empty for the user to fill in (secrets from a secret source). Everything else follows a fixed table of n8n 2.41 node types. Text from the project is
 // never evaluated: it goes into literal parameters only when n8n cannot read it as an expression, and otherwise into
 // notes and stickies as text. The RPA credentials the import was given are attached by id and name (opts.credentials),
-// so the file needs nothing picked; without them the desktop runner is named by name only. No secret is ever written.
+// so the file needs nothing picked; without them the desktop runner is named by name only. A Run steps whose steps type a
+// secret variable names the RPA Secret Variables credential by name only (SECRET_VARIABLES_BY_NAME). No secret is ever written.
 import type { DesktopDraft, Draft, FlowNode, UiPathFlow } from 'n8n-rpa-engine';
 import { CREDENTIALS, NODE_VERSION, normalizeHost } from '../config.js';
 import { RPA_NODE_TYPE } from '../node-type.js';
@@ -122,6 +123,17 @@ const BROWSER_SLOTS: Slot[] = ['browser', 'siteLogin', 'signing'];
 const DESKTOP_SLOTS: Slot[] = ['desktopRunner', 'signing'];
 /** Without the import's own, a desktop Run steps names the RPA Desktop Runner by name: n8n selects it when one has that name. */
 const DESKTOP_RUNNER_BY_NAME = { id: null, name: LABEL.desktopRunner } as const;
+/**
+ * The name n8n gives the first RPA Secret Variables credential a person makes: the type's name and " account" (n8n
+ * 2.45's editor, getNewCredentialName; a second one gets " 2"). n8n resolves `{ id: null, name }` by that name and type
+ * when the workflow is saved or imported (replaceInvalidCredentials), only when exactly one credential in the project
+ * has that name, so a Run steps that types secret variables gets it without anyone picking it. Never a value of it.
+ */
+export const SECRET_VARIABLES_NAME = 'RPA Secret Variables account';
+const SECRET_VARIABLES_BY_NAME = { id: null, name: SECRET_VARIABLES_NAME } as const;
+/** What a Run steps' note says about its secret variables: where they go, and when n8n selects that credential by itself. */
+const secretNote = (secret: readonly string[]) =>
+  ` ${secret.join(', ')}: put ${secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential. n8n selects the one named "${SECRET_VARIABLES_NAME}" here when exactly one has that name; otherwise make one or pick yours.`;
 /** "A", "A and B", "A, B and C". */
 const and = (items: string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
 /**
@@ -461,8 +473,9 @@ class Builder {
   /**
    * What a Run steps carries for these slots: each credential the import passed on, by id and name, and the labels of
    * those it picked and of those the person still picks (a desktop Run steps names the RPA Desktop Runner by name then).
+   * `secretVariables`: the steps type a secret variable, so the RPA Secret Variables credential is named by name too.
    */
-  slots(which: Slot[]): { credentials: NonNullable<WorkflowNode['credentials']>; picked: string[]; missing: string[] } {
+  slots(which: Slot[], secretVariables = false): { credentials: NonNullable<WorkflowNode['credentials']>; picked: string[]; missing: string[] } {
     const credentials: NonNullable<WorkflowNode['credentials']> = {};
     const picked: string[] = [];
     const missing: string[] = [];
@@ -476,6 +489,8 @@ class Builder {
         missing.push(LABEL[slot]);
       }
     }
+    // Only for steps that type a secret variable: the credential by name only (id null), never one of its values.
+    if (secretVariables) credentials[CREDENTIALS.secretVariables] = { ...SECRET_VARIABLES_BY_NAME };
     return { credentials, picked, missing };
   }
   /** Run variables that come from the RPA Secret Variables credential, over every Run steps. */
@@ -781,7 +796,7 @@ class Builder {
     const plainVars = draft.variables.filter((v) => !secret.has(v));
     // Only what applies: a list with no variables asks for none, and one whose variables are all secret has no Variables.
     const fillIn = plain(start).length ? ` The Variables start with ${FROM[this.source].startValues}: change them here.` : plainVars.length ? ' Fill in the Variables.' : '';
-    const creds = this.slots(DESKTOP_SLOTS);
+    const creds = this.slots(DESKTOP_SLOTS, secret.size > 0);
     this.add(T.rpa, run, [runX, y], {
       operation: 'runSteps',
       runsOn: 'desktop',
@@ -794,7 +809,7 @@ class Builder {
     }, {
       onError: 'continueErrorOutput',
       credentials: creds.credentials,
-      notes: `Runs the signed desktop steps ${draftName} on the desktop runner. ${pickText(creds.picked, creds.missing)}${fillIn}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential and select it here.` : ''}`,
+      notes: `Runs the signed desktop steps ${draftName} on the desktop runner. ${pickText(creds.picked, creds.missing)}${fillIn}${secret.size ? secretNote([...secret]) : ''}`,
     });
     this.connect([{ node: get, output: 0 }], run);
     this.desktopRunNodes.push(run);
@@ -806,7 +821,7 @@ class Builder {
       const typedInto = secretTypedInto(draft.script, true);
       if (secret.size && typedInto) this.secretTargets.add(typedInto);
       // What to copy into the credential: its name, each variable's name and May Be Typed Into. The value is typed there only.
-      const secretVars = secret.size ? `Secret: make an ${SECRET_VARIABLES} credential, or add these to the one you have for this app; select it on **${md(run)}**, and copy these into it. Type the value there, never here.\n${secretBlock([...secret], typedInto ? [typedInto] : [])}` : '';
+      const secretVars = secret.size ? `Secret: put these in an ${SECRET_VARIABLES} credential. n8n selects the one named ${code(SECRET_VARIABLES_NAME)} on **${md(run)}** when exactly one has that name; otherwise make one, or add these to the one you have for this app, and pick it there. Copy these into it. Type the value there, never here.\n${secretBlock([...secret], typedInto ? [typedInto] : [])}` : '';
       const content = `### Fill in the variables (gold)\n${[[listedVars, this.approvedBeforeHandOver ? '' : `Desktop steps run only once approved: ${FROM[this.source].importIt} with ${this.importForm} and approve ${code(draftName)} on its review page.`].filter(Boolean).join(' '), secretVars].filter(Boolean).join('\n')}`;
       this.sticky(`Fill in the variables (${draftName})`, content, COLOUR.gold, [runX - 80, y + 160], 320, Math.max(260, noteSize(content, 320).height));
     }
@@ -834,7 +849,7 @@ class Builder {
         const vars = { all: all.all, secret: all.secret.filter((v) => !perAccount.has(v)) };
         const typedInto = vars.secret.length ? secretTypedInto(draft.script, false) : '';
         if (typedInto) this.secretTargets.add(typedInto);
-        const creds = this.slots(BROWSER_SLOTS);
+        const creds = this.slots(BROWSER_SLOTS, vars.secret.length > 0);
         // Runs as generated: no repair branch (a Chat model and an Approve steps would need a credential and a workflow
         // picked first). The note says how to add it.
         this.add(T.rpa, run, [runX, y], {
@@ -853,7 +868,7 @@ class Builder {
           onError: 'continueErrorOutput',
           ...(Object.keys(creds.credentials).length ? { credentials: creds.credentials } : {}),
           notes: [
-            `Runs the signed steps ${draftName}${accounts ? ', once for each account' : ''}. ${pickText(creds.picked, creds.missing)} ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential and select it here.` : ''}${perAccount.size ? ` ${[...perAccount].join(', ')}: each account's own, from its item (Options → Variables).` : ''}`,
+            `Runs the signed steps ${draftName}${accounts ? ', once for each account' : ''}. ${pickText(creds.picked, creds.missing)} ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? secretNote(vars.secret) : ''}${perAccount.size ? ` ${[...perAccount].join(', ')}: each account's own, from its item (Options → Variables).` : ''}`,
             'To let it repair itself when the site changes:',
             '1. Connect a chat model to its Model input (after step 2).',
             `2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.`,
@@ -1102,7 +1117,7 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   const picked = [...new Set([...browserCreds.picked, ...desktopCreds.picked])];
   // What to copy into the one credential the secret variables come from: its name, each variable's name, May Be Typed Into.
   const secretLine = b.secretVariables.size
-    ? `- ${SECRET_VARIABLES}: make one, or add these to the one you have for this app or site; pick it on the Run steps that name its variables, and copy these into it. Type each value there, never in this workflow.\n${secretBlock([...b.secretVariables].slice(0, 10), [...b.secretTargets].slice(0, 10))}`
+    ? `- ${SECRET_VARIABLES}: n8n selects the one named ${code(SECRET_VARIABLES_NAME)} on the Run steps that name its variables when exactly one has that name; otherwise make one, or add these to the one you have for this app or site, and pick it there. Copy these into it. Type each value there, never in this workflow.\n${secretBlock([...b.secretVariables].slice(0, 10), [...b.secretTargets].slice(0, 10))}`
     : '';
   const toPick = [
     browserCreds.missing.length ? `- ${and(browserCreds.missing.map((l) => `**${l}**`))}: ${listed(b.runNodes)}` : '',

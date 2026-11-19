@@ -143,7 +143,7 @@ describe('every source ends in a workflow that runs', () => {
     const wf = workflowOf(item);
     const [run] = runNodes(wf);
     expect(optionsOf(run).variables).toEqual({ values: [{ name: 'company', value: '' }] });
-    expect(run.notes).toContain('exportPassword: put it in an RPA Secret Variables credential and select it here.');
+    expect(run.notes).toContain('exportPassword: put it in an RPA Secret Variables credential. n8n selects the one named "RPA Secret Variables account" here when exactly one has that name; otherwise make one or pick yours.');
   });
 
   it('a desktop step document: one desktop pair on the RPA Desktop Runner', async () => {
@@ -260,7 +260,8 @@ describe('the workflow file arrives with the credentials the import was given, b
     const wf = workflowOf(item);
     onlyRefs(wf);
     const [run] = runNodes(wf);
-    expect(run.credentials).toEqual(DESKTOP_RUN);
+    // The ones it was given keep their id and name; the recording types a secret, so the secret variables come by name only.
+    expect(run.credentials).toEqual({ ...DESKTOP_RUN, rpaSecretVariablesApi: { id: null, name: 'RPA Secret Variables account' } });
     expect(run.notes).toContain('RPA Desktop Runner and RPA Step Signing are picked for you: check them.');
   });
 
