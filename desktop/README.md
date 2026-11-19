@@ -102,7 +102,8 @@ node does not offer AI repair for desktop steps yet):
   press the cancel button, which may discard or cancel something. An `Escape` listed in `gatedKeys` stays refused.
 - `mode: "probe"` clicks once on a control the repair added or retargeted, before anyone approved it. It allows only
   `click` and `doubleClick` (a step that types, selects or checks waits for approval), never with `write: true`, never
-  on a declared write control, and never on a control whose name or automation id has a write word. The control must be
+  on a declared write control, and never on a control whose name or automation id has a write word or reads like it
+  deletes, cancels, rejects or signs out (the engine's denylist, plus discard). The control must be
   a button, menu item, link, tab, list item or tree item (not a combo box item), in a window whose title and static
   text have no write word: a dialog's default button does whatever the dialog says. A run makes at most 12 probe acts.
   Every check runs again on an element the runner finds anew after the first one went away.

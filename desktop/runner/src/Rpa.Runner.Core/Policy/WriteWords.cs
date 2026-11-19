@@ -32,3 +32,37 @@ public static partial class WriteWords
         return WriteWord().IsMatch(lower.ToString());
     }
 }
+
+/// <summary>
+/// The engine's destructive denylist (DENYLIST in packages/engine/src/policy/destructive.ts, word for word) plus
+/// "discard", which desktop dialogs use where web pages say delete. Probe mode refuses a control whose name or automation
+/// id (read as words, btnReject -> btn Reject) matches it. Kept apart from <see cref="WriteWords"/>, which stays the
+/// recorder's list.
+/// </summary>
+public static partial class DestructiveWords
+{
+    /// <summary>The engine's pattern, as written there.</summary>
+    public const string EnginePattern =
+        "(?<![a-z])((?:delete|remove|acknowledge|ack|approve|reject|cancel|archive|confirm|pay|payment|send|transfer|deactivate|revoke|purge|destroy|refund|unsubscribe)(?: ?all)?"
+        + "|log ?out|log ?off|sign ?out|cancel ?order|submit ?order)(?![a-z])";
+
+    /// <summary>The probe list: the engine's pattern with discard added.</summary>
+    public const string Pattern =
+        "(?<![a-z])((?:delete|remove|acknowledge|ack|approve|reject|cancel|archive|confirm|pay|payment|send|transfer|deactivate|revoke|purge|destroy|refund|unsubscribe)(?: ?all)?"
+        + "|log ?out|log ?off|sign ?out|cancel ?order|submit ?order|discard(?: ?all| ?changes)?)(?![a-z])";
+
+    [GeneratedRegex(Pattern, RegexOptions.CultureInvariant)] private static partial Regex Destructive();
+
+    /// <summary>Whether the text, lower-cased (ASCII) and read as words, names a destructive action.</summary>
+    public static bool Has(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        foreach (var t in new[] { text, WriteWords.SplitWords(text) })
+        {
+            var lower = new StringBuilder(t.Length);
+            foreach (var c in t) lower.Append(c is >= 'A' and <= 'Z' ? (char)(c + 32) : c);
+            if (Destructive().IsMatch(lower.ToString())) return true;
+        }
+        return false;
+    }
+}

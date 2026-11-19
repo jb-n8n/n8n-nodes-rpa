@@ -442,6 +442,8 @@ public sealed class RunnerService
         if (action is not (ActionKind.Click or ActionKind.DoubleClick)) throw RpcErrors.PolicyRefused(ProbeRefusal);
         if (ReadsLikeWrite(element))
             throw RpcErrors.PolicyRefused("the target's name or automation id reads like a write (save, post, submit, confirm, ok and the like); probe mode never acts on it");
+        if (DestructiveWords.Has(element.Name) || DestructiveWords.Has(element.AutomationId))
+            throw RpcErrors.PolicyRefused("the target's name or automation id reads like it deletes, cancels, rejects or signs out; probe mode never acts on it");
         if (!ProbeClickable.Contains(element.ControlType))
             throw RpcErrors.PolicyRefused($"probe mode may click only buttons, menu items, links, tabs, list items and tree items, not a {element.ControlType}");
         if (InComboBox(element, window))

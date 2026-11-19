@@ -733,6 +733,40 @@ public sealed class ServiceTests : IDisposable
         Assert.Equal("policy_refused: probe mode allows only click and doubleClick", e["message"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("", "btnReject")]
+    [InlineData("Sign out", "btnAccount")]
+    [InlineData("Discard changes", "btnNext2")]
+    [InlineData("Archive", "")]
+    [InlineData("", "cmdRevokeAll")]
+    public void Probe_mode_refuses_what_reads_destructive_by_name_or_id(string name, string id)
+    {
+        // I1: an icon-only button named only by its id (btnReject) is caught too.
+        var main = _h.BeginWithApp();
+        Dialog(main, "Export options", "OptionsForm", ("Button", name, id));
+        var target = id.Length > 0 ? Harness.T(new { automationId = id }) : Harness.T(new { controlType = "Button", name });
+        var e = _h.Err("act", Probe(target), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the target's name or automation id reads like it deletes, cancels, rejects or signs out; probe mode never acts on it",
+            e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void The_probe_deny_list_is_the_engines_denylist_plus_discard()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "packages", "engine", "src", "policy", "destructive.ts"))) dir = dir.Parent;
+        Assert.NotNull(dir);
+        var ts = File.ReadAllText(Path.Combine(dir!.FullName, "packages", "engine", "src", "policy", "destructive.ts"));
+        var m = System.Text.RegularExpressions.Regex.Match(ts, @"export const DENYLIST = new RegExp\(\s*'([^']*)'\s*\+\s*'([^']*)',");
+        Assert.True(m.Success);
+        Assert.Equal(Rpa.Runner.Core.Policy.DestructiveWords.EnginePattern, m.Groups[1].Value + m.Groups[2].Value);
+        var withDiscard = Rpa.Runner.Core.Policy.DestructiveWords.EnginePattern.Replace("|submit ?order)", "|submit ?order|discard(?: ?all| ?changes)?)");
+        Assert.Equal(Rpa.Runner.Core.Policy.DestructiveWords.Pattern, withDiscard);
+        foreach (var ok in new[] { "Next", "Back", "Continue", "Find", "Export line items...", "btnFind", "Payments overview" })
+            Assert.False(Rpa.Runner.Core.Policy.DestructiveWords.Has(ok), ok);
+    }
+
     [Fact]
     public void Probe_mode_refuses_the_v2_confirm_dialogs_continue_button()
     {
