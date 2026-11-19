@@ -113,6 +113,11 @@ export interface DesktopSurface extends Surface {
   /** The raw node behind a ref of the last view; undefined after a newer view or snapshot. */
   nodeOf(ref: string): DesktopViewNode | undefined;
   /**
+   * The items of the last view in view order, built from the raw nodes: unmasked and unclipped, for the engine's local
+   * matching against the runner's own conditions (never for a message). [] after a snapshot.
+   */
+  rawItems(): DesktopViewItem[];
+  /**
    * The clipboard's text (the runner's clipboard.read), added to `clipboard` so it is masked everywhere but in its own
    * read output. A runner older than the method fails with RUNNER_TOO_OLD_FOR_CLIPBOARD; every failure is recorded.
    */
@@ -254,6 +259,10 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
       return { window: { title: masker.mask(raw.title).slice(0, 200), exe: masker.mask(raw.exe) }, truncated, items };
     },
     nodeOf: (ref) => viewNodes.get(ref),
+    rawItems: () => [...viewNodes].map(([ref, { node, parent }]): DesktopViewItem => ({
+      ref, ...(parent ? { parent } : {}), depth: node.depth, controlType: node.controlType, name: node.name ?? '', fullName: node.name ?? '',
+      automationId: node.automationId ?? '', className: node.className ?? '', enabled: node.enabled !== false,
+    })),
     async readClipboard() {
       let r: { text: string };
       try {

@@ -880,8 +880,9 @@ export const ERP_CSV_HEADER = 'Document,Date,Company,Vendor,Amount,Currency,Stat
  * File keeps only Exit; Export moves to a new top-level Reports menu as "Export line items...". 'confirm': Export asks
  * first in a Confirm export form, whose Continue opens the Save dialog. 'customSave' (not in the real app): the export
  * dialog is a WinForms form (#ExportForm) whose save button is Export (btnExportSave), not a Win32 Save dialog.
+ * 'sharedNote' (not in the real app): an id-less Text "Note" under both grpSearch and pnlDetail.
  */
-export type ErpChange = 'rename' | 'menu' | 'confirm' | 'customSave';
+export type ErpChange = 'rename' | 'menu' | 'confirm' | 'customSave' | 'sharedNote';
 /** ERP Demo v2 (--ui v2): its changes. */
 export const ERP_V2: readonly ErpChange[] = ['rename', 'menu', 'confirm'];
 /** The class of the app's forms, and of its menu drop-downs (each a top-level window of its own), as UI Automation reports them. */
@@ -1003,13 +1004,14 @@ class ErpApp implements AppModel {
     // About shows a message box in the real app; the fake only closes the menu.
     bar.push(this.topMenu('Help', [command('About', () => undefined)]));
     const go = this.changes.has('rename') ? el('Button', 'btnFind', 'Find', { onClick: search }) : el('Button', 'btnSearch', 'Search', { onClick: search });
+    const note = () => (this.changes.has('sharedNote') ? [el('Text', '', 'Note')] : []);
     const searchPanel = el('Group', 'grpSearch', 'Line items', {
       children: [el('Text', 'lblCompany', 'Company code'), company, el('Text', 'lblFrom', 'Date from'), from, el('Text', 'lblTo', 'Date to'), to,
-        go, el('Button', 'btnPost', 'Post', { onClick: () => { this.posted++; } }), count],
+        go, el('Button', 'btnPost', 'Post', { onClick: () => { this.posted++; } }), count, ...note()],
     });
     return {
       title: 'ERP Demo - Line items', exe: ERP_EXE, automationId: 'MainForm', className: ERP_FORM_CLASS,
-      root: el('Window', 'MainForm', 'ERP Demo - Line items', { children: [el('MenuBar', 'mainMenu', '', { children: bar }), searchPanel, grid, el('Pane', 'pnlDetail', '', { children: [detail] }), el('StatusBar', 'statusBar', '', { children: [status] })] }),
+      root: el('Window', 'MainForm', 'ERP Demo - Line items', { children: [el('MenuBar', 'mainMenu', '', { children: bar }), searchPanel, grid, el('Pane', 'pnlDetail', '', { children: [detail, ...note()] }), el('StatusBar', 'statusBar', '', { children: [status] })] }),
     };
   }
 
