@@ -14,13 +14,13 @@ const MAX_IDLE_TURNS = 3;
  * The circle guard (AgentTools.lastRepeat): the same action on the same page, with nothing new since (no page not seen
  * before, no new rows, no file). The third time the model is told once; the fourth time the run stops.
  */
-export const CIRCLE_NUDGE = 3;
-export const CIRCLE_STOP = 4;
+const CIRCLE_NUDGE = 3;
+const CIRCLE_STOP = 4;
 export const CIRCLE_NUDGE_TEXT =
   `You have now done this same action on this same page ${CIRCLE_NUDGE} times, and nothing new came of it: you are going in circles. `
   + 'The run stops if you keep repeating. Open a link, tab or section you have not tried yet, or call done with not_found.';
 /** The engine's note before the first page block of a tool result (or at its end when there is none). */
-export function withNote(text: string, note: string): string {
+function withNote(text: string, note: string): string {
   const at = text.indexOf('<page_content>');
   return at < 0 ? `${text}\n${note}` : `${text.slice(0, at)}${note}\n${text.slice(at)}`;
 }
@@ -117,7 +117,7 @@ export function agentSystemPrompt(goal: string, output: OutputSpec, opts: { down
 }
 
 /** A provider-reported token count as a finite, non-negative integer (fractions round up); undefined when unusable. */
-export function tokenCount(n: unknown): number | undefined {
+function tokenCount(n: unknown): number | undefined {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? Math.ceil(n) : undefined;
 }
 

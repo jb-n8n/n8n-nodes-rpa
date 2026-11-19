@@ -46,10 +46,13 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
   const signal = ctx.getExecutionCancelSignal();
   let r: TaskResult;
   try {
-    r = await engine.runDesktopTask({
+    const result = await engine.runDesktopTask({
       script: raw, trust, runner, vars: p.vars, ...(p.secretVars.length ? { secretVars: p.secretVars } : {}), ...(p.secretTargets ? { secretTargets: p.secretTargets } : {}),
       budgetMs: p.common.maxSeconds * 1000, defaultStepTimeoutMs: p.common.timeoutMs, ...(signal ? { signal } : {}),
     });
+    // No repair input is passed (AI Repair is refused above), so a desktop repair result never comes back here.
+    if (result.ok && result.lane === 'agent') return configError(DESKTOP_NO_REPAIR);
+    r = result;
   } catch (error) {
     return configError(errorMessage(error));
   }

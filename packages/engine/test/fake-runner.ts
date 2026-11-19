@@ -829,7 +829,7 @@ export class FakeRunner {
     if (p.mode !== undefined && p.mode !== 'step' && !repair && !probe) throw new RpcError(INVALID_PARAMS, "invalid params: mode must be 'step', 'repair' or 'probe'");
     if (probe) {
       if (!PROBE_ACTIONS.includes(action)) throw new RpcError(E.policy_refused, PROBE_REFUSAL);
-      if (write) throw new RpcError(E.policy_refused, 'policy_refused: probe mode never carries write: true');
+      if (write) throw new RpcError(E.policy_refused, 'policy_refused: probe mode never sends a write step (write is not allowed with it)');
       if ((run.probes ?? 0) >= MAX_PROBES_PER_RUN) throw new RpcError(E.policy_refused, `policy_refused: a run may make at most ${MAX_PROBES_PER_RUN} probe acts`);
     }
     const chord = action === 'key' ? parseChord(String(p.value ?? '')) : undefined;

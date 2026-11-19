@@ -64,6 +64,7 @@ const failed = (r: DesktopTaskResult) => {
 };
 const succeeded = (r: DesktopTaskResult) => {
   if (!r.ok) throw new Error(`expected success, got ${r.code}: ${r.message}`);
+  if (r.lane !== 'script') throw new Error('expected the script lane');
   return r;
 };
 

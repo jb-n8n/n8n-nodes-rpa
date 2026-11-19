@@ -33,6 +33,10 @@ export interface SignedDesktopRow {
 
 /** Words that make a control look like it saves, posts or submits (matched on its name, automation id and the step's intent). */
 const WRITE_WORDS = /\b(save|post|posting|submit|send|delete|remove|approve|release|book|pay|transfer|apply|confirm|commit|update|create|ok|yes)\b/i;
+/** Whether a text, read as words (`btnPost` → `btn Post`), has a write word: the runner's probe and repair-mode rule. */
+export function hasWriteWord(text: string): boolean {
+  return WRITE_WORDS.test(words(text));
+}
 /** Keys that can press a default button or save: Enter on a default button, the usual save shortcuts. */
 const WRITE_KEYS = new Set(['Enter', 'Ctrl+Enter', 'Ctrl+S', 'Ctrl+Shift+S', 'F11']);
 /** `btnPost` → `btn Post`, `save_as` → `save as`: words a camel-case or snake-case id is made of. */

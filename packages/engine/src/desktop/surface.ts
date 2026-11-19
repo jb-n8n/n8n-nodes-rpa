@@ -85,6 +85,11 @@ export interface DesktopSurface extends Surface {
    * read's own output, where a text that is also a typed variable value still stays masked.
    */
   readonly clipboard: string[];
+  /**
+   * The step indices AI repair added or retargeted (empty outside a repair or its proof): their clicks go out in the
+   * runner's probe mode, their reads in repair mode, and any other action of theirs is refused before it is sent.
+   */
+  readonly probeSteps: Set<number>;
   /** Tells the surface which top-level step is running, for `errors`. */
   trackStep(current: () => number | undefined): void;
   /** Records an error against the running step. */
@@ -168,7 +173,7 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
 
   const surface: DesktopSurface = {
     kind: 'desktop',
-    client, runId, app, errors, refs, typed, clipboard,
+    client, runId, app, errors, refs, typed, clipboard, probeSteps: new Set<number>(),
     trackStep: (fn) => { current = fn; },
     record,
     rpc,
