@@ -3,6 +3,7 @@
 // owner is the only one that carries the write marker.
 
 import { emptyChoice, runBinaryTooLarge, UNSIGNED_SECRET_VARIABLE } from '../messages.js';
+import { looksDestructive } from '../policy/destructive.js';
 import { renderVars, SECRET_FILL_VALUE } from '../secrets/render.js';
 import { secretFillValues } from '../secrets/secret-fills.js';
 import { FILE_CHECK_FAILED_PREFIX, checkFile } from '../steps/file-check.js';
@@ -14,7 +15,7 @@ import { EXPORT_DIR_TOKEN, MAX_EXPECTED_FILE_BYTES } from '../steps/parse.js';
 import { poll } from '../steps/poll.js';
 import type { Handler, StepContext } from '../steps/run.js';
 import type { DesktopLocator, DesktopStep, DesktopStepBase, RunState } from '../types.js';
-import { PolicyRefusedError, type RunnerAction, type Segment } from './protocol.js';
+import { PolicyRefusedError, RUNNER_ERROR_CODES, type RunnerAction, type Segment } from './protocol.js';
 import { describeDesktopLocator, DesktopDriftError, runnerTarget, type DesktopSurface } from './surface.js';
 
 type D<K extends string> = Extract<DesktopStep, Record<K, unknown>>;
@@ -64,6 +65,13 @@ async function actOn(
   const t0 = Date.now();
   const target = loc ? runnerTarget(loc) : undefined;
   const candidate = target ? (await s.rpc('resolve', { target, timeoutMs: timeout })).candidate : undefined;
+  // A recorded menu or selection the repair kept replays in repair mode on an unapproved control: never on one whose
+  // name or id (of the candidate that resolved) reads like it deletes, cancels, rejects or signs out. The runner checks
+  // the element itself too.
+  if ((mark === 'select' || mark === 'expand') && loc && candidate !== undefined) {
+    const own = candidateCondition(loc, candidate);
+    if (!own || looksDestructive(own.name ?? '', own.automationId ?? '')) throw new PolicyRefusedError(RUNNER_ERROR_CODES.policy_refused, `policy_refused: ${CHANGED_STEP_DESTRUCTIVE}`);
+  }
   const timeoutMs = Math.max(MIN_ACT_MS, timeout - (Date.now() - t0));
   const write = step.write === true;
   try {
@@ -75,6 +83,15 @@ async function actOn(
     if (write && !(err instanceof PolicyRefusedError)) state.submitted = true;
     throw err;
   }
+}
+
+/** A kept menu or selection whose control reads destructive: never replayed before approval. */
+export const CHANGED_STEP_DESTRUCTIVE = "a menu or item AI repair kept reads like it deletes, cancels, rejects or signs out, so it is not opened or selected before approval";
+
+/** The own condition (the last of its path) of the locator's candidate `i` (0: the primary, then the fallbacks). */
+function candidateCondition(loc: DesktopLocator, i: number): { name?: string; automationId?: string } | undefined {
+  const t = i === 0 ? loc.uia : loc.fallbacks?.[i - 1]?.uia;
+  return t?.path[t.path.length - 1];
 }
 
 /** A step AI repair changed that would type, choose, check or press a key: it never runs before approval. */

@@ -1,0 +1,36 @@
+{
+  "about": "Shared by the engine's denylist test and the desktop runner's parity test (DestructiveWords): the runner must normalize exactly as normalizeForDenylist does.",
+  "normalized": [
+    ["Dеlete", "delete"],
+    ["Del​ete", "delete"],
+    ["Can­cel", "cancel"],
+    ["Re‌je‍ct", "reject"],
+    ["Ar⁠chive﻿", "archive"],
+    ["deleteAll", "delete all"],
+    ["DeleteAll", "delete all"],
+    ["HTMLCancel", "html cancel"],
+    ["delete_all", "delete all"],
+    ["Sign-out", "sign out"],
+    ["Sign—out", "sign out"],
+    ["Log‑off", "log off"],
+    ["ＣＡＮＣＥＬ", "cancel"],
+    ["Cancél", "cancel"],
+    ["Rejécted", "rejected"],
+    ["Сancel", "cancel"],
+    ["ΑRCHIVE", "archive"],
+    ["Ꭰelete", "ꭰelete"],
+    ["Pay all", "pay all"],
+    ["  Next \t page  ", " next page "],
+    ["ﬁnd", "find"],
+    ["Ⅳ", "iv"]
+  ],
+  "destructive": [
+    "Dеlete", "Del​ete", "Can​cel", "Can­cel", "Сancel", "ΑRCHIVE", "ＣＡＮＣＥＬ", "Cancél", "deleteAll", "delete_all", "Sign-out",
+    "Sign—out", "Log off", "ackall", "cancelorder", "btnReject", "cmdRevokeAll", "Re‌je‍ct", "Ar⁠chive", "Pay all", "doDelete"
+  ],
+  "notDestructive": [
+    "Next", "Back", "Continue", "Find", "Export line items...", "btnFind", "Payments overview", "Cancelled orders", "Confirmed", "Sender", "Payroll",
+    "Reports", "Sign in", "Rejécted", "Ꭰelete", "Removed notices"
+  ],
+  "discard": ["Discard", "Discard changes", "Dis​card all", "Dіscard"]
+}

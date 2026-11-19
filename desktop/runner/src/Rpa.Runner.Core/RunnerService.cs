@@ -388,6 +388,10 @@ public sealed class RunnerService
                 // G4: nothing that reads like a write is expanded or selected in repair mode, declared or not.
                 if (ReadsLikeWrite(element))
                     throw RpcErrors.PolicyRefused("the target's name or automation id reads like a write (save, post, submit, confirm, ok and the like); repair mode never acts on it");
+                // Nor anything on the destructive deny list: a tab, list item or menu named so may act when it is
+                // selected or opened.
+                if (ReadsDestructive(element))
+                    throw RpcErrors.PolicyRefused("the target's name or automation id reads like it deletes, cancels, rejects or signs out; repair mode never acts on it");
                 // G2: choosing an item of a combo box changes a form value.
                 if (action == ActionKind.Click && InComboBox(element, window))
                     throw RpcErrors.PolicyRefused("repair mode never chooses an item of a combo box: that changes a form value");
@@ -407,6 +411,9 @@ public sealed class RunnerService
 
     /// <summary>Whether the element's name or automation id has a write word (<see cref="WriteWords"/>).</summary>
     private static bool ReadsLikeWrite(IUiNode element) => WriteWords.Has(element.Name) || WriteWords.Has(element.AutomationId);
+
+    /// <summary>Whether the element's name or automation id is on the destructive deny list (<see cref="DestructiveWords"/>).</summary>
+    private static bool ReadsDestructive(IUiNode element) => DestructiveWords.Has(element.Name) || DestructiveWords.Has(element.AutomationId);
 
     /// <summary>Whether the element is an item of a combo box: a ComboBox above it in its window, a Win32 combo list
     /// (class ComboLBox) above it, or the window itself is such a list. Fails closed: an element that goes away counts.</summary>
@@ -442,7 +449,7 @@ public sealed class RunnerService
         if (action is not (ActionKind.Click or ActionKind.DoubleClick)) throw RpcErrors.PolicyRefused(ProbeRefusal);
         if (ReadsLikeWrite(element))
             throw RpcErrors.PolicyRefused("the target's name or automation id reads like a write (save, post, submit, confirm, ok and the like); probe mode never acts on it");
-        if (DestructiveWords.Has(element.Name) || DestructiveWords.Has(element.AutomationId))
+        if (ReadsDestructive(element))
             throw RpcErrors.PolicyRefused("the target's name or automation id reads like it deletes, cancels, rejects or signs out; probe mode never acts on it");
         if (!ProbeClickable.Contains(element.ControlType))
             throw RpcErrors.PolicyRefused($"probe mode may click only buttons, menu items, links, tabs, list items and tree items, not a {element.ControlType}");

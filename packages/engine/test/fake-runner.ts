@@ -877,6 +877,9 @@ export class FakeRunner {
       if (hasWriteWord(e.name) || hasWriteWord(e.automationId)) {
         throw new RpcError(E.policy_refused, `policy_refused: the target's name or automation id ${WRITE_LIKE}; repair mode never acts on it`);
       }
+      if (looksDestructive(e.name, e.automationId)) {
+        throw new RpcError(E.policy_refused, "policy_refused: the target's name or automation id reads like it deletes, cancels, rejects or signs out; repair mode never acts on it");
+      }
       if (action === 'click' && this.inComboBox(win, e)) throw new RpcError(E.policy_refused, 'policy_refused: repair mode never chooses an item of a combo box: that changes a form value');
     }
     if (probe) {

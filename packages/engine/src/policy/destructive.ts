@@ -55,6 +55,22 @@ export function isDestructive(s: string): boolean {
   return DENYLIST.test(normalizeForDenylist(s));
 }
 
+/** Desktop dialogs say Discard where web pages say Delete; not in DENYLIST (the browser's list stays as it is). */
+const DISCARD = /(?<![a-z])discard(?: ?all| ?changes)?(?![a-z])/i;
+
+/**
+ * A desktop control that reads destructive: DENYLIST or "discard" on its name and on its automation id read as words
+ * (btnReject → btn Reject), each normalized first (normalizeForDenylist), so a zero-width character or a homoglyph does
+ * not hide the word. The desktop runner's DestructiveWords is the same check (its parity test reads this file's fixtures).
+ */
+export function looksDestructive(name: string, automationId: string): boolean {
+  const words = (t: string) => t.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_.\-]+/g, ' ');
+  return [name, words(automationId)].some((t) => {
+    const n = normalizeForDenylist(t);
+    return DENYLIST.test(n) || DISCARD.test(n);
+  });
+}
+
 /** One lenient pass: every run of valid `%XX` escapes is decoded (as UTF-8, else byte by byte); malformed `%` is kept. */
 function decodeOnce(s: string): string {
   return s.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {

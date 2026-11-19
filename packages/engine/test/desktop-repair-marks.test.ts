@@ -2,7 +2,7 @@
 // names and ids, add_step after a failed check, and the per-fix cap checked before any click.
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRunner } from '../src/desktop/client.js';
-import { CHANGED_STEP_NOT_RUN } from '../src/desktop/handlers.js';
+import { CHANGED_STEP_DESTRUCTIVE, CHANGED_STEP_NOT_RUN } from '../src/desktop/handlers.js';
 import { looksDestructive, probeBlock } from '../src/desktop/repair/session.js';
 import { buildTree } from '../src/desktop/repair/tree.js';
 import { createDesktopSurface, type ChangedStep, type DesktopViewItem } from '../src/desktop/surface.js';
@@ -82,6 +82,28 @@ describe('changed steps act as their marks say', () => {
       if (!res.ok) expect(res.failure.message).toContain(CHANGED_STEP_NOT_RUN);
     }
     expect(acts()).toEqual([]);
+    await client.close();
+  });
+});
+
+describe('a kept menu or selection never replays onto a destructive control', () => {
+  it('a select or expand mark whose resolved control reads Cancel is refused before anything is sent', async () => {
+    const { client, surface, ctx, runId } = await onErp('destructive');
+    // Open v2's Confirm export (step-mode clicks, unmarked) so its Cancel button is there to resolve.
+    await client.call('act', { runId, target: { window: MAIN, path: [{ controlType: 'MenuItem', name: 'Reports' }] }, action: 'click', timeoutMs: 1000 });
+    await client.call('act', { runId, target: { window: { exe: 'erpdemo.exe' }, path: [{ controlType: 'MenuItem', name: 'Export line items...' }] }, action: 'click', timeoutMs: 1000 });
+    const before = runner!.requests.filter((q) => q.method === 'act').length;
+    for (const mark of ['select', 'expand'] as ChangedStep[]) {
+      for (const cond of [{ controlType: 'Button', automationId: 'btnCancelExport', name: 'Cancel' }, { controlType: 'Button', automationId: 'btnCancelExport' }] as Record<string, string>[]) {
+        surface.changedSteps.clear();
+        surface.changedSteps.set(0, mark);
+        const step: DesktopStep = { intent: 'Click Cancel', click: at({ exe: 'erpdemo.exe', title: 'Confirm export' }, cond) };
+        const res = await runSteps(ctx, [step] as unknown as Step[], newRunState());
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.failure.message).toContain(CHANGED_STEP_DESTRUCTIVE);
+      }
+    }
+    expect(runner!.requests.filter((q) => q.method === 'act').length).toBe(before);
     await client.close();
   });
 });

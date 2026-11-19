@@ -579,6 +579,25 @@ public sealed class ServiceTests : IDisposable
         Assert.Empty(_h.Desktop.Performed);
     }
 
+    [Theory]
+    [InlineData("TabItem", "Archive all", "", "click")]
+    [InlineData("ListItem", "", "lstRejected_reject", "click")]
+    [InlineData("MenuItem", "Sign\u200b out", "", "expand")]
+    [InlineData("MenuItem", "\u0421ancel order", "", "expand")]
+    [InlineData("TreeItem", "Discard changes", "", "click")]
+    public void Repair_mode_never_acts_on_what_reads_destructive(string type, string name, string id, string action)
+    {
+        // A tab, list item or menu named so may act when it is selected or opened (a kept menu or selection replays in
+        // repair mode on a control nobody approved yet).
+        var w = _h.BeginWithApp();
+        w.Child(type, name, id);
+        var target = id.Length > 0 ? Harness.T(new { automationId = id }) : Harness.T(new { controlType = type, name });
+        var e = _h.Err("act", Act(target, action, new { mode = "repair" }), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the target's name or automation id reads like it deletes, cancels, rejects or signs out; repair mode never acts on it",
+            e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
     /// <summary>A dialog of the run in front of the main window, nested in its tree as UI Automation shows it.</summary>
     private FakeNode Dialog(FakeNode main, string title, string id, params (string Type, string Name, string Id)[] children)
     {
@@ -765,6 +784,46 @@ public sealed class ServiceTests : IDisposable
         Assert.Equal(Rpa.Runner.Core.Policy.DestructiveWords.Pattern, withDiscard);
         foreach (var ok in new[] { "Next", "Back", "Continue", "Find", "Export line items...", "btnFind", "Payments overview" })
             Assert.False(Rpa.Runner.Core.Policy.DestructiveWords.Has(ok), ok);
+    }
+
+    /// <summary>The engine's shared fixtures (packages/engine/test/fixtures/denylist-normalization.json) and source.</summary>
+    private static DirectoryInfo RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "packages", "engine", "src", "policy", "destructive.ts"))) dir = dir.Parent;
+        Assert.NotNull(dir);
+        return dir!;
+    }
+
+    [Fact]
+    public void The_deny_list_normalizes_as_the_engine_does()
+    {
+        // Parity: the engine's normalizeForDenylist fixtures, run against the runner's DestructiveWords.
+        var root = RepoRoot();
+        var json = JsonNode.Parse(File.ReadAllText(Path.Combine(root.FullName, "packages", "engine", "test", "fixtures", "denylist-normalization.json")))!;
+        foreach (var pair in json["normalized"]!.AsArray())
+        {
+            var input = pair![0]!.GetValue<string>();
+            Assert.Equal(pair[1]!.GetValue<string>(), Rpa.Runner.Core.Policy.DestructiveWords.Normalize(input));
+        }
+        foreach (var s in json["destructive"]!.AsArray()) Assert.True(Rpa.Runner.Core.Policy.DestructiveWords.Has(s!.GetValue<string>()), s.GetValue<string>());
+        foreach (var s in json["discard"]!.AsArray()) Assert.True(Rpa.Runner.Core.Policy.DestructiveWords.Has(s!.GetValue<string>()), s.GetValue<string>());
+        foreach (var s in json["notDestructive"]!.AsArray()) Assert.False(Rpa.Runner.Core.Policy.DestructiveWords.Has(s!.GetValue<string>()), s.GetValue<string>());
+
+        // The homoglyph table and the invisible characters are the engine's, entry for entry.
+        var ts = File.ReadAllText(Path.Combine(root.FullName, "packages", "engine", "src", "policy", "destructive.ts"));
+        var table = System.Text.RegularExpressions.Regex.Match(ts, @"const HOMOGLYPHS: Record<string, string> = \{(.*?)\};", System.Text.RegularExpressions.RegexOptions.Singleline);
+        Assert.True(table.Success);
+        var entries = System.Text.RegularExpressions.Regex.Matches(table.Groups[1].Value, @"(\S): '(\w)'").ToDictionary(m => m.Groups[1].Value[0], m => m.Groups[2].Value[0]);
+        Assert.Equal(entries.OrderBy(e => e.Key), Rpa.Runner.Core.Policy.DestructiveWords.Homoglyphs.OrderBy(e => e.Key));
+        var invisible = System.Text.RegularExpressions.Regex.Match(ts, @"export const INVISIBLE = /\[(.*?)\]/;");
+        Assert.True(invisible.Success);
+        var engineInvisible = new System.Text.RegularExpressions.Regex($"[{invisible.Groups[1].Value}]");
+        for (var c = 0; c <= 0xFFFF; c++)
+        {
+            if (c is >= 0xD800 and <= 0xDFFF) continue;
+            Assert.Equal(engineInvisible.IsMatch(((char)c).ToString()), Rpa.Runner.Core.Policy.DestructiveWords.IsInvisible(new System.Text.Rune(c)));
+        }
     }
 
     [Fact]

@@ -96,14 +96,16 @@ node does not offer AI repair for desktop steps yet):
 - `mode: "repair"` explores. It allows only `expand`, `read`, `key` with the value `Escape` and no target, and
   `click` on tabs, list items and tree items. It never moves the focus (a focus change runs the app's leave and
   validation code, which some apps use to save). It never expands or clicks a control whose name or automation id has a
-  write word (save, post, submit, confirm, ok and the like: the engine's list), never chooses an item of a combo box (a
-  form value), and never acts on a declared write control. Escape is allowed only while a popup menu of its window is
+  write word (save, post, submit, confirm, ok and the like: the engine's list) or that reads like it deletes, cancels,
+  rejects or signs out (the deny list below), never chooses an item of a combo box (a form value), and never acts on a
+  declared write control. Escape is allowed only while a popup menu of its window is
   open (a top-level menu window it owns; a menu bar does not count), so it only closes that menu: in a dialog it would
   press the cancel button, which may discard or cancel something. An `Escape` listed in `gatedKeys` stays refused.
 - `mode: "probe"` clicks once on a control the repair added or retargeted, before anyone approved it. It allows only
   `click` and `doubleClick` (a step that types, selects or checks waits for approval), never with `write: true`, never
   on a declared write control, and never on a control whose name or automation id has a write word or reads like it
-  deletes, cancels, rejects or signs out (the engine's denylist, plus discard). The control must be
+  deletes, cancels, rejects or signs out (the engine's denylist, plus discard, matched after the engine's normalization:
+  invisible characters, accents and look-alike letters do not hide a word). The control must be
   a button, menu item, link, tab, list item or tree item (not a combo box item), in a window whose title and static
   text have no write word: a dialog's default button does whatever the dialog says. A run makes at most 12 probe acts.
   Every check runs again on an element the runner finds anew after the first one went away.

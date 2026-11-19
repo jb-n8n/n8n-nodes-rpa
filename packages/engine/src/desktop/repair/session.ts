@@ -9,7 +9,7 @@ import { driveAgentLoop, type AgentBudget, type LoopCore } from '../../agent/loo
 import type { ChatModel } from '../../agent/model.js';
 import type { ToolCall } from '../../agent/tools.js';
 import { neutralize } from '../../agent/tools.js';
-import { isDestructive } from '../../policy/destructive.js';
+import { looksDestructive } from '../../policy/destructive.js';
 import { hasWriteWord, looksLikeWrite } from '../../proposal/desktop.js';
 import { maskClipped, type Masker } from '../../secrets/mask.js';
 import { runSteps, type StepContext } from '../../steps/run.js';
@@ -109,13 +109,8 @@ export function firstStopIndex(doc: DesktopScript, from = 0): number {
   return doc.steps.length;
 }
 
-/** The engine's destructive denylist on a name and on an automation id read as words (btnReject → btn Reject). */
-export function looksDestructive(name: string, automationId: string): boolean {
-  const words = (t: string) => t.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_.\-]+/g, ' ');
-  return [name, words(automationId)].some((t) => isDestructive(t) || DISCARD.test(t));
-}
-/** Desktop dialogs say Discard where web pages say Delete; not in the shared denylist (the browser's stays as it is). */
-const DISCARD = /(?<![a-z])discard(?: ?all| ?changes)?(?![a-z])/i;
+/** The engine's destructive denylist on a desktop control's name and automation id (policy/destructive.ts). */
+export { looksDestructive };
 
 /** How each kind of added step acts before approval. */
 const MARK_OF: Record<AddedKind, ChangedStep> = { openMenu: 'expand', select: 'select', escape: 'escape', inserted: 'probe' };
