@@ -603,14 +603,111 @@ public sealed class ServiceTests : IDisposable
     }
 
     [Fact]
-    public void Probe_mode_types_into_a_field_and_clicks_a_menu_item()
+    public void Probe_mode_clicks_a_menu_item()
     {
         var main = _h.BeginWithApp();
-        var d = Dialog(main, "Export options", "OptionsForm", ("Edit", "File name", "txtFile"));
+        var d = Dialog(main, "Export options", "OptionsForm");
         d.Child("MenuItem", "Export line items...", "");
-        _h.Ok("act", Probe(Harness.T(new { automationId = "txtFile" }), "type", new { mode = "probe", value = "a.csv" }));
         _h.Ok("act", Probe(Harness.T(new { controlType = "MenuItem", name = "Export line items..." })));
-        Assert.Equal(2, _h.Desktop.Performed.Count);
+        Assert.Single(_h.Desktop.Performed);
+    }
+
+    [Theory]
+    [InlineData("type")]
+    [InlineData("select")]
+    [InlineData("check")]
+    [InlineData("uncheck")]
+    public void Probe_mode_refuses_everything_but_clicks(string action)
+    {
+        // A probe select could choose an item named Approve or Post; typing or checking waits for approval too.
+        var main = _h.BeginWithApp();
+        var d = Dialog(main, "Export options", "OptionsForm", ("Edit", "File name", "txtFile"));
+        var combo = new FakeNode("ComboBox", "Action", "cmbAction");
+        combo.Child("ListItem", "Approve", "");
+        d.Add(combo);
+        var target = action == "select" ? Harness.T(new { automationId = "cmbAction" }) : Harness.T(new { automationId = "txtFile" });
+        var e = _h.Err("act", Probe(target, action, action is "type" or "select" ? new { mode = "probe", value = "Approve" } : null), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: probe mode allows only click and doubleClick", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    /// <summary>The first input attempt finds the element gone and puts <paramref name="replacement"/> in its place
+    /// (same automation id), so the act re-resolves to it.</summary>
+    private void SwapOnFirstInput(FakeNode parent, string id, FakeNode replacement)
+    {
+        var swapped = false;
+        _h.Desktop.BeforeInput = _ =>
+        {
+            if (swapped) return;
+            swapped = true;
+            var old = (FakeNode)parent.GetChildren().Single(c => c.AutomationId == id);
+            old.AutomationId = "gone-" + id;
+            parent.Add(replacement);
+            throw new ElementGoneException("gone");
+        };
+    }
+
+    [Fact]
+    public void A_re_resolved_element_gets_every_repair_check_write_words()
+    {
+        var w = _h.BeginWithApp();
+        var tabs = new FakeNode("Tab", "Views", "tabViews");
+        tabs.Child("TabItem", "Open items", "tabItem1");
+        w.Add(tabs);
+        SwapOnFirstInput(tabs, "tabItem1", new FakeNode("TabItem", "Approve all", "tabItem1"));
+        var e = _h.Err("act", Act(Harness.T(new { automationId = "tabItem1" }), "click", new { mode = "repair", timeoutMs = 5000 }), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the target's name or automation id reads like a write (save, post, submit, confirm, ok and the like); repair mode never acts on it",
+            e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void A_re_resolved_element_gets_every_repair_check_combo_items_and_types()
+    {
+        var w = _h.BeginWithApp();
+        var list = new FakeNode("List", "Results", "lstPick");
+        list.Child("ListItem", "Row A", "item1");
+        w.Add(list);
+        var combo = new FakeNode("ComboBox", "Company code", "cmbCompany");
+        var inner = new FakeNode("List", "", "");
+        combo.Add(inner);
+        w.Add(combo);
+        // The element that comes back is a combo box item.
+        _h.Desktop.BeforeInput = _ =>
+        {
+            if (inner.GetChildren().Count > 0) return;
+            ((FakeNode)list.GetChildren().Single()).AutomationId = "old";
+            inner.Child("ListItem", "2000", "item1");
+            throw new ElementGoneException("gone");
+        };
+        var e = _h.Err("act", Act(Harness.T(new { automationId = "item1" }), "click", new { mode = "repair", timeoutMs = 5000 }), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: repair mode never chooses an item of a combo box: that changes a form value", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void A_re_resolved_element_gets_every_repair_check_clickable_types()
+    {
+        var w = _h.BeginWithApp();
+        var list = new FakeNode("List", "Results", "lstPick");
+        list.Child("ListItem", "Row A", "item1");
+        w.Add(list);
+        SwapOnFirstInput(list, "item1", new FakeNode("Button", "Row A", "item1"));
+        var e = _h.Err("act", Act(Harness.T(new { automationId = "item1" }), "click", new { mode = "repair", timeoutMs = 5000 }), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: repair mode may click only tabs, list items and tree items, not a Button", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void A_re_resolved_element_gets_every_probe_check()
+    {
+        var main = _h.BeginWithApp();
+        var d = Dialog(main, "Export options", "OptionsForm", ("Button", "Next", "btnNext"));
+        SwapOnFirstInput(d, "btnNext", new FakeNode("Button", "Submit", "btnNext"));
+        var e = _h.Err("act", Probe(Harness.T(new { automationId = "btnNext" }), "click", new { mode = "probe", timeoutMs = 5000 }), RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the target's name or automation id reads like a write (save, post, submit, confirm, ok and the like); probe mode never acts on it",
+            e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
     }
 
     [Fact]
@@ -633,7 +730,7 @@ public sealed class ServiceTests : IDisposable
     {
         _h.BeginWithApp();
         var e = _h.Err("act", Probe(Id("txtUser"), action, action == "key" ? new { mode = "probe", value = "Enter" } : null), RpcErrors.PolicyRefusedCode);
-        Assert.Equal("policy_refused: probe mode allows only click, doubleClick, type, select, check and uncheck", e["message"]!.GetValue<string>());
+        Assert.Equal("policy_refused: probe mode allows only click and doubleClick", e["message"]!.GetValue<string>());
     }
 
     [Fact]

@@ -51,9 +51,18 @@ export const RUNNER_MAX_FILE_BYTES = 36 * 1024 * 1024;
 const INVALID_PARAMS = -32602;
 const METHOD_NOT_FOUND = -32601;
 /** RunnerService.RepairRefusal: a repair-mode action or key the floor never allows. */
-const REPAIR_REFUSAL = 'policy_refused: repair mode allows only focus, expand, read, Escape without a target, and click on tabs, list items and tree items';
-const REPAIR_ACTIONS = ['focus', 'expand', 'read', 'click', 'key'];
+const REPAIR_REFUSAL = 'policy_refused: repair mode allows only expand, read, Escape without a target, and click on tabs, list items and tree items';
+const REPAIR_ACTIONS = ['expand', 'read', 'click', 'key'];
 const REPAIR_CLICKABLE = ['TabItem', 'ListItem', 'TreeItem'];
+/** RunnerService.ProbeRefusal and the probe floor. */
+const PROBE_REFUSAL = 'policy_refused: probe mode allows only click and doubleClick';
+const PROBE_ACTIONS = ['click', 'doubleClick'];
+const PROBE_CLICKABLE = ['Button', 'MenuItem', 'Hyperlink', 'SplitButton', 'TabItem', 'ListItem', 'TreeItem'];
+export const MAX_PROBES_PER_RUN = 12;
+/** WriteWords.Has: the engine's write words, read on the words of a name or id (btnPost -> btn Post). */
+const WRITE_WORDS = /\b(save|post|posting|submit|send|delete|remove|approve|release|book|pay|transfer|apply|confirm|commit|update|create|ok|yes)\b/i;
+const hasWriteWord = (text: string | undefined) => !!text && WRITE_WORDS.test(text.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_.\-]+/g, ' '));
+const WRITE_LIKE = 'reads like a write (save, post, submit, confirm, ok and the like)';
 
 /** A key chord as the runner reads it (KeyChord.Parse): modifier flags in any order and spelling, then the key. */
 interface Chord { ctrl: boolean; alt: boolean; shift: boolean; win: boolean; key: string }
@@ -252,6 +261,8 @@ interface Run {
   runId: string; leaseMs: number; exportDir: string; timer: NodeJS.Timeout; app?: AppModel; focus?: El;
   /** RunState.LastAct: the clipboard's sequence number before the run's most recent act, and when it finished. */
   lastAct?: { seq: number; at: number };
+  /** RunState.Probes. */
+  probes?: number;
 }
 
 export interface FakeRunnerOptions {
@@ -332,6 +343,10 @@ export class FakeRunner {
   readonly noWindowsMethod: boolean;
   readonly padSnapshotIds: number;
   lastExportDir: string | undefined;
+  /** run.end's reservation for the next run id, while it lasts. */
+  reserved: { runId: string; until: number } | undefined;
+  /** Every run.end's reservation (or none), in order. */
+  readonly reservations: { runId?: string; ms?: number }[] = [];
   private lastTyped = '';
   private server: Server | undefined;
   private readonly sockets = new Set<TLSSocket>();
@@ -578,6 +593,7 @@ export class FakeRunner {
    * that is a Menu or a #32768, other than the window, that holds the foreground or is owned by the window).
    */
   private checkRepairEscape(run: Run, win: Win): void {
+    // G1: only while a popup menu of the window is open (then Escape only closes it).
     const app = run.app;
     const ownedBy = (w: Win) => {
       let owner = w.owner;
@@ -586,8 +602,36 @@ export class FakeRunner {
     };
     const popupOpen = (app?.windows ?? []).some((w) => w !== win && (w.root.controlType === 'Menu' || w.className === '#32768') && w.root.visible
       && (w === app!.foreground || ownedBy(w)));
-    if (this.windowHasWriteControl(win) && !popupOpen) {
-      throw new RpcError(E.policy_refused, 'policy_refused: in repair mode Escape could press a declared write control of this window (a cancel button), so it is allowed only while a menu is open');
+    if (!popupOpen) {
+      throw new RpcError(E.policy_refused, 'policy_refused: in repair mode Escape could press a cancel button of this window, so it is allowed only while a menu is open');
+    }
+  }
+
+  /** RunnerService.InComboBox: a ComboBox (or a ComboLBox list) above the element in its window. */
+  private inComboBox(win: Win, e: El): boolean {
+    if (win.className === 'ComboLBox') return true;
+    const path = (node: El, trail: El[]): El[] | undefined => {
+      if (node === e) return trail;
+      for (const c of node.children) {
+        const found = path(c, [...trail, node]);
+        if (found) return found;
+      }
+      return undefined;
+    };
+    return (path(win.root, []) ?? []).some((a) => a.controlType === 'ComboBox' || a.className === 'ComboLBox');
+  }
+
+  /** RunnerService.CheckProbe. */
+  private checkProbe(win: Win, e: El, action: string): void {
+    if (hasWriteWord(e.name) || hasWriteWord(e.automationId)) {
+      throw new RpcError(E.policy_refused, `policy_refused: the target's name or automation id ${WRITE_LIKE}; probe mode never acts on it`);
+    }
+    if (!PROBE_CLICKABLE.includes(e.controlType)) {
+      throw new RpcError(E.policy_refused, `policy_refused: probe mode may click only buttons, menu items, links, tabs, list items and tree items, not a ${e.controlType}`);
+    }
+    if (this.inComboBox(win, e)) throw new RpcError(E.policy_refused, 'policy_refused: probe mode never chooses an item of a combo box');
+    if (hasWriteWord(win.title) || descendants(win.root).some((t) => t.controlType === 'Text' && t.visible && hasWriteWord(t.name))) {
+      throw new RpcError(E.policy_refused, `policy_refused: the window's title or text ${WRITE_LIKE}, so probe mode clicks nothing in it`);
     }
   }
 
@@ -608,6 +652,11 @@ export class FakeRunner {
       case 'run.begin': {
         if (!this.session.interactive || this.session.locked) throw new RpcError(E.desktop_unavailable, 'the workstation is locked');
         if (this.run) throw new RpcError(E.runner_busy, 'another run holds the runner');
+        // RunManager: a reservation from run.end keeps the runner for its run id until it runs out.
+        if (this.reserved) {
+          if (this.now() < this.reserved.until && this.reserved.runId !== String(p.runId)) throw new RpcError(E.runner_busy, 'another run holds the runner');
+          this.reserved = undefined;
+        }
         const leaseMs = p.leaseMs as number;
         if (!Number.isInteger(leaseMs) || leaseMs < 5000 || leaseMs > 600_000) throw new RpcError(-32602, 'leaseMs must be 5000..600000');
         const exportDir = mkdtempSync(join(this.exportRoot, 'export-'));
@@ -624,10 +673,16 @@ export class FakeRunner {
         if (this.heartbeatDelayMs) await new Promise((r) => setTimeout(r, this.heartbeatDelayMs));
         return {};
       }
-      case 'run.end':
+      case 'run.end': {
         this.requireRun(p);
+        const reserveMs = optInt(p, 'reserveMs', 1000, 30_000);
+        const reserveFor = p.reserveFor === undefined ? undefined : String(p.reserveFor);
+        if ((reserveFor === undefined) !== (reserveMs === undefined)) throw new RpcError(INVALID_PARAMS, 'invalid params: reserveFor and reserveMs go together');
         this.endRun();
+        this.reserved = reserveFor !== undefined ? { runId: reserveFor, until: this.now() + reserveMs! } : undefined;
+        this.reservations.push({ runId: reserveFor, ms: reserveMs });
         return {};
+      }
       case 'app.launch': {
         const run = this.requireRun(p);
         const exe = String((p.app as { exe?: string })?.exe ?? '').split(/[\\/]/).pop() ?? '';
@@ -770,6 +825,13 @@ export class FakeRunner {
     const action = String(p.action);
     const write = p.write === true;
     const repair = p.mode === 'repair';
+    const probe = p.mode === 'probe';
+    if (p.mode !== undefined && p.mode !== 'step' && !repair && !probe) throw new RpcError(INVALID_PARAMS, "invalid params: mode must be 'step', 'repair' or 'probe'");
+    if (probe) {
+      if (!PROBE_ACTIONS.includes(action)) throw new RpcError(E.policy_refused, PROBE_REFUSAL);
+      if (write) throw new RpcError(E.policy_refused, 'policy_refused: probe mode never carries write: true');
+      if ((run.probes ?? 0) >= MAX_PROBES_PER_RUN) throw new RpcError(E.policy_refused, `policy_refused: a run may make at most ${MAX_PROBES_PER_RUN} probe acts`);
+    }
     const chord = action === 'key' ? parseChord(String(p.value ?? '')) : undefined;
     // The floor checks that need no UI, in the runner's order: repair actions, shell chords, gated keys, repair keys.
     if (repair && !REPAIR_ACTIONS.includes(action)) throw new RpcError(E.policy_refused, REPAIR_REFUSAL);
@@ -800,10 +862,21 @@ export class FakeRunner {
     const { el: e, win } = await this.findWithin(run, p.target as RunnerTarget, p.timeoutMs as number);
     if (this.isWriteControl(win, e)) {
       if (repair) throw new RpcError(E.policy_refused, 'policy_refused: the target is a declared write control; repair mode never acts on it');
+      if (probe) throw new RpcError(E.policy_refused, 'policy_refused: the target is a declared write control; probe mode never acts on it');
       if (!write) throw new RpcError(E.policy_refused, `${e.controlType} #${e.automationId} is a declared write control: the step must be a declared write`);
     }
     if (repair && action === 'click' && !REPAIR_CLICKABLE.includes(e.controlType)) {
       throw new RpcError(E.policy_refused, `policy_refused: repair mode may click only tabs, list items and tree items, not a ${e.controlType}`);
+    }
+    if (repair && (action === 'click' || action === 'expand')) {
+      if (hasWriteWord(e.name) || hasWriteWord(e.automationId)) {
+        throw new RpcError(E.policy_refused, `policy_refused: the target's name or automation id ${WRITE_LIKE}; repair mode never acts on it`);
+      }
+      if (action === 'click' && this.inComboBox(win, e)) throw new RpcError(E.policy_refused, 'policy_refused: repair mode never chooses an item of a combo box: that changes a form value');
+    }
+    if (probe) {
+      this.checkProbe(win, e, action);
+      run.probes = (run.probes ?? 0) + 1;
     }
     if (chord) this.checkKeyReach(run, chord, write);
     // WindowsDesktop.KeyboardReceiver: keyboard input (a key, typing into an edit) needs the foreground window to be the
