@@ -36,11 +36,12 @@ public static class RepairPicture
     /// <summary>Black boxes reach this far past a control's bounds (focus rectangles, anti-aliased edges).</summary>
     public const int MaskPadding = 2;
 
-    /// <summary>Control types that get a number label.</summary>
+    /// <summary>Control types that get a number label: the controls a repair acts on. Not grid cells (DataItem) or text: a
+    /// label on every cell hides the data, and the text view lists their refs.</summary>
     private static readonly HashSet<string> Labelled = new(StringComparer.OrdinalIgnoreCase)
     {
         "Button", "MenuItem", "TabItem", "ListItem", "TreeItem", "Edit", "ComboBox", "CheckBox", "RadioButton", "Hyperlink",
-        "SplitButton", "Document", "DataItem",
+        "SplitButton", "Document",
     };
 
     /// <summary>One window of the run to draw.</summary>

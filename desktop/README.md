@@ -580,7 +580,7 @@ JSON-RPC 2.0 over WebSocket, one request per message, `Authorization: Bearer <to
 otherwise). Methods: `hello`, `run.begin` (`{ runId, leaseMs }`, 5000 to 600000), `run.heartbeat`, `run.end` (`{ runId }`, or with
 `reserveFor` and `reserveMs` up to 30000: until then `run.begin` is busy for every other run id, so a repair's proof
 takes the runner next),
-`app.launch`, `snapshot`, `isVisible`, `resolve`, `act`, `windows`, `file.retrieve`, `screenshot`, `clipboard.read`. One run at a time; a lease that
+`app.launch`, `snapshot`, `isVisible`, `resolve`, `act`, `windows`, `file.retrieve`, `screenshot`, `clipboard.read`, `look`. One run at a time; a lease that
 expires ends the run as `run.end` does (its apps closed, its export directory deleted). Requests on one connection
 are handled concurrently, so a `run.heartbeat` is answered while an `act` or `file.retrieve` is still running. The lease is also renewed when
 any request for the run finishes, and never expires while one is in progress.
@@ -603,6 +603,23 @@ same write checks); `snapshot` adds `truncated: true` when it stopped at `maxNod
 returns `{ windows: [{ title, exe, automationId, className, foreground }] }`, the run's top-level windows (its own and
 owned windows, such as dialogs and open menu drop-downs, never another application's), the foreground window first
 (`foreground: true`, only when it is the run's), then front to back, at most 20.
+
+`look { runId, window?, maxNodes?, maxDepth?, labelStart, mask, maxEdge? }` is AI repair's view: the snapshot (as
+`snapshot`) plus `picture { mime: "image/png", base64, width, height, masked, labels }`, a PNG of the run's own
+top-level windows (each drawn from its own content with PrintWindow, on black; never the desktop or another
+application's window), at most `maxEdge` (default and most 1280) pixels on its longer side, with snapshot node `i`
+labelled `labelStart + i` on its bounding box when it is a control a repair acts on (button, menu item, tab, list or
+tree item, edit, combo box, check box, radio button, link, split button, document; not grid cells or text). Before it is encoded, opaque black boxes cover every password or
+credential-like field, every control the run typed into (by runtime id, or by process, control type and automation
+id), and every control whose name, value, TextPattern text or LegacyIAccessible name or value contains a `mask` text
+(at most 64, each at most 4096 characters; the engine sends the run's typed variable values and clipboard texts) or a
+text the run typed, compared without case, ignoring texts under 4 characters. Elements are found in UI Automation's
+raw view before and after the capture, and both sets are covered; an element whose text cannot be read is covered
+whole. When a covered control's rectangle cannot be read, a window cannot be read through UI Automation, holds a child
+window of another process, moved or changed size during the capture, or is drawn scaled for its display's DPI, a
+window title holds a masked text, or there are more than 5000 elements to check, the answer carries `noPicture` (the
+reason, which holds no value) and no picture. The log records the picture's size only. A runner older than the method
+answers -32601.
 
 `clipboard.read { runId }` returns `{ text }`, the clipboard's Unicode text (`""` when it holds none). It returns only
 the run's own copy: it does not return text another application or a person copied (a password). A paste key

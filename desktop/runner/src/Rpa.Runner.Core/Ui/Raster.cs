@@ -165,9 +165,9 @@ public sealed class Raster
     /// <summary>Label scale: each font pixel is this many picture pixels (digits 10 by 14).</summary>
     public const int LabelScale = 2;
 
-    /// <summary>The size of a number label: digits with one font pixel between them, a padding of 2 and a 1-pixel border.</summary>
+    /// <summary>The size of a number label: digits with one font pixel between them, a padding of 1 and a 1-pixel border.</summary>
     public static (int W, int H) LabelSize(string digits) =>
-        (digits.Length * 6 * LabelScale - LabelScale + 6, 7 * LabelScale + 6);
+        (digits.Length * 6 * LabelScale - LabelScale + 4, 7 * LabelScale + 4);
 
     /// <summary>A number label (black digits on yellow, black border) with its top-left corner at (x, y). Digits only.</summary>
     public void DrawLabel(string digits, int x, int y)
@@ -176,7 +176,7 @@ public sealed class Raster
         var (w, h) = LabelSize(digits);
         Fill(new PixelRect(x, y, w, h), 0, 0, 0);
         Fill(new PixelRect(x + 1, y + 1, w - 2, h - 2), 255, 230, 0);
-        var cx = x + 3;
+        var cx = x + 2;
         foreach (var ch in digits)
         {
             var glyph = Digits[ch - '0'];
@@ -185,7 +185,7 @@ public sealed class Raster
                 for (var col = 0; col < 5; col++)
                 {
                     if ((glyph[row] & (0x10 >> col)) == 0) continue;
-                    Fill(new PixelRect(cx + col * LabelScale, y + 3 + row * LabelScale, LabelScale, LabelScale), 0, 0, 0);
+                    Fill(new PixelRect(cx + col * LabelScale, y + 2 + row * LabelScale, LabelScale, LabelScale), 0, 0, 0);
                 }
             }
             cx += 6 * LabelScale;

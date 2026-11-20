@@ -696,7 +696,7 @@ public sealed class RunnerService
     /// AI repair's look: the snapshot of a window (as <c>snapshot</c>) and, when it can be made, the masked, labelled picture
     /// of the run's windows (RepairPicture): node i of the snapshot is labelled <c>labelStart + i</c>. <c>mask</c> lists the
     /// texts whose controls are covered (the engine's typed variable values and clipboard texts); the runner also covers
-    /// password and credential-like fields and every control the run typed into. When no picture can be made safely the
+    /// password and credential-like fields and every control the run typed into. When no picture can be made with every such control covered, the
     /// answer has <c>noPicture</c> with the reason instead, and the snapshot alone. The picture is never logged.
     /// </summary>
     private JsonNode Look(RunState run, Params p, CancellationToken ct)
