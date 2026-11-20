@@ -394,6 +394,16 @@ describe('literal-only switches under an expression-valued Options collection', 
     expect(engine.calls).toHaveLength(0);
   });
 
+  it('Options set by one expression holding only Show the Model Screenshots is refused as well', async () => {
+    const engine = fakeEngine(() => scriptOk());
+    const resolved = params();
+    const rawParameters = { ...resolved, options: '={{ { showModelScreenshots: true } }}' };
+    const [data] = await executeRunSteps(ctx({ params: resolved, rawParameters, continueOnFail: true }), engine);
+    expect(errorOf(data[0])).toMatch(/must be set directly, not with an expression\.$/);
+    expect(details(data[0]).configError).toBe(true);
+    expect(engine.calls).toHaveLength(0);
+  });
+
   // Regression: a whole-Options expression is dropped by n8n, so every switch under it reads as its default
   it('real n8n (Workflow → getNodeParameters) replaces an expression-valued Options with defaults: the switches fail closed', async () => {
     const raw = { operation: 'runSteps', options: '={{ { allowUnsignedWrites: true, allowPrivateNetwork: true, deliverUnconfirmed: true } }}' };
@@ -401,6 +411,8 @@ describe('literal-only switches under an expression-valued Options collection', 
     const normalized = NodeHelpers.getNodeParameters(d.properties, raw, true, false, { parameters: raw } as never, d) as IDataObject;
     expect(typeof normalized.options).toBe('object');
     for (const k of ['allowUnsignedWrites', 'allowPrivateNetwork', 'deliverUnconfirmed']) expect((normalized.options as IDataObject)[k]).not.toBe(true);
+    // Show the Model Screenshots is on by default, so under a dropped Options expression it reads as on (security.md says so).
+    expect((normalized.options as IDataObject).showModelScreenshots).toBeUndefined();
     // What the node receives runs with every switch at its default (off): nothing the expression asked for is applied.
     const engine = fakeEngine(() => scriptOk());
     const resolved = params();

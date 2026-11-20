@@ -35,7 +35,7 @@ const EXPORTS = [
   'filesEvidenceText', 'fingerprintOf', 'firstPresent', 'firstUserMessage', 'flattenSteps', 'hasChangePassword', 'hasSecretFill',
   'hasSignature', 'hostnameOf', 'imageTokenEstimate', 'importCannotProve', 'importSource', 'installInterrupts', 'isDesktopDocument',
   'isDestructive', 'isEmptySteps', 'isLoginPage', 'isPrivateAddress', 'isVisibleNow', 'laneFailure', 'laneMasker', 'latestPictureOnly',
-  'localLaunchArgs', 'loginBlockEnd', 'maskLog', 'maskedName', 'matchingReadPost', 'modelErrorText', 'modelMessageText',
+  'localLaunchArgs', 'loginBlockEnd', 'maskLog', 'maskedName', 'matchingReadPost', 'mayBePictureRefusal', 'modelErrorText', 'modelMessageText',
   'msUntilNextWindow', 'needsApprovalAsWritten', 'networkSentence', 'neutralize', 'newRunState', 'noWritePolicy', 'normalizeFingerprint',
   'normalizeForDenylist', 'notHttp', 'notReplayedFlags', 'notReplayedProposal', 'openLaneRuntime', 'openSession', 'pageOf',
   'parseDesktopScript', 'parseScript', 'parseWriteSteps', 'probeRunner', 'promptVars', 'proposalDigest', 'proveScript', 'readPathMatches',

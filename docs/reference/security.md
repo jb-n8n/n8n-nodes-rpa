@@ -72,7 +72,8 @@ Ten settings must be set directly on the node. Set with an expression, they are 
 cannot switch them: **Require Signed Steps**, **Allow Private Network**, **Allow Unsigned Writes**, **Deliver
 Unconfirmed Rows**, Run Steps' **Login Breaker Reset Key**, **AI Repair Reset Key** and **Show the Model
 Screenshots**, **One-Time Code Workflow**, and Sign Steps' **Approver Allowlist** and **Approval Form Page**. They hold for browser and desktop steps alike. If the whole Options collection is set with one expression, n8n drops it before the node runs, and these
-switches stay off. Type the RPA Browser credential's Endpoint URL, Token and Certificate Fingerprint directly too.
+switches take their defaults: off, except **Show the Model Screenshots**, which is on. To keep screenshots off, set
+Options field by field. Type the RPA Browser credential's Endpoint URL, Token and Certificate Fingerprint directly too.
 
 ## Signing and approval
 
@@ -277,8 +278,12 @@ the gated keys and the export folder. n8n cannot switch it off.
   - Black boxes, not blur, over every password or credential-like field, every control the run typed into (found
     again by its id if the app recreates it), and every control whose name, value, document text or accessible name
     or value contains a value the engine masks (every secret variable value, typed in this run or not, the runner's
-    token, every value the run typed, every text it read from the clipboard), compared without case. The step-signing
-    key never goes to the runner. The runner looks for these controls in every window before and
+    token, every value the run typed, every text it read from the clipboard), compared without case. So with each look every value of the attached RPA Secret Variables
+    credential goes to the runner, including values this run never types, so that it can cover them; the runner keeps
+    them for that look only and never logs them. The step-signing key never goes to the runner. A control whose value
+    cannot be read is covered while there are values to look for, and a box the runner would draw outside its
+    control's own window, or where UI Automation and the window manager disagree about a control with its own window,
+    means no screenshot. The runner looks for these controls in every window before and
     after it takes the picture and covers both. An element whose text it cannot read is covered whole.
   - No screenshot for that look, and a line in the conversation saying why, when the runner cannot tell where such a
     control is, cannot read a window through UI Automation, a window moved or changed size meanwhile, Windows scales
@@ -288,7 +293,10 @@ the gated keys and the export folder. n8n cannot switch it off.
     checked, and neither can a typed value of 3 characters or fewer, or a value the app shows encoded or split
     across controls. Such text reaches the provider when the app shows it. Turn the option off for apps that show secrets that way.
   - Screenshots go to the chat model only: never to an output, the transcript, a log or the run's row. The runner
-    logs only their size.
+    logs only their size. n8n's chat model sub-node records what it was sent in the execution's data, as it does for
+    every model call; there a screenshot appears as `[image]`, without its pixels (checked with n8n 2.45's Anthropic
+    Chat Model).
+  - A look that takes longer than 12 seconds to check gives no screenshot; the repair goes on with the text view.
   Before approval it acts only in two runner modes, both refused on a declared write
   control and on anything whose name or id reads like a write (save, post, submit, confirm, ok and the like) or like
   delete, cancel, reject or sign out, with invisible characters and look-alike letters read through:

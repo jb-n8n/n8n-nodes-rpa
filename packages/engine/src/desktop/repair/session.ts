@@ -240,7 +240,7 @@ export class DesktopRepairSession {
   private takePictures(): ChatImage[] | undefined {
     const p = this.pending;
     this.pending = undefined;
-    if (p?.length) this.seenPicture = p[p.length - 1];
+    if (p) this.seenPicture = p.length ? p[p.length - 1] : undefined;
     return p;
   }
 
@@ -275,7 +275,8 @@ export class DesktopRepairSession {
       this.pending = [picture];
       return `${text}\nScreenshot: sent with this view (${picture.width}x${picture.height} pixels${masked ? `, ${masked} area${masked === 1 ? '' : 's'} covered black` : ''}).`;
     }
-    this.pending = undefined;
+    // An empty list: this view has no picture, so the last one must no longer go to the model.
+    this.pending = [];
     return `${text}\nScreenshot: none this time (${neutralize(view.noPicture ?? 'no reason given')}); use the text view.`;
   }
 
@@ -287,7 +288,7 @@ export class DesktopRepairSession {
       before: this.doc.steps.slice(0, i).map((s) => s.intent), after: this.doc.steps.slice(i + 1).map((s) => s.intent), view: await this.look(),
     }, this.masker);
     const images = this.takePictures();
-    return { text, ...(images ? { images } : {}) };
+    return { text, ...(images?.length ? { images } : {}) };
   }
 
   /** The model's move as the film names it: the tool, the ref and the control's masked name from the view it chose from. */

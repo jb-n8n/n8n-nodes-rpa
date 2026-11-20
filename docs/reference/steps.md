@@ -299,8 +299,8 @@ input, **AI Repair** on and a **Goal**. When a step no longer finds its control 
 another menu, a new dialog in the way), the model looks at the app's window as UI Automation describes it (names,
 types and ids, typed values masked) and, with **Options → Show the Model Screenshots** on (the default), at a
 screenshot of the app's windows too, and fixes the steps from there:
-- The screenshot shows the app's own windows only (the window in front, its dialogs and open menus), never the rest
-  of the desktop, at most 1280 pixels on its longer side, with the number of each control's ref drawn on the
+- The screenshot shows every visible top-level window of the processes the run started (the app's windows, its
+  dialogs and open menus), each drawn from its own content, never the rest of the desktop or another program's window, at most 1280 pixels on its longer side, with the number of each control's ref drawn on the
   controls a repair acts on (buttons, menu items, tabs, list and tree items, fields; label 12 is `e12`). Before it leaves the Windows machine, the runner covers with black boxes every password or
   credential-like field, every field the run typed into, and every control showing a secret variable's value, a
   value the run typed or a text it read from the clipboard. When the runner cannot tell where such a control is, or

@@ -41,10 +41,12 @@ export const PICTURE_OMITTED = '(earlier screenshot omitted)';
 
 /**
  * The pictures as sent to the model: only the latest message with pictures keeps them (each earlier one says it was
- * omitted), or none when `on` is false.
+ * omitted), or none when `on` is false, or when that message comes before `staleBefore` (a newer view came without a
+ * picture, so the last one no longer shows the app as it is).
  */
-export function latestPictureOnly(messages: ChatMessage[], on: boolean): ChatMessage[] {
-  const last = on ? messages.findLastIndex((m) => m.images?.length) : -1;
+export function latestPictureOnly(messages: ChatMessage[], on: boolean, staleBefore = 0): ChatMessage[] {
+  const found = on ? messages.findLastIndex((m) => m.images?.length) : -1;
+  const last = found >= staleBefore ? found : -1;
   return messages.map((m, i) => {
     if (!m.images?.length || i === last) return m;
     const { images: _images, ...rest } = m;
@@ -177,7 +179,8 @@ const AGENT_TOOL_NAMES = new Set([...AGENT_TOOLS, ...FILE_AGENT_TOOLS].map((t) =
 export interface LoopTools<O extends string> {
   /**
    * Runs one tool call; `done` ends the loop with its outcome and note. `images`: pictures for the model (desktop
-   * repair's screenshot), sent in a user message right after the tool results with the spec's pictureCaption.
+   * repair's screenshot), sent in a user message right after the tool results with the spec's pictureCaption; an empty
+   * list says the tool took a new view without a picture (earlier pictures stop going to the model).
    */
   run(call: ToolCall): Promise<{ text: string; error: boolean; done?: { outcome: O; note: string }; images?: ChatImage[] }>;
   /** How often the latest action repeated with nothing new since (the circle guard; 0 after progress). */
@@ -226,6 +229,18 @@ export interface LoopCore<O extends string> {
   pictureNote?: string;
 }
 
+/**
+ * Whether a failed call may have failed for its picture: a 4xx answer other than 408 and 429, or an error that names
+ * images or content. Anything else (a timeout, a rate limit, a server error, a lost connection) is the call's own
+ * failure and is reported as such, pictures or not.
+ */
+export function mayBePictureRefusal(err: unknown): boolean {
+  const e = err as { status?: unknown; statusCode?: unknown; response?: { status?: unknown }; message?: unknown } | null;
+  const status = [e?.status, e?.statusCode, e?.response?.status].find((x): x is number => typeof x === 'number');
+  if (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429) return true;
+  return /\bimages?\b|image_url|\bcontent\b/i.test(typeof e?.message === 'string' ? e.message : String(err));
+}
+
 /** The note when the chat model did not take a picture (V3: the repair goes on with the text view). */
 export const PICTURES_REFUSED_NOTE = 'the chat model did not take the screenshot, so the repair went on with the text view only';
 
@@ -249,6 +264,8 @@ export async function driveAgentLoop<O extends string>(spec: LoopSpec<O>): Promi
   let pictureCount = 0;
   let pictureTokens = 0;
   let pictureNote: string | undefined;
+  /** Messages before this index carry pictures of views that are no longer the latest (see latestPictureOnly). */
+  let staleBefore = 0;
   const maskArgs = (args: Record<string, unknown>) => JSON.parse(masker.mask(JSON.stringify(args))) as Record<string, unknown>;
   const finish = (outcome: LoopCore<O>['outcome'], note: string): LoopCore<O> => ({
     outcome, tokens, llmCalls, note: masker.mask(note).slice(0, 500),
@@ -297,28 +314,33 @@ export async function driveAgentLoop<O extends string>(spec: LoopSpec<O>): Promi
     let res: ChatResponse;
     let sent: ModelMessage[] = [];
     let sentImages: ChatImage[] = [];
-    const prepare = () => {
-      const shown = latestPictureOnly(elideOldPages(messages), picturesOn);
+    const prepare = (withPictures: boolean) => {
+      const shown = latestPictureOnly(elideOldPages(messages), withPictures, staleBefore);
       sentImages = shown.flatMap((m) => m.images ?? []);
       sent = shown.map(toModelMessage);
     };
     try {
-      prepare();
+      prepare(picturesOn);
       // Attempts, not successes: a call that throws or times out may still have been billed, and the node's
       // once-per-execution repair cap reads this count.
       llmCalls++;
       try {
         res = await Promise.race([bound.invoke(sent, { signal: ac.signal }), aborted]);
       } catch (err) {
-        // A call with a picture that failed: the chat model (or n8n's model wrapper) may not take image content. The
-        // same call goes again without pictures, once; from then on the model gets the text view only (V3).
-        if (ac.signal.aborted || !sentImages.length || !picturesOn) throw err;
+        // A call with a picture that failed in a way a refused picture fails (mayBePictureRefusal): the same call goes
+        // again without pictures, once. Only when that works does the repair go on with the text view (V3); if it
+        // fails too, the first error is the one reported.
+        if (ac.signal.aborted || !sentImages.length || !picturesOn || !mayBePictureRefusal(err)) throw err;
+        prepare(false);
+        llmCalls++;
+        try {
+          res = await Promise.race([bound.invoke(sent, { signal: ac.signal }), aborted]);
+        } catch {
+          throw err;
+        }
         picturesOn = false;
         pictureNote = PICTURES_REFUSED_NOTE;
         spec.picturesRefused?.();
-        prepare();
-        llmCalls++;
-        res = await Promise.race([bound.invoke(sent, { signal: ac.signal }), aborted]);
       }
     } catch (err) {
       if (ac.signal.aborted) return finish('budget', spec.signal?.aborted ? 'the run was cancelled' : 'the time budget ran out');
@@ -361,7 +383,11 @@ export async function driveAgentLoop<O extends string>(spec: LoopSpec<O>): Promi
     const notRun = `ERROR: not run: only the first tool call of a turn runs (only the ${echoedToolName(first.name, spec.toolNames)} call was run; read its result).`;
     for (const c of extra) messages.push({ role: 'tool', tool_call_id: c.id, content: notRun, status: 'error' });
     // A tool result's picture comes after every tool result of the turn (providers pair results with calls first).
-    if (out.images?.length && picturesOn && !out.done) messages.push(userMessage(spec.pictureCaption ?? 'Screenshot for the result above.', out.images));
+    // An empty list: the tool took a new view without a picture, so the last picture is stale and goes no more.
+    if (out.images && picturesOn && !out.done) {
+      if (out.images.length) messages.push(userMessage(spec.pictureCaption ?? 'Screenshot for the result above.', out.images));
+      else staleBefore = messages.length;
+    }
     if (out.done) return finish(out.done.outcome, out.done.note);
     if (tools.lastRepeat >= CIRCLE_STOP) return finish('circling', spec.circlingNote(tools.lastRepeat));
   }

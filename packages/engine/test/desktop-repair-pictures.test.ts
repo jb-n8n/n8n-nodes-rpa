@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { latestPictureOnly, PICTURE_OMITTED, PICTURES_REFUSED_NOTE } from '../src/agent/loop.js';
+import { latestPictureOnly, mayBePictureRefusal, PICTURE_OMITTED, PICTURES_REFUSED_NOTE } from '../src/agent/loop.js';
 import { imageTokenEstimate, modelMessageText, type ChatModel, type ModelMessage } from '../src/agent/model.js';
 import { DESKTOP_PICTURE_CAPTION } from '../src/desktop/repair/prompt.js';
 import {
@@ -190,6 +190,63 @@ describe('desktop repair with screenshots', () => {
     expect(fr.requests.filter((q) => q.method === 'look')).toHaveLength(1);
   });
 
+  it('a model call that fails for another reason is not retried without pictures and fails the repair as before', async () => {
+    const inner = fakeModel(V2_TURNS);
+    const down: ChatModel = { bindTools(defs) { inner.bindTools(defs); return { async invoke() { throw new Error('connect ECONNRESET'); } }; } };
+    const { r } = await run({ model: down });
+    if (r.ok) throw new Error('expected a failure');
+    expect(r.llmCalls).toBe(1);
+    expect(r.pictureNote).toBeUndefined();
+    expect(r.message).toContain('model unavailable: connect ECONNRESET');
+  });
+
+  it('a 4xx without pictures fails too: the first error is reported, and no note says pictures were the cause', async () => {
+    const inner = fakeModel(V2_TURNS);
+    const bad: ChatModel = {
+      bindTools(defs) {
+        inner.bindTools(defs);
+        let n = 0;
+        return { async invoke() { n++; throw Object.assign(new Error(n === 1 ? 'first: 400 bad request' : 'second: 400 again'), { status: 400 }); } };
+      },
+    };
+    const { r } = await run({ model: bad });
+    if (r.ok) throw new Error('expected a failure');
+    expect(r.llmCalls).toBe(2);
+    expect(r.pictureNote).toBeUndefined();
+    expect(r.message).toContain('first: 400 bad request');
+    expect(r.message).not.toContain('second');
+  });
+
+  it('a view without a picture stops the last picture from going to the model', async () => {
+    let fr!: FakeRunner;
+    const turns = [...V2_TURNS];
+    const first = turns[0]!;
+    turns[0] = (t, m) => { fr.lookRefusal = 'the position of a control that must be covered cannot be read'; return first(t, m); };
+    runner = await FakeRunner.start({ app: 'erp', policy: ERP_POLICY, erpUi: 'v2' });
+    fr = runner;
+    const model = fakeModel(turns);
+    const r = await runDesktopTask({
+      ...signed(), runner: runner.endpoint, vars: VARS, secretVars: ['password'], defaultStepTimeoutMs: 400, budgetMs: 120_000,
+      repair: { model, goal: 'Export the line items of a company as a CSV file', pictures: true },
+    });
+    repaired(r);
+    expect(imageParts(model.invocations[0]!)).toHaveLength(1);
+    for (const sent of model.invocations.slice(1)) expect(imageParts(sent)).toEqual([]);
+  });
+
+  it('a look that fails (not a refusal) leaves the view to the snapshot, with the reason; a policy refusal stays one', async () => {
+    runner = await FakeRunner.start({ app: 'erp', policy: ERP_POLICY, erpUi: 'v2' });
+    runner.errorFor.look = { code: -32007, message: 'timeout: the UI kept changing while the runner read it' };
+    const model = fakeModel(V2_TURNS);
+    const r = await runDesktopTask({
+      ...signed(), runner: runner.endpoint, vars: VARS, secretVars: ['password'], defaultStepTimeoutMs: 400, budgetMs: 120_000,
+      repair: { model, goal: 'Export the line items of a company as a CSV file', pictures: true },
+    });
+    repaired(r);
+    expect(modelMessageText(model.invocations[0]!.find((m) => m.role === 'user')!)).toContain('Screenshot: none this time (the runner could not make a screenshot: timeout: the UI kept changing');
+    for (const sent of model.invocations) expect(imageParts(sent)).toEqual([]);
+  });
+
   it('the film folder gets every picture sent and every move, only when an engine script sets it', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'rpa-film-'));
     const { r } = await run({ repair: { debugFilmDir: dir } });
@@ -208,6 +265,23 @@ describe('desktop repair with screenshots', () => {
 });
 
 describe('picture plumbing', () => {
+  it('reads only 4xx (not 408 or 429) and errors naming images or content as a possible picture refusal', () => {
+    expect(mayBePictureRefusal(Object.assign(new Error('bad request'), { status: 400 }))).toBe(true);
+    expect(mayBePictureRefusal(Object.assign(new Error('x'), { response: { status: 422 } }))).toBe(true);
+    expect(mayBePictureRefusal(Object.assign(new Error('slow down'), { status: 429 }))).toBe(false);
+    expect(mayBePictureRefusal(Object.assign(new Error('timeout'), { status: 408 }))).toBe(false);
+    expect(mayBePictureRefusal(Object.assign(new Error('overloaded'), { status: 529 }))).toBe(false);
+    expect(mayBePictureRefusal(new Error('image_url content blocks are not supported'))).toBe(true);
+    expect(mayBePictureRefusal(new Error('connect ECONNRESET'))).toBe(false);
+  });
+
+  it('a picture older than the latest view without one is not sent', () => {
+    const img = { mime: 'image/png' as const, base64: 'AA', width: 10, height: 10 };
+    const msgs = [{ role: 'user' as const, content: 'a', images: [img] }, { role: 'tool' as const, content: 't', tool_call_id: 'x' }];
+    expect(latestPictureOnly(msgs, true, 0)[0]!.images).toEqual([img]);
+    expect(latestPictureOnly(msgs, true, 2).every((m) => !m.images)).toBe(true);
+  });
+
   it('asks the runner to cover every value the text view masks, except the signing key, and never a partial list', () => {
     const secrets = ['runner-token-0123456789', 'signing-key-abcdef', 'Secr3t!'];
     expect(pictureMaskTexts(secrets, ['clerk', 'abc', '2026-01-01'], ['copied text'], ['signing-key-abcdef'])).toEqual({

@@ -8,7 +8,7 @@ import type { Surface } from '../surface/surface.js';
 import type { DesktopApp, DesktopLocator, Expect, Locator, UiaTarget, WindowSel } from '../types.js';
 import type { RunnerClient } from './client.js';
 import {
-  ElementNotFoundError, METHOD_NOT_FOUND, RunnerError, type RunnerMethod, type RunnerMethods, type RunnerNode, type RunnerTarget, type RunnerWindow,
+  ElementNotFoundError, METHOD_NOT_FOUND, PolicyRefusedError, RunnerError, type RunnerMethod, type RunnerMethods, type RunnerNode, type RunnerTarget, type RunnerWindow,
 } from './protocol.js';
 
 /** The runner's Target for a step's locator: the primary target with the fallbacks inline. */
@@ -302,10 +302,13 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
         try {
           snap = await call('look', { ...params, labelStart: nextViewRef, mask: masks.texts });
         } catch (err) {
-          if (!(err instanceof RunnerError && err.code === METHOD_NOT_FOUND)) { record(err); throw err; }
-          noLook = true;
+          // A policy refusal is the view's own answer (as snapshot's). Any other failure of the picture (it took too long,
+          // the runner is older) leaves the view to the snapshot alone, with the reason.
+          if (err instanceof PolicyRefusedError) { record(err); throw err; }
+          const old = err instanceof RunnerError && err.code === METHOD_NOT_FOUND;
+          if (old) noLook = true;
           snap = await rpc('snapshot', params);
-          noPicture = RUNNER_TOO_OLD_FOR_PICTURES;
+          noPicture = old ? RUNNER_TOO_OLD_FOR_PICTURES : `the runner could not make a screenshot: ${maskClipped(given, (err as Error)?.message ?? String(err), 160)}`;
         }
       } else {
         snap = await rpc('snapshot', params);
