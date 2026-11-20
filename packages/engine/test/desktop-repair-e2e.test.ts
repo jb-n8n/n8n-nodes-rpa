@@ -13,7 +13,7 @@ import {
 } from '../src/proposal/desktop.js';
 import { proposalDigest } from '../src/proposal/proposal.js';
 import { scriptHash } from '../src/sign.js';
-import { stepTarget } from '../src/desktop/repair/session.js';
+import { RUN_ON_MIN_WAIT_MS, runOnWaitMs, stepTarget } from '../src/desktop/repair/session.js';
 import type { DesktopScript, DesktopStep } from '../src/types.js';
 import { fakeModel, type FakeTurn } from './fake-model.js';
 import { call, on, V2_TURNS } from './erp-v2-turns.js';
@@ -138,6 +138,47 @@ describe('desktop self-repair on the fake runner', () => {
     expect(everything).not.toContain(KEY);
     // The model saw the app only as text, wrapped as untrusted data.
     expect(model.invocations[0]![1]!.content).toContain('<page_content>');
+  });
+
+  it('waits the step timeout once: the steps the repair runs on after a fix wait at most the run-on wait for their control; the proof waits in full', async () => {
+    const STEP_MS = 1500;
+    const RUN_ON_MS = 150;
+    runner = await FakeRunner.start({ app: 'erp', policy: ERP_POLICY, erpUi: 'v2' });
+    const fr = runner;
+    const model = fakeModel(V2_TURNS);
+    const r = await runDesktopTask({
+      ...signedV1(), runner: fr.endpoint, vars: VARS, secretVars: ['password'], defaultStepTimeoutMs: STEP_MS, budgetMs: 120_000,
+      repair: { model, goal: 'Export the line items of a company as a CSV file', runOnWaitMs: RUN_ON_MS },
+    });
+    const out = repaired(r);
+    expect(out.proof).toEqual({ replayed: 13, stoppedAt: 14, stoppedBecause: 'looks like a write', changedSteps: [9, 13], addedSteps: [12, 14] });
+    const begins = fr.requests.filter((q) => q.method === 'run.begin').map((q) => q.params.runId);
+    const proofStart = fr.requests.findIndex((q) => q.method === 'run.begin' && q.params.runId === begins[1]);
+    const repairReqs = fr.requests.slice(0, proofStart);
+    const search = repairReqs.findIndex((q) => q.method === 'resolve' && JSON.stringify(q.params.target).includes('btnSearch'));
+    // The steps' own resolves (the repair's candidate checks use 500 ms): the full timeout up to Search, which fails
+    // once; after the model is asked, every step the repair runs on waits at most the run-on wait for its control.
+    const stepResolves = (reqs: typeof repairReqs) => reqs.filter((q) => q.method === 'resolve' && q.params.timeoutMs !== 500).map((q) => q.params.timeoutMs);
+    expect(new Set(stepResolves(repairReqs.slice(0, search + 1)))).toEqual(new Set([STEP_MS]));
+    const after = stepResolves(repairReqs.slice(search + 1));
+    expect(after.length).toBeGreaterThan(0);
+    expect(new Set(after)).toEqual(new Set([RUN_ON_MS]));
+    // Acting keeps the step's own timeout.
+    const runOnActs = repairReqs.slice(search + 1).filter((q) => q.method === 'act' && q.params.mode !== 'repair');
+    expect(runOnActs.length).toBeGreaterThan(0);
+    for (const q of runOnActs) expect(q.params.timeoutMs as number).toBeGreaterThan(RUN_ON_MS);
+    // Search, Export... and the wait for the Save dialog all drifted: one full wait (Search), two short ones.
+    expect(out.durationMs).toBeLessThan(2 * STEP_MS);
+    // The proof waits the full step timeout for every control.
+    expect(new Set(stepResolves(fr.requests.slice(proofStart)))).toEqual(new Set([STEP_MS]));
+  });
+
+  it('the run-on wait: 5 s, or twice the slowest step that passed when that is longer', () => {
+    expect(RUN_ON_MIN_WAIT_MS).toBe(5000);
+    expect(runOnWaitMs([])).toBe(5000);
+    const e = (status: 'ok' | 'failed' | 'skipped', ms: number) => ({ index: 0, intent: 'x', status, ms });
+    expect(runOnWaitMs([e('ok', 1200), e('ok', 2400)])).toBe(5000);
+    expect(runOnWaitMs([e('ok', 1200), e('ok', 4000), e('failed', 30000), e('skipped', 9000)])).toBe(8000);
   });
 
   it('the repaired version signs like an import (writes ticked again) and the next run on v2 needs no model (DR11)', async () => {

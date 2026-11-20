@@ -83,6 +83,8 @@ export interface DesktopRepairInput {
   alreadyRan?: boolean;
   /** Why AI repair does not run this time (a failed repair is held): no repair, the drift carries this text. */
   held?: string;
+  /** Tests: a fixed wait for the steps the repair runs on after a fix (default: repair/session.ts runOnWaitMs). */
+  runOnWaitMs?: number;
 }
 
 /**
@@ -454,6 +456,7 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
         ...(input.signal ? { signal: input.signal } : {}),
         mask: sessionMask, isSecretVar,
         classify: (index, message) => repairableCause(desktop.errors.get(index), message),
+        ...(repair.runOnWaitMs !== undefined ? { runOnWaitMs: repair.runOnWaitMs } : {}),
       });
       const { loop } = session;
       const llmCalls = Math.max(calls.n, loop.llmCalls);

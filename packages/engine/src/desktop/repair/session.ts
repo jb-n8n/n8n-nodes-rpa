@@ -13,7 +13,7 @@ import { looksDestructive } from '../../policy/destructive.js';
 import { firstStopIndex, hasWriteWord, looksLikeWrite, signInChecks, signInWindow, type DesktopStopOpts } from '../../proposal/desktop.js';
 import { maskClipped, type Masker } from '../../secrets/mask.js';
 import { runSteps, type StepContext } from '../../steps/run.js';
-import type { DesktopLocator, DesktopScript, DesktopStep, ErrorCode, RunState, Step, WindowSel } from '../../types.js';
+import type { DesktopLocator, DesktopScript, DesktopStep, ErrorCode, RunState, Step, StepLogEntry, WindowSel } from '../../types.js';
 import { PolicyRefusedError, RunnerError, type RunnerAction, type RunnerWindow } from '../protocol.js';
 import { runnerTarget, type ChangedStep, type DesktopSurface, type DesktopView } from '../surface.js';
 import { desktopCandidatesFor, TargetError } from './candidates.js';
@@ -28,6 +28,22 @@ export const DESKTOP_MAX_FIXES = 5;
 /** At most this many steps added by add_step in one repair. */
 export const DESKTOP_MAX_ADDED = 2;
 const EXPLORE_MS = 5_000;
+/**
+ * The shortest time a step waits for its control to appear while the repair runs steps on the live run (the step the
+ * model just chose, then the approved steps after it): as long as the repair's own actions wait, and as browser repair's
+ * actions wait. A step that drifted too then reaches the model after this wait, not after its full timeout.
+ */
+export const RUN_ON_MIN_WAIT_MS = EXPLORE_MS;
+
+/**
+ * How long a step waits for its control while the repair runs steps on: RUN_ON_MIN_WAIT_MS, or twice the slowest step
+ * that passed in this run when that is longer (a slow app keeps its pace), never more than the step's own timeout
+ * (capWait). The action keeps the step's timeout, and the proof replays every step with its full timeout.
+ */
+export function runOnWaitMs(log: readonly StepLogEntry[]): number {
+  const slowest = log.reduce((m, e) => (e.status === 'ok' && e.ms > m ? e.ms : m), 0);
+  return Math.max(RUN_ON_MIN_WAIT_MS, 2 * slowest);
+}
 const READ_CLIP = 1500;
 const VIEW_TEXT_MAX = 12_000;
 const PROBE_CLICKABLE = new Set(['Button', 'MenuItem', 'Hyperlink', 'SplitButton', 'TabItem', 'ListItem', 'TreeItem']);
@@ -52,6 +68,8 @@ export interface DesktopRepairHandoff {
   isSecretVar(name: string): boolean;
   /** The trigger table for a step that fails while the steps go on after a fix. */
   classify(index: number, message: string): FailureClass;
+  /** A fixed wait for steps the repair runs on (tests); default runOnWaitMs of the run's log so far. */
+  runOnWaitMs?: number;
 }
 
 /**
@@ -404,10 +422,12 @@ export class DesktopRepairSession {
     s.changedSteps.clear();
     for (const [i, m] of this.markMap(marks)) s.changedSteps.set(i, m);
     s.errors.clear();
+    s.waitCapMs = this.h.runOnWaitMs ?? runOnWaitMs(this.h.state.log);
     try {
       return await runSteps(this.h.ctx, doc.steps.slice(0, to) as unknown as Step[], this.h.state, { startAt: from });
     } finally {
       s.changedSteps.clear();
+      s.waitCapMs = undefined;
     }
   }
 

@@ -99,6 +99,12 @@ export interface DesktopSurface extends Surface {
    * proof): see ChangedStep. Any action a mark does not allow is refused before it is sent.
    */
   readonly changedSteps: Map<number, ChangedStep>;
+  /**
+   * While AI repair runs steps on the live run (undefined otherwise): the longest a step waits for its control to appear
+   * (resolve, a wait, a check), so a step that drifted too reaches the model without waiting out its full timeout. The
+   * action itself keeps the step's own timeout; the proof and every other run wait the full step timeout.
+   */
+  waitCapMs: number | undefined;
   /** Tells the surface which top-level step is running, for `errors`. */
   trackStep(current: () => number | undefined): void;
   /** Records an error against the running step. */
@@ -182,7 +188,7 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
 
   const surface: DesktopSurface = {
     kind: 'desktop',
-    client, runId, app, errors, refs, typed, clipboard, changedSteps: new Map<number, ChangedStep>(),
+    client, runId, app, errors, refs, typed, clipboard, changedSteps: new Map<number, ChangedStep>(), waitCapMs: undefined,
     trackStep: (fn) => { current = fn; },
     record,
     rpc,
@@ -199,9 +205,10 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
       }
       if (!expect.visible) return;
       const visible = expect.visible;
-      const ok = await poll(() => isVisible(visible), timeoutMs, POLL_MS);
+      const waitMs = capWait(surface, timeoutMs);
+      const ok = await poll(() => isVisible(visible), waitMs, POLL_MS);
       if (!ok) {
-        const err = new DesktopDriftError(`expected ${describeDesktopLocator(visible as unknown as DesktopLocator)} to be visible within ${Math.round(timeoutMs / 100) / 10} s`);
+        const err = new DesktopDriftError(`expected ${describeDesktopLocator(visible as unknown as DesktopLocator)} to be visible within ${Math.round(waitMs / 100) / 10} s`);
         record(err);
         throw err;
       }
@@ -302,6 +309,11 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
     },
   };
   return surface;
+}
+
+/** How long a step waits for a control to appear: its timeout, or less while AI repair runs steps on (waitCapMs). */
+export function capWait(surface: Pick<DesktopSurface, 'waitCapMs'>, timeoutMs: number): number {
+  return surface.waitCapMs === undefined ? timeoutMs : Math.min(timeoutMs, surface.waitCapMs);
 }
 
 /** The app no longer matches the steps (an expectation or a wait did not hold), as opposed to a runner fault. */

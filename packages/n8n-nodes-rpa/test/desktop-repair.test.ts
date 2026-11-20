@@ -66,6 +66,11 @@ describe('AI Repair of desktop steps through the node', () => {
     expect(item.reviewSteps as unknown[]).toHaveLength(18);
     expect(item.secretVariables).toEqual(['password']);
     expect(JSON.stringify(out)).not.toContain(ERP_PASSWORD);
+    // No Data item, so what the repair used is on this item: the Data item's names and the cost sentence.
+    expect(item.llmCalls).toBe(4);
+    expect(item.llmTokens).toBe(4 * 110);
+    expect(item.costLine).toBe('It used 4 chat model calls and 440 tokens.');
+    expect(Object.keys(item).slice(-4)).toEqual(['attachmentNames', 'llmCalls', 'llmTokens', 'costLine']);
 
     // Sign Steps: Continue (14) and Save (17) ticked as writes.
     const signP = { operation: 'signSteps', approved: true, approverId: APPROVER, approverAllowlist: APPROVER, writeSteps: '14, 17' };
@@ -73,6 +78,16 @@ describe('AI Repair of desktop steps through the node', () => {
     const row = signed[0]!.json;
     expect(row.error).toBeUndefined();
     expect(row).toMatchObject({ name: 'erp-1', version: 2, status: 'active', writeLine: 'Signed as writes: step 14 (Click Continue), step 17 (Click Save)' });
+
+    // The cost fields are shown only: Sign Steps signs the same row without them or with other numbers.
+    const { llmCalls: _c, llmTokens: _t, costLine: _l, ...noCost } = item;
+    for (const other of [noCost, { ...item, llmCalls: 99, llmTokens: 1, costLine: 'It used 99 chat model calls and 1 tokens.' }]) {
+      const [again] = await executeSignSteps(harness({ params: signP, items: [{ json: other }], credentials: { playwrightScriptSigningApi: { secretKey: KEY } }, continueOnFail: true }), engine);
+      const j = again[0]!.json;
+      expect(j.error).toBeUndefined();
+      expect([j.hash, j.signature, j.steps]).toEqual([row.hash, row.signature, row.steps]);
+      expect(Object.keys(j).filter((k) => ['llmCalls', 'llmTokens', 'costLine'].includes(k))).toEqual([]);
+    }
 
     // A base version given as text is refused on a repair item (template 3 compares numbers).
     const [textBase] = await executeSignSteps(harness({ params: signP, items: [{ json: { ...item, baseVersion: '1' } }], credentials: { playwrightScriptSigningApi: { secretKey: KEY } }, continueOnFail: true }), engine);

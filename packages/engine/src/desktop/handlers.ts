@@ -16,7 +16,7 @@ import { poll } from '../steps/poll.js';
 import type { Handler, StepContext } from '../steps/run.js';
 import type { DesktopLocator, DesktopStep, DesktopStepBase, RunState } from '../types.js';
 import { PolicyRefusedError, RUNNER_ERROR_CODES, type RunnerAction, type Segment } from './protocol.js';
-import { describeDesktopLocator, DesktopDriftError, runnerTarget, type DesktopSurface } from './surface.js';
+import { capWait, describeDesktopLocator, DesktopDriftError, runnerTarget, type DesktopSurface } from './surface.js';
 
 type D<K extends string> = Extract<DesktopStep, Record<K, unknown>>;
 const POLL_MS = 250;
@@ -64,7 +64,8 @@ async function actOn(
   if (mode === undefined || (mark !== undefined && step.write === true)) throw new Error(CHANGED_STEP_NOT_RUN);
   const t0 = Date.now();
   const target = loc ? runnerTarget(loc) : undefined;
-  const candidate = target ? (await s.rpc('resolve', { target, timeoutMs: timeout })).candidate : undefined;
+  // Waiting for the control to appear is capped while AI repair runs steps on (capWait); acting keeps the step's timeout.
+  const candidate = target ? (await s.rpc('resolve', { target, timeoutMs: capWait(s, timeout) })).candidate : undefined;
   // A recorded menu or selection the repair kept replays in repair mode on an unapproved control: never on one whose
   // name or id (of the candidate that resolved) reads like it deletes, cancels, rejects or signs out. The runner checks
   // the element itself too.
@@ -175,8 +176,9 @@ const waitFor: Handler = async (ctx, step, _state, timeout) => {
   const w = (step as unknown as D<'waitFor'>).waitFor;
   const s = desktopOf(ctx);
   const want = (w.state ?? 'visible') === 'visible';
-  const ok = await poll(async () => (await s.isVisible(w.target as never)) === want, timeout, POLL_MS);
-  if (!ok) throw new DesktopDriftError(`waited ${Math.round(timeout / 100) / 10} s for ${describeDesktopLocator(w.target)} to be ${want ? 'visible' : 'hidden'}`);
+  const waitMs = capWait(s, timeout);
+  const ok = await poll(async () => (await s.isVisible(w.target as never)) === want, waitMs, POLL_MS);
+  if (!ok) throw new DesktopDriftError(`waited ${Math.round(waitMs / 100) / 10} s for ${describeDesktopLocator(w.target)} to be ${want ? 'visible' : 'hidden'}`);
 };
 
 const read: Handler = async (ctx, step, state, timeout) => {
