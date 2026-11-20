@@ -90,13 +90,25 @@ explicit ACL: the runner's user, SYSTEM and Administrators only.
 
 A run acts only on windows of processes it launched whose executable is allowed. If another application's window holds
 the foreground and the runner cannot bring the run's window back, the action is refused; OS surfaces (notifications, the
-taskbar, the Start menu) are ignored. `mode: "repair"` (no operation sends it yet: the node refuses AI repair for
-desktop steps) allows only `focus`, `expand`, `read`, `key` with the value
-`Escape` and no target (it goes to the run's focused element, to close a menu or a dialog; an `Escape` listed in
-`gatedKeys` stays refused), and `click` on tabs, list items and tree items. Because Escape fires a form's cancel button
-whatever has the focus, a repair-mode Escape is refused while its window holds a write control, unless a popup menu of
-that window is open (a top-level menu window it owns; a menu bar does not count). When an app's Escape itself writes (a
-cancel button that discards or posts), list `Escape` in `gatedKeys`.
+taskbar, the Start menu) are ignored. Two act modes serve AI repair (only the engine's desktop repair sends them, when Run Steps has
+AI Repair on and a chat model connected):
+
+- `mode: "repair"` explores. It allows only `expand`, `read`, `key` with the value `Escape` and no target, and
+  `click` on tabs, list items and tree items. It never moves the focus (a focus change runs the app's leave and
+  validation code, which some apps use to save). It never expands or clicks a control whose name or automation id has a
+  write word (save, post, submit, confirm, ok and the like: the engine's list) or that reads like it deletes, cancels,
+  rejects or signs out (the deny list below), never chooses an item of a combo box (a form value), and never acts on a
+  declared write control. Escape is allowed only while a popup menu of its window is
+  open (a top-level menu window it owns; a menu bar does not count), so it only closes that menu: in a dialog it would
+  press the cancel button, which may discard or cancel something. An `Escape` listed in `gatedKeys` stays refused.
+- `mode: "probe"` clicks once on a control the repair added or retargeted, before anyone approved it. It allows only
+  `click` and `doubleClick` (a step that types, selects or checks waits for approval), never with `write: true`, never
+  on a declared write control, and never on a control whose name or automation id has a write word or reads like it
+  deletes, cancels, rejects or signs out (the engine's denylist, plus discard, matched after the engine's normalization:
+  invisible characters, accents and look-alike letters do not hide a word). The control must be
+  a button, menu item, link, tab, list item or tree item (not a combo box item), in a window whose title and static
+  text have no write word: a dialog's default button does whatever the dialog says. A run makes at most 12 probe acts.
+  Every check runs again on an element the runner finds anew after the first one went away.
 
 Key chords that reach the Windows shell rather than the app (anything with Win, Ctrl+Esc, Ctrl+Shift+Esc,
 Alt+Tab, Alt+Esc) are never sent. `type` goes only into editable text fields, as Unicode keystrokes (no shortcuts or
@@ -108,7 +120,7 @@ filter. The runner limits which apps and windows a run touches, which controls a
 files come from; what an allowed app does with an allowed click is up to the app. On a person's own desktop the runner
 acts with that person's access. Three limits to keep in mind:
 
-- `write: true` and `mode: "repair"` are chosen by the caller. They keep honest mistakes and AI repair away from
+- `write: true` and `mode: "repair"` or `"probe"` are chosen by the caller. They keep honest mistakes and AI repair away from
   writes. Against a caller that holds the runner token and nothing else (a compromised n8n without the browser
   token), the runner still applies the allowed apps and windows, the shell-chord block, export confinement and
   password redaction.
@@ -565,7 +577,9 @@ the commit was reviewed, or that the zip is what the source code would build els
 ## Protocol
 
 JSON-RPC 2.0 over WebSocket, one request per message, `Authorization: Bearer <token>` on the upgrade (HTTP 401
-otherwise). Methods: `hello`, `run.begin` (`{ runId, leaseMs }`, 5000 to 600000), `run.heartbeat`, `run.end`,
+otherwise). Methods: `hello`, `run.begin` (`{ runId, leaseMs }`, 5000 to 600000), `run.heartbeat`, `run.end` (`{ runId }`, or with
+`reserveFor` and `reserveMs` up to 30000: until then `run.begin` is busy for every other run id, so a repair's proof
+takes the runner next),
 `app.launch`, `snapshot`, `isVisible`, `resolve`, `act`, `windows`, `file.retrieve`, `screenshot`, `clipboard.read`. One run at a time; a lease that
 expires ends the run as `run.end` does (its apps closed, its export directory deleted). Requests on one connection
 are handled concurrently, so a `run.heartbeat` is answered while an `act` or `file.retrieve` is still running. The lease is also renewed when

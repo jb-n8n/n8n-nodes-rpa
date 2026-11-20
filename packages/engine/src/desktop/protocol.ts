@@ -40,7 +40,11 @@ export interface RunnerMethods {
   hello: { params: Record<string, never>; result: HelloResult };
   'run.begin': { params: { runId: string; leaseMs: number }; result: { exportDir: string } };
   'run.heartbeat': { params: { runId: string }; result: Record<string, never> };
-  'run.end': { params: { runId: string }; result: Record<string, never> };
+  /**
+   * `reserveFor` and `reserveMs` (at most 30000, together): until then run.begin is busy for every other run id, so a
+   * repair's proof takes the runner next.
+   */
+  'run.end': { params: { runId: string; reserveFor?: string; reserveMs?: number }; result: Record<string, never> };
   'app.launch': { params: { runId: string; app: DesktopApp }; result: { pid: number } };
   snapshot: {
     params: { runId: string; window?: WindowSel; maxNodes?: number; maxDepth?: number };
@@ -53,7 +57,8 @@ export interface RunnerMethods {
     params: {
       /** Absent only for `key` without a target: the key goes to the focused element of the run's window. */
       runId: string; target?: RunnerTarget; action: RunnerAction; value?: string; segments?: Segment[]; write?: boolean;
-      mode?: 'step' | 'repair'; timeoutMs: number;
+      /** 'repair': exploration only. 'probe': a step AI repair added or retargeted, acting once before approval. */
+      mode?: 'step' | 'repair' | 'probe'; timeoutMs: number;
     };
     result: { text?: string };
   };

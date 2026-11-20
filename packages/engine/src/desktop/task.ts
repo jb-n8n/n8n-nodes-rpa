@@ -4,13 +4,16 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Page } from 'playwright-core';
+import { DEFAULT_MAX_ACTIONS, modelErrorText } from '../agent/loop.js';
+import { countingModel, type ChatMessage, type ChatModel } from '../agent/model.js';
+import { clampAgentBudget, PROVE_RESERVE_MS } from '../lane/agent-lane.js';
 import { stripShownPrefix } from '../classify/classify.js';
 import { CANCELLED, clampBudget, laneFailure, type LaneSuccess } from '../lane/script-lane.js';
-import type { TaskFailure } from '../lane/task.js';
+import type { AgentActionSummary, TaskFailure } from '../lane/task.js';
 import { hasSignature, type TrustInput, type TrustResult } from '../lane/trust.js';
 import {
   DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, desktopStepFailure, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, runnerAppNotAllowed, secretAppNotListed, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
-  UNSIGNED_REQUIRED, UNSIGNED_SECRET_VARIABLE, versionMismatch,
+  UNSIGNED_REQUIRED, UNSIGNED_SECRET_VARIABLE, versionMismatch, AGENT_OUT_OF_BUDGET, REPAIR_ALREADY_RAN, WENT_IN_CIRCLES, withCost,
 } from '../messages.js';
 import { createMasker, type Masker } from '../secrets/mask.js';
 import { MAX_RENDERED } from '../secrets/render.js';
@@ -22,7 +25,7 @@ import { runBinaryProblem } from '../steps/limits.js';
 import { parseDesktopScript } from '../steps/parse.js';
 import { sleep } from '../steps/poll.js';
 import { newRunState, runSteps, type StepContext } from '../steps/run.js';
-import type { DesktopScript, ErrorCode, PortalPolicy, RunState, Script, Step, StepLogEntry, StepOutput } from '../types.js';
+import type { DesktopScript, DownloadedFile, ErrorCode, PortalPolicy, RunState, Script, Step, StepLogEntry, StepOutput } from '../types.js';
 import { connectRunner, RUNNER_CONNECT_TIMEOUT_MS, type Lease, type RunnerClient, type RunnerEndpoint } from './client.js';
 import {
   DesktopUnavailableError, ElementCannotActError, ElementNotFoundError, ElementNotUniqueError, ExpectedFileMissingError, NoRunError, PolicyRefusedError, PROTOCOL_VERSION,
@@ -30,6 +33,10 @@ import {
 } from './protocol.js';
 import { createDesktopSurface, DesktopDriftError, MIN_MASKED_TYPED, RunnerTooOldError, type DesktopSurface } from './surface.js';
 import './handlers.js';
+import { unrepairable, type FailedPart } from './repair/patch.js';
+import { proveDesktopRepair, type DesktopProofEvidence } from './repair/prove.js';
+import { desktopRepairProposal, type DesktopRepairProposal } from './repair/proposal.js';
+import { runDesktopRepairSession, type FailureClass } from './repair/session.js';
 
 /** One desktop run. Apart from the abort signal, everything is JSON-serialisable. */
 export interface DesktopTaskInput {
@@ -61,8 +68,62 @@ export interface DesktopTaskInput {
   busyWaitMs?: number;
   /** The run's lease on the runner, renewed every third of it (5000..600000; default 30 s). */
   leaseMs?: number;
+  /** AI repair: present only when repair is on and a chat model is connected. */
+  repair?: DesktopRepairInput;
 }
-export type DesktopTaskResult = LaneSuccess | TaskFailure;
+
+/** AI repair of a desktop run (signed steps only). */
+export interface DesktopRepairInput {
+  model: ChatModel;
+  /** What the automation is for (the node's Goal): context for the model. */
+  goal?: string;
+  /** Clamped to 1..200 actions and 1,000..1,000,000 tokens. */
+  agentBudget?: { maxActions?: number; maxTokens?: number };
+  /** A repair already ran in this execution: no repair, drift is reported with the reason. */
+  alreadyRan?: boolean;
+  /** Why AI repair does not run this time (a failed repair is held): no repair, the drift carries this text. */
+  held?: string;
+}
+
+/**
+ * A desktop run that drifted and was repaired: the proposal (version N+1, no write flags) waits for a person. The run's
+ * outputs and files are returned only when every step ran in the proof (no write and nothing held).
+ */
+export interface DesktopRepairSuccess {
+  ok: true;
+  lane: 'agent';
+  surface: 'desktop';
+  name: string | null;
+  version: number | null;
+  hash: string;
+  /** True when the proof ran every step (no declared write, nothing held for approval). */
+  completed: boolean;
+  files: DownloadedFile[];
+  outputs: StepOutput[];
+  proposal: DesktopRepairProposal;
+  digest: string;
+  proof: DesktopProofEvidence;
+  agentLog: AgentActionSummary[];
+  log: StepLogEntry[];
+  tokens: number;
+  llmCalls: number;
+  transcript: ChatMessage[];
+  durationMs: number;
+  /** What the repair did, one sentence (masked). */
+  note: string;
+  submitted: false;
+}
+export type DesktopTaskResult = LaneSuccess | DesktopRepairSuccess | TaskFailure;
+
+/** Why a desktop repair is not attempted (appended to the drift message). */
+export const DESKTOP_REPAIR_NEEDS_SIGNED = 'AI repair of desktop steps needs signed steps';
+export const DESKTOP_REPAIR_AFTER_WRITE = 'AI repair is not available once a write step ran in this run';
+export const DESKTOP_REPAIR_NOT_RESPONDING = 'AI repair not attempted: the control was found but did not respond';
+export const DESKTOP_REPAIR_FILE_CHECK = "AI repair not attempted: the file's checks failed";
+/** The proof did not pass: nothing is proposed. */
+export const DESKTOP_REPAIR_WITHHELD = 'repaired steps withheld: the proof in a fresh session did not pass';
+/** How long the repair run keeps the runner for its proof. */
+export const PROOF_RESERVE_MS = 30_000;
 
 export const DEFAULT_LEASE_MS = 30_000;
 /** How much longer than a lease a busy runner is waited for by default. */
@@ -191,6 +252,52 @@ function maskedOutputs(outputs: StepOutput[], script: DesktopScript, secrets: (s
   });
 }
 
+/** run.begin with this id, retrying a busy runner until busyUntil (then RunnerBusyError). */
+async function beginRun(client: RunnerClient, id: string, leaseMs: number, busyUntil: number): Promise<void> {
+  for (;;) {
+    try {
+      await client.call('run.begin', { runId: id, leaseMs });
+      return;
+    } catch (err) {
+      if (!(err instanceof RunnerBusyError)) throw err;
+      if (Date.now() + BUSY_RETRY_MS >= busyUntil) throw err;
+      await sleep(BUSY_RETRY_MS);
+    }
+  }
+}
+
+/** app.launch, with the runner's not_found and not-allowed answers in the engine's words (AppLaunchError). */
+async function launchApp(surface: DesktopSurface, app: DesktopScript['app']): Promise<void> {
+  try {
+    await surface.rpc('app.launch', { app });
+  } catch (err) {
+    const exe = app.exe.split(/[\\/]/).pop() ?? app.exe;
+    // not_found from app.launch is the executable missing on the runner's machine: an installation problem, not drift.
+    if (err instanceof ElementNotFoundError) throw new AppLaunchError('runner_unavailable', runnerAppMissing(exe));
+    // policy_refused from app.launch with the runner's exact "not in the runner's allowedApps" text is the app missing from its
+    // policy: name the way out instead. Other policy refusals (a writable folder, a changed file) keep the runner's own words.
+    if (err instanceof PolicyRefusedError && err.message === `policy_refused: application "${exe}" is not in the runner's allowedApps`) {
+      throw new AppLaunchError('policy_violation', runnerAppNotAllowed(exe));
+    }
+    throw err;
+  }
+}
+class AppLaunchError extends Error {
+  constructor(readonly code: ErrorCode, message: string) {
+    super(message);
+  }
+}
+
+/** The repair trigger table: whether a failed step of a signed run is repaired, and why not. */
+export function repairableCause(err: unknown, message: string): FailureClass {
+  const code = codeOf(err, message);
+  if (code !== 'drift_detected') return { repair: false, code };
+  if (err instanceof RunnerTimeoutError) return { repair: false, code, why: DESKTOP_REPAIR_NOT_RESPONDING };
+  if (message.startsWith(FILE_CHECK_FAILED_PREFIX)) return { repair: false, code, why: DESKTOP_REPAIR_FILE_CHECK };
+  const element = err instanceof ElementNotFoundError || err instanceof ElementNotUniqueError || err instanceof ElementCannotActError || err instanceof DesktopDriftError;
+  return element ? { repair: true } : { repair: false, code };
+}
+
 /**
  * Runs a desktop step set: trust gate, shape check, connect (certificate pinned before the token is sent), hello,
  * run.begin (a busy runner is retried for busyWaitMs), app.launch, the steps on the desktop surface, and run.end on
@@ -204,6 +311,11 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
   // them may type (registerSecretVars). Every other masker of the run is built from `secrets`, which holds them all.
   const stepMasker = createMasker([input.runner?.token, input.trust.key]);
   registerSecretVars(input.secretVars, vars, stepMasker);
+  /** A variable whose value is a secret: listed as one, or its value is held by the step masker (a token, the key). */
+  const isSecretVar = (name: string): boolean => {
+    const v = Object.hasOwn(vars, name) ? vars[name] : undefined;
+    return (input.secretVars ?? []).includes(name) || (typeof v === 'string' && v !== '' && stepMasker.containsSecret(v));
+  };
   const secrets: (string | undefined)[] = [...stepMasker.secrets];
   let surface: DesktopSurface | undefined;
   /** A failure. `message` is masked for secrets here; a message that can carry runner text is masked for typed values first. */
@@ -271,32 +383,21 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     const leaseMs = Math.min(Math.max(input.leaseMs ?? DEFAULT_LEASE_MS, 5_000), 600_000);
     const busyUntil = Date.now() + Math.min(Math.max(input.busyWaitMs ?? defaultBusyWaitMs(leaseMs), 0), deadline - Date.now());
     const id = randomUUID();
-    for (;;) {
-      try {
-        // If this call times out after the runner began the run, runId stays unset and no run.end is sent: the runner's
-        // lease (leaseMs) frees it.
-        await client.call('run.begin', { runId: id, leaseMs });
-        break;
-      } catch (err) {
-        if (!(err instanceof RunnerBusyError)) throw err;
-        if (Date.now() + BUSY_RETRY_MS >= busyUntil) return fail('busy', RUNNER_BUSY, ids);
-        await sleep(BUSY_RETRY_MS);
-      }
+    try {
+      // If this call times out after the runner began the run, runId stays unset and no run.end is sent: the runner's
+      // lease (leaseMs) frees it.
+      await beginRun(client, id, leaseMs, busyUntil);
+    } catch (err) {
+      if (err instanceof RunnerBusyError) return fail('busy', RUNNER_BUSY, ids);
+      throw err;
     }
     runId = id;
     lease = client.startLease(runId, leaseMs);
     surface = createDesktopSurface(client, runId, script.app);
     try {
-      await surface.rpc('app.launch', { app: script.app });
+      await launchApp(surface, script.app);
     } catch (err) {
-      // not_found from app.launch is the executable missing on the runner's machine: an installation problem, not drift.
-      if (err instanceof ElementNotFoundError) return fail('runner_unavailable', runnerAppMissing(script.app.exe.split(/[\\/]/).pop() ?? script.app.exe), ids);
-      // policy_refused from app.launch with the runner's exact "not in the runner's allowedApps" text is the app missing from its
-      // policy: name the way out instead. Other policy refusals (a writable folder, a changed file) keep the runner's own words.
-      if (err instanceof PolicyRefusedError) {
-        const exe = script.app.exe.split(/[\\/]/).pop() ?? script.app.exe;
-        if (err.message === `policy_refused: application "${exe}" is not in the runner's allowedApps`) return fail('policy_violation', runnerAppNotAllowed(exe), ids);
-      }
+      if (err instanceof AppLaunchError) return fail(err.code, err.message, ids);
       throw err;
     }
 
@@ -324,7 +425,89 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
       // code); the engine's own wording follows without a limit or capture prefix, so the intent is not said twice.
       const said = cause instanceof RunnerError ? withoutRunnerCode(failure.message) : stripShownPrefix(failure.message);
       const shown = desktopStepFailure(res.failure.index + 1, res.failure.intent.replace(/\s+/g, ' ').trim(), said);
-      return fail(code, `${shown}${lost}`, base);
+      if (!input.repair || code !== 'drift_detected' || lost) return fail(code, `${shown}${lost}`, base);
+
+      // AI repair: refused for the reasons below (the drift carries the reason), else the session, then the proof.
+      const repair = input.repair;
+      const step = script.steps[res.failure.index]!;
+      const trigger = repairableCause(cause, res.failure.message);
+      const dr2 = unrepairable(step, isSecretVar);
+      const why = repair.alreadyRan ? REPAIR_ALREADY_RAN
+        : repair.held?.trim() ? repair.held.trim()
+        : !gate.signed ? DESKTOP_REPAIR_NEEDS_SIGNED
+        : res.state.submitted ? DESKTOP_REPAIR_AFTER_WRITE
+        : !trigger.repair ? trigger.why
+        : dr2 ? `AI repair not attempted on step ${res.failure.index + 1}: ${dr2}`
+        : undefined;
+      if (why || !trigger.repair) return fail(code, `${shown}${why ? ` (${why})` : ''}`, base);
+
+      const calls = { n: 0 };
+      const budgetCaps = clampAgentBudget(repair.agentBudget);
+      const reserve = Math.min(PROVE_RESERVE_MS, Math.floor(budget * 0.4));
+      const part: FailedPart = cause instanceof DesktopDriftError && cause.message.startsWith('expected ') ? 'expect' : 'target';
+      const sessionMask = () => outputMasker(secrets, surface);
+      const session = await runDesktopRepairSession({
+        surface: desktop, ctx, state: res.state, base: script,
+        failure: { index: res.failure.index, intent: res.failure.intent, message: m.mask(said), part },
+        model: countingModel(repair.model, calls), ...(repair.goal ? { goal: repair.goal } : {}),
+        budget: { maxActions: budgetCaps.maxActions ?? DEFAULT_MAX_ACTIONS, maxTokens: budgetCaps.maxTokens, deadlineMs: deadline - reserve },
+        ...(input.signal ? { signal: input.signal } : {}),
+        mask: sessionMask, isSecretVar,
+        classify: (index, message) => repairableCause(desktop.errors.get(index), message),
+      });
+      const { loop } = session;
+      const llmCalls = Math.max(calls.n, loop.llmCalls);
+      const tokens = loop.tokens;
+      const sm = sessionMask();
+      const agentLog: AgentActionSummary[] = session.actions.map((a) => ({ tool: a.tool, ok: a.ok, url: sm.mask(desktop.address()), ...(a.note ? { note: sm.mask(a.note) } : {}) }));
+      const agentExtra = { lane: 'agent' as const, agentLog, tokens, llmCalls, transcript: loop.transcript };
+      const repairLog = () => maskedLog(res.state.log, sessionMask());
+      const failAgent = (c: ErrorCode, message: string): TaskFailure => ({
+        ...fail(c, withCost(message, llmCalls, tokens), { ...base, log: repairLog(), ...(res.state.submitted ? { submitted: true } : {}) }), ...agentExtra,
+      });
+      const o2 = override(res.failure.intent);
+      if (o2) return failAgent(o2.code, o2.message);
+      const end = session.end;
+      if (!end) {
+        if (loop.outcome === 'budget') return failAgent('incomplete', `${shown}. ${AGENT_OUT_OF_BUDGET}: ${loop.note}`);
+        if (loop.outcome === 'circling') return failAgent('incomplete', `${shown}. The repair ${WENT_IN_CIRCLES}: ${loop.note}`);
+        const modelFailed = 'the model call failed: ';
+        const note = loop.note.startsWith(modelFailed) ? `model unavailable: ${modelErrorText(loop.note.slice(modelFailed.length), sm)}` : `the repair could not continue: ${loop.note}`;
+        return failAgent('incomplete', `${shown}. ${note}`);
+      }
+      if (end.kind === 'gave_up') return failAgent('drift_detected', `${shown}. AI repair did not fix it: ${end.note}`);
+      if (end.kind === 'failed') return failAgent(end.code, `${shown}. AI repair: ${end.message}`);
+
+      // The proof: the repair run ends and keeps the runner for the proof's run, which starts the app afresh.
+      lease?.stop();
+      lease = undefined;
+      const proofId = randomUUID();
+      await client.call('run.end', { runId: id, reserveFor: proofId, reserveMs: PROOF_RESERVE_MS }, END_WAIT_MS).catch(() => undefined);
+      runId = undefined;
+      const proof = await proveDesktopRepair({
+        client, runId: proofId, doc: end.doc, changed: end.changed, added: end.added, marks: end.marks, stop: end.stop, vars, isSecretVar,
+        stepMasker: (() => { const pm = createMasker([input.runner?.token, input.trust.key]); registerSecretVars(input.secretVars, vars, pm); return pm; })(),
+        mask: (ps) => createMasker([...sessionMask().secrets, ...(ps ? outputMasker([], ps).secrets : [])]),
+        leaseMs, busyUntil: Math.min(Date.now() + PROOF_RESERVE_MS + 5_000, deadline), defaultStepTimeoutMs: ctx.defaultTimeoutMs, signed: gate.signed,
+        began: (pid) => { runId = pid; }, begin: beginRun, launch: (ps) => launchApp(ps, script.app),
+      });
+      runId = undefined;
+      const o3 = override();
+      if (o3) return failAgent(o3.code, o3.message);
+      const pm = createMasker([...sessionMask().secrets, ...(proof.surface ? outputMasker([], proof.surface).secrets : [])]);
+      if (!proof.ok) return failAgent(proof.code === 'runner_unavailable' ? 'runner_unavailable' : 'drift_detected', `${DESKTOP_REPAIR_WITHHELD}. Reason: ${proof.reason}`);
+      const { proposal, digest } = desktopRepairProposal({ base: script, doc: end.doc, proof: proof.evidence, mask: (t) => pm.mask(t) });
+      const completed = end.stop === null && proof.evidence.stoppedAt === null;
+      const ev = proof.evidence;
+      const stopNote = ev.stoppedAt !== null ? `; the proof stopped at step ${ev.stoppedAt} (${ev.stoppedBecause}: found, not run)` : '';
+      const repairNote = end.stop ? `; the repair stopped at step ${end.stop.index + 1}: ${end.stop.why}` : '';
+      return {
+        ok: true, lane: 'agent', surface: 'desktop', name: script.name ?? null, version: version ?? null, hash, completed,
+        files: completed ? proof.files : [], outputs: completed ? maskedOutputs(proof.outputs, end.doc, secrets, proof.surface) : [],
+        proposal, digest, proof: proof.evidence, agentLog, log: [...repairLog(), ...maskedLog(proof.log, pm)], tokens, llmCalls, transcript: loop.transcript,
+        durationMs: Date.now() - t0, note: pm.mask(`repaired ${end.fixes} step${end.fixes === 1 ? '' : 's'} and replayed the steps in a fresh start of the app${stopNote}${repairNote}`).slice(0, 500),
+        submitted: false,
+      };
     }
     const tail = { ...ids, log: maskedLog(res.state.log, outputMasker(secrets, surface)), ...(res.state.submitted ? { submitted: true } : {}) };
     const o = override();

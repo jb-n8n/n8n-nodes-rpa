@@ -331,3 +331,28 @@ test('an unknown command prints the usage and exits 2', () => {
     assert.match(r.stderr, /up \[apply args\]/);
   } finally { t.done(); }
 });
+
+test('demo-ui sends demo-ui.ps1 over SSM with the build in front, and refuses anything but v1 and v2', () => {
+  const t = setup();
+  try {
+    t.brought();
+    let r = t.run(['demo-ui', 'v2'], { FAKE_SSM_OUTPUT: 'done: the runner allows ErpDemo.exe v2' });
+    assert.equal(r.code, 0, r.out);
+    const send = t.calls().find((c) => c.includes('send-command'));
+    const params = JSON.parse(send[send.indexOf('--parameters') + 1]);
+    const script = readFileSync(fileURLToPath(new URL('../demo-ui.ps1', import.meta.url)), 'utf8');
+    assert.equal(params.commands.length, 1);
+    const m = /^\$Ui = 'v2'; & \(\[scriptblock\]::Create\(\[Text\.Encoding\]::UTF8\.GetString\(\[Convert\]::FromBase64String\('([A-Za-z0-9+/=]+)'\)\)\)\)$/.exec(params.commands[0]);
+    assert.ok(m, params.commands[0].slice(0, 200));
+    assert.equal(Buffer.from(m[1], 'base64').toString('utf8'), script);
+    assert.ok(send.includes('RPA demo-ui v2'));
+    const sent = t.calls().length;
+    for (const args of [['demo-ui'], ['demo-ui', 'v3'], ['demo-ui', "v2'; calc; '"], ['demo-ui', 'V2']]) {
+      r = t.run(args);
+      assert.equal(r.code, 1, args.join(' '));
+      assert.match(r.stderr, /demo-ui takes v1 or v2/);
+    }
+    assert.equal(t.calls().filter((c) => c.includes('send-command')).length, 1, 'nothing more was sent');
+    assert.ok(t.calls().length >= sent);
+  } finally { t.done(); }
+});

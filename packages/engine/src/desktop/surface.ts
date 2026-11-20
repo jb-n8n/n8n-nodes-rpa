@@ -35,6 +35,15 @@ const POLL_MS = 250;
  */
 export const MIN_MASKED_TYPED = 4;
 
+/**
+ * How a step AI repair added or changed acts before anyone approved it. 'probe': a retargeted or added click goes out in
+ * the runner's probe mode, a retargeted read in repair mode. 'expand' / 'select': a click compiled from the agent's
+ * repair-mode expand or select_item replays as that repair-mode act. 'escape': a kept Escape (no target) goes out in
+ * repair mode (the runner allows it only while a menu is open). 'checkOnly': only the step's check changed; its action
+ * is the approved one and acts in step mode.
+ */
+export type ChangedStep = 'probe' | 'expand' | 'select' | 'escape' | 'checkOnly';
+
 /** One element of a desktop view: what the repair agent sees of it, masked. */
 export interface DesktopViewItem {
   ref: string;
@@ -85,6 +94,11 @@ export interface DesktopSurface extends Surface {
    * read's own output, where a text that is also a typed variable value still stays masked.
    */
   readonly clipboard: string[];
+  /**
+   * The steps AI repair added or changed, by index, and how each acts before approval (empty outside a repair or its
+   * proof): see ChangedStep. Any action a mark does not allow is refused before it is sent.
+   */
+  readonly changedSteps: Map<number, ChangedStep>;
   /** Tells the surface which top-level step is running, for `errors`. */
   trackStep(current: () => number | undefined): void;
   /** Records an error against the running step. */
@@ -112,6 +126,11 @@ export interface DesktopSurface extends Surface {
   view(masker: Masker, opts?: { window?: WindowSel; maxNodes?: number }): Promise<DesktopView>;
   /** The raw node behind a ref of the last view; undefined after a newer view or snapshot. */
   nodeOf(ref: string): DesktopViewNode | undefined;
+  /**
+   * The items of the last view in view order, built from the raw nodes: unmasked and unclipped, for the engine's local
+   * matching against the runner's own conditions (never for a message). [] after a snapshot.
+   */
+  rawItems(): DesktopViewItem[];
   /**
    * The clipboard's text (the runner's clipboard.read), added to `clipboard` so it is masked everywhere but in its own
    * read output. A runner older than the method fails with RUNNER_TOO_OLD_FOR_CLIPBOARD; every failure is recorded.
@@ -163,7 +182,7 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
 
   const surface: DesktopSurface = {
     kind: 'desktop',
-    client, runId, app, errors, refs, typed, clipboard,
+    client, runId, app, errors, refs, typed, clipboard, changedSteps: new Map<number, ChangedStep>(),
     trackStep: (fn) => { current = fn; },
     record,
     rpc,
@@ -254,6 +273,10 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
       return { window: { title: masker.mask(raw.title).slice(0, 200), exe: masker.mask(raw.exe) }, truncated, items };
     },
     nodeOf: (ref) => viewNodes.get(ref),
+    rawItems: () => [...viewNodes].map(([ref, { node, parent }]): DesktopViewItem => ({
+      ref, ...(parent ? { parent } : {}), depth: node.depth, controlType: node.controlType, name: node.name ?? '', fullName: node.name ?? '',
+      automationId: node.automationId ?? '', className: node.className ?? '', enabled: node.enabled !== false,
+    })),
     async readClipboard() {
       let r: { text: string };
       try {

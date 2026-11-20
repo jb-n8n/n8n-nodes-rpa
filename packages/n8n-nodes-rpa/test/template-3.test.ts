@@ -52,9 +52,12 @@ describe('3-approve-steps.json', () => {
     expect(targets(t, 'Create run log table')).toEqual([['Mark pending']]);
     expect(targets(t, 'Mark pending')).toEqual([['The approved version']]);
     expect(targets(t, 'The approved version')).toEqual([['Check the approved version']]);
-    expect(targets(t, 'Check the approved version')).toEqual([]);
+    expect(targets(t, 'Check the approved version')).toEqual([['The active version']]);
+    expect(targets(t, 'The active version')).toEqual([]);
     // Desktop steps: one email (its form asks for the writes). Browser steps: the review email with the screenshots, then Approve / Reject.
-    expect(targets(t, 'Desktop steps?')).toEqual([['Ask for approval (desktop steps)'], ['Email repaired steps']]);
+    expect(targets(t, 'Desktop steps?')).toEqual([['Higher than the version in use?'], ['Email repaired steps']]);
+    expect(targets(t, 'Higher than the version in use?')).toEqual([['Ask for approval (desktop steps)'], ['Record refusal']]);
+    expect(targets(t, 'Record refusal')).toEqual([['Not a higher version']]);
     expect(targets(t, 'Email repaired steps')).toEqual([['Ask for approval']]);
     expect(targets(t, 'Ask for approval')).toEqual([['Timed out?']]);
     expect(targets(t, 'Ask for approval (desktop steps)')).toEqual([['Desktop answer']]);
@@ -714,7 +717,7 @@ describe('template 3 emails of a repair: the whole repaired bot, and what change
       { keyName: 'approvedBy', condition: 'neq', keyValue: '' },
     ]);
     expect(targets(t3, 'The approved version')).toEqual([['Check the approved version']]);
-    expect(targets(t3, 'Check the approved version')).toEqual([]);
+    expect(targets(t3, 'Check the approved version')).toEqual([['The active version']]);
     expect(byName(t3, 'Check the approved version')).toMatchObject({
       type: NODE_TYPE, onError: 'continueRegularOutput', parameters: { operation: 'signSteps', checkOnly: true },
     });

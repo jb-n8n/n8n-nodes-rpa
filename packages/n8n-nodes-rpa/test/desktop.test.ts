@@ -164,7 +164,7 @@ describe('Run Steps routes by the steps\' surface', () => {
     expect(eng.calls).toHaveLength(0);
   });
 
-  it('desktop steps refuse a Site Login and AI repair (not available for desktop steps yet)', async () => {
+  it('desktop steps refuse a Site Login, and Deliver Unconfirmed Rows with AI Repair', async () => {
     runner = await FakeRunner.start();
     const eng = fakeEngine(() => scriptOk());
     const desktopCreds = { rpaDesktopRunnerApi: { ...runner.endpoint }, playwrightScriptSigningApi: { secretKey: KEY } };
@@ -172,8 +172,10 @@ describe('Run Steps routes by the steps\' surface', () => {
       ctx({ ...desktopCreds, playwrightSiteLoginApi: { loginUrl: 'https://example.com/login', username: 'u', password: 'p' } }, params(DESKTOP_STEPS)), eng,
     );
     expect(withLogin[0].json.error).toBe('Desktop steps do not use an RPA Site Login yet: remove it from this node.');
-    const [withRepair] = await executeRunSteps(ctx(desktopCreds, params(DESKTOP_STEPS, { aiRepair: true, goal: 'Export the orders' })), eng);
-    expect(withRepair[0].json.error).toBe('AI repair is not available for desktop steps yet: turn AI Repair off.');
+    const unconfirmed = params(DESKTOP_STEPS, { aiRepair: true, goal: 'Export the orders' });
+    (unconfirmed.options as IDataObject).deliverUnconfirmed = true;
+    const [withRepair] = await executeRunSteps(ctx(desktopCreds, unconfirmed), eng);
+    expect(withRepair[0].json.error).toBe('Deliver Unconfirmed Rows applies to browser steps only: turn it off for desktop steps.');
     expect(runner.tcpConnections).toBe(0);
   });
 
@@ -252,7 +254,7 @@ describe('desktop steps elsewhere in the node', () => {
     const out = await executeSignSteps(harness({ params: p, items: [{ json: item }], credentials: { playwrightScriptSigningApi: { secretKey: KEY } }, continueOnFail: true }), engine);
     const error = String(out[0][0].json.error);
     expect(error).toContain('the repaired steps changed after they were reviewed');
-    expect(error).toContain('a desktop proposal must be a first version');
+    expect(error).toContain('a desktop proposal without the proof of an AI repair must be a first version');
     expect(error).toContain('the change list does not show every step of the steps, in order, as added');
   });
 

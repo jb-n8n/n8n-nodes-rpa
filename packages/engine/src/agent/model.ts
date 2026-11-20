@@ -33,3 +33,13 @@ export function responseText(content: unknown): string {
     .map((c) => (typeof c === 'string' ? c : c && typeof c === 'object' && typeof (c as { text?: unknown }).text === 'string' ? (c as { text: string }).text : ''))
     .join('');
 }
+
+/** The model with every invoke counted before it is sent: the count survives a throw anywhere in the agent lane. */
+export function countingModel(model: ChatModel, calls: { n: number }): ChatModel {
+  return {
+    bindTools(defs) {
+      const bound = model.bindTools(defs);
+      return { invoke(messages, options) { calls.n++; return bound.invoke(messages, options); } };
+    },
+  };
+}

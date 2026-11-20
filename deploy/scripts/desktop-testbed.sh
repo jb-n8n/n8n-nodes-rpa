@@ -20,6 +20,9 @@
 #                            downloads the zip, compares its SHA-256 with the one given, unpacks it and runs its
 #                            Install-Rpa.ps1 as an upgrade (the user, the policy, the tokens and the firewall addresses
 #                            stay; a run in progress fails). It does not make a first install.
+#   demo-ui v1|v2            test bed only: puts ERP Demo v1 or v2 in the folder the runner's policy allows ErpDemo.exe
+#                            from (an in-place upgrade, or back) and re-pins its sha256 with the policy tool, which
+#                            restarts the runner (deploy/scripts/demo-ui.ps1, through SSM). For AI repair demos.
 #   down [destroy args]      terraform destroy
 #
 # Env:
@@ -296,6 +299,17 @@ cmd_install() {
   ssm_run 'RPA package install' "& 'C:\\Program Files\\RPA Test Bed\\install-package.ps1' -Url '$url' -Sha256 '$sha'"
 }
 
+cmd_demo_ui() {
+  load_outputs
+  local ui="${1:-}"
+  case "$ui" in v1 | v2) ;; *) fail "demo-ui takes v1 or v2" ;; esac
+  say "putting ERP Demo $ui in place of the allowed build"
+  # One line: the script travels base64-encoded (UTF-8) and runs with $Ui set in front of it.
+  local b64
+  b64="$(base64 <"$ROOT/deploy/scripts/demo-ui.ps1" | tr -d '\n')"
+  ssm_run "RPA demo-ui $ui" "\$Ui = '$ui'; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$b64'))))"
+}
+
 [ $# -ge 1 ] || usage
 command="$1"
 shift
@@ -308,6 +322,7 @@ case "$command" in
   fingerprint) cmd_fingerprint ;;
   rdp-password) cmd_rdp_password "$@" ;;
   install) cmd_install "$@" ;;
+  demo-ui) cmd_demo_ui "$@" ;;
   -h | --help | help) usage ;;
   *) printf '[testbed] unknown command: %s\n' "$command" >&2; usage ;;
 esac

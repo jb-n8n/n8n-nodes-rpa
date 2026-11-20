@@ -58,7 +58,7 @@ const oneLine = (s: string): string =>
  * checks come from the download step of the steps, never from the evidence.
  */
 export function evidenceLine(p: Proposal | DesktopProposal, engine: Pick<Engine, 'describeCheck' | 'filesEvidenceText'>): string {
-  if (isDesktopProposal(p)) return DESKTOP_EVIDENCE_LINE;
+  if (isDesktopProposal(p)) return desktopRepairProof(p) !== undefined ? desktopRepairEvidenceLine(p) : DESKTOP_EVIDENCE_LINE;
   const { count, total, diff, file: f } = p.evidence;
   const reads = p.evidence.readPosts?.length ? `; read-only requests the Site Login allowed: ${p.evidence.readPosts.join(', ')}` : '';
   // Several files or a screenshot (an import): every file and screenshot before the first "; ", which the review page shows.
@@ -93,6 +93,46 @@ export const NOT_REPLAYED_EVIDENCE_LINE =
  * evidence does not say where the steps came from, so Sign Steps accepts any of these on a desktop item.
  */
 export const DESKTOP_EVIDENCE_LINES: readonly string[] = [DESKTOP_EVIDENCE_LINE, DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE];
+
+/** The proof of a desktop AI repair (DesktopProofEvidence), as the item carries it in its evidence. */
+export interface DesktopRepairProofShown {
+  replayed: number; stoppedAt: number | null; stoppedBecause: string | null; changedSteps: number[]; addedSteps: number[];
+}
+
+/** The proof a desktop item's evidence carries (an AI repair's), or undefined (an import's item has none). */
+export function desktopRepairProof(p: Proposal | DesktopProposal): DesktopRepairProofShown | undefined {
+  const proof = (p.evidence as unknown as { proof?: unknown } | undefined)?.proof;
+  return proof !== null && typeof proof === 'object' ? (proof as DesktopRepairProofShown) : undefined;
+}
+
+/** `step 9`, `steps 9 and 13`, `steps 9, 12 and 13`, or `no step`. */
+const stepNumbers = (list: readonly number[]): string =>
+  list.length === 0 ? 'no step' : list.length === 1 ? `step ${list[0]}` : `steps ${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+
+/** Why the proof stopped at a step, as the reviewer reads it. */
+const PROOF_STOP_WORDS: Record<string, string> = {
+  'declared write': 'a write step',
+  'looks like a write': 'it looks like a write',
+  'held for approval': 'it waits for your approval',
+};
+
+/**
+ * The evidence line of a desktop AI repair, from its proof (the run's report of it, and the line says so; Sign Steps
+ * rebuilds the line from the same numbers): what ran in a fresh start of the app, where the proof stopped and why, and
+ * which steps the repair says it retargeted and added.
+ */
+export function desktopRepairEvidenceLine(p: DesktopProposal): string {
+  const proof = desktopRepairProof(p);
+  if (!proof) return DESKTOP_EVIDENCE_LINE;
+  const ran = proof.replayed === 0 ? 'no step ran' : proof.replayed === 1 ? 'step 1 ran' : `steps 1 to ${proof.replayed} ran`;
+  const stop = proof.stoppedAt === null ? ' (every step)' : `; step ${proof.stoppedAt} was found and not run (${PROOF_STOP_WORDS[String(proof.stoppedBecause)] ?? String(proof.stoppedBecause)})`;
+  const base = p.baseVersion === null ? '' : ` ${p.baseVersion}`;
+  return oneLine(
+    `Proven in a fresh start of ${String(p.steps.app?.exe ?? '')} (as reported by the run): ${ran}${stop}. The run reports that AI repair retargeted `
+    + `${stepNumbers(proof.changedSteps)} and added ${stepNumbers(proof.addedSteps)}, and that every other step is as in version${base}. `
+    + 'Check every step, and mark each step that saves, posts or submits as a write.',
+  );
+}
 
 /** A proposal whose steps are a desktop step set (`surface: "desktop"`, own property, as the engine routes). */
 export function isDesktopProposal(p: Proposal | DesktopProposal): p is DesktopProposal {

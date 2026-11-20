@@ -52,6 +52,9 @@ public sealed class RunState
         get { lock (_gate) return _pids.ToArray(); }
     }
 
+    /// <summary>Probe acts the run made (RunnerService.MaxProbesPerRun caps them).</summary>
+    internal int Probes { get; set; }
+
     /// <summary>The run's most recent act: the clipboard's sequence number right before it, and when it finished (or
     /// started, while it is still running). Null before the run's first act. clipboard.read compares against it.</summary>
     internal ActMark? LastAct { get; set; }
@@ -71,6 +74,9 @@ public sealed class RunManager : IDisposable
     public const long MinLeaseMs = 5000;
     public const long MaxLeaseMs = 600000;
 
+    /// <summary>The longest reservation run.end may make for the next run.</summary>
+    public const long MaxReserveMs = 30000;
+
     /// <summary>How long the launched apps get, in total, to close by themselves after the close request.</summary>
     public static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan ClosePoll = TimeSpan.FromMilliseconds(100);
@@ -83,6 +89,7 @@ public sealed class RunManager : IDisposable
     private readonly RunnerLog _log;
     private RunState? _active;
     private ITimer? _timer;
+    private (string RunId, DateTimeOffset Until)? _reserved;
 
     public RunManager(string exportRoot, IProcessHost processes, TimeProvider time, RunnerLog log, IPathSecurity? paths = null)
     {
@@ -106,6 +113,12 @@ public sealed class RunManager : IDisposable
         {
             // Busy while a run is active and while the previous run is still being cleaned up.
             if (_active is not null || _cleaning is not null) throw RpcErrors.RunnerBusy();
+            // Busy for every other run id while the previous run's reservation lasts; the reserved id takes it.
+            if (_reserved is { } r)
+            {
+                if (_time.GetUtcNow() < r.Until && !string.Equals(r.RunId, runId, StringComparison.Ordinal)) throw RpcErrors.RunnerBusy();
+                _reserved = null;
+            }
             // A fresh, unguessable directory per run; the run id is caller-chosen and never used in the path.
             var dir = Path.Combine(_exportRoot, Guid.NewGuid().ToString("N"));
             _paths.CreatePrivateDirectory(dir);
@@ -153,13 +166,17 @@ public sealed class RunManager : IDisposable
     /// <see cref="CloseWait"/>, stop, delete the export folder) goes on after it, and run.begin stays busy until it
     /// has finished. Before the close wait existed the answer came after the cleanup; with it the answer could take
     /// longer than the engine's 5 seconds for run.end.</summary>
-    public void End(string? runId)
+    public void End(string? runId, string? reserveFor = null, long? reserveMs = null)
     {
         RunState run;
         lock (_gate)
         {
             run = Get(runId);
             Detach(run);
+            // The reservation counts from now: it covers the cleanup and the next run.begin.
+            _reserved = reserveFor is not null && reserveMs is > 0
+                ? (reserveFor, _time.GetUtcNow() + TimeSpan.FromMilliseconds(Math.Min(reserveMs.Value, MaxReserveMs)))
+                : null;
         }
         _ = CleanupAsync(run, "run.end", polite: true);
     }

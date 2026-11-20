@@ -31,9 +31,17 @@ public sealed class RunnerService
     private const long DefaultFileTimeoutMs = 30000;
 
     private const string RepairRefusal =
-        "repair mode allows only focus, expand, read, Escape without a target, and click on tabs, list items and tree items";
+        "repair mode allows only expand, read, Escape without a target, and click on tabs, list items and tree items";
+
+    private const string ProbeRefusal = "probe mode allows only click and doubleClick";
+
+    /// <summary>The most probe acts one run may make (a repair's retargeted and added steps, or a proof's).</summary>
+    public const int MaxProbesPerRun = 12;
 
     private static readonly HashSet<string> RepairClickable = new(StringComparer.OrdinalIgnoreCase) { "TabItem", "ListItem", "TreeItem" };
+
+    private static readonly HashSet<string> ProbeClickable = new(StringComparer.OrdinalIgnoreCase)
+        { "Button", "MenuItem", "Hyperlink", "SplitButton", "TabItem", "ListItem", "TreeItem" };
 
     private readonly IDesktop _desktop;
     private readonly IProcessHost _processes;
@@ -128,7 +136,13 @@ public sealed class RunnerService
 
     private JsonNode RunEnd(Params p)
     {
-        _runs.End(p.OptString("runId"));
+        // A reservation: the next run.begin within reserveMs must carry reserveFor (the proof of a repair takes the runner
+        // again without another run starting in between); any other run id is busy until then.
+        var reserveFor = p.OptString("reserveFor");
+        var reserveMs = p.OptLong("reserveMs", 1000, RunManager.MaxReserveMs);
+        if ((reserveFor is null) != (reserveMs is null)) throw RpcErrors.InvalidParamsError("reserveFor and reserveMs go together");
+        if (reserveFor is not null && (reserveFor.Length == 0 || reserveFor.Length > 200)) throw RpcErrors.InvalidParamsError("reserveFor must be 1 to 200 characters");
+        _runs.End(p.OptString("runId"), reserveFor, reserveMs);
         return new JsonObject();
     }
 
@@ -272,9 +286,17 @@ public sealed class RunnerService
                 break;
         }
 
-        // Floor checks that need no UI.
-        if (mode == ActMode.Repair && action is not (ActionKind.Focus or ActionKind.Expand or ActionKind.Read or ActionKind.Click or ActionKind.Key))
+        // Floor checks that need no UI. Repair mode never moves the focus (G3): a focus change fires the app's
+        // Leave/Validating handlers, which some apps use to save.
+        if (mode == ActMode.Repair && action is not (ActionKind.Expand or ActionKind.Read or ActionKind.Click or ActionKind.Key))
             throw RpcErrors.PolicyRefused(RepairRefusal);
+        if (mode == ActMode.Probe)
+        {
+            // Clicks only: an inserted or retargeted step that types, selects or checks waits for approval.
+            if (action is not (ActionKind.Click or ActionKind.DoubleClick)) throw RpcErrors.PolicyRefused(ProbeRefusal);
+            if (write) throw RpcErrors.PolicyRefused("probe mode never sends a write step (write is not allowed with it)");
+            if (run.Probes >= MaxProbesPerRun) throw RpcErrors.PolicyRefused($"a run may make at most {MaxProbesPerRun} probe acts");
+        }
         if (chord is not null && IsSystemChord(chord))
             throw RpcErrors.PolicyRefused($"the key {chord} reaches the Windows shell, not the app, and is never sent");
         if (chord is not null && _policy.IsGatedKey(chord))
@@ -291,10 +313,7 @@ public sealed class RunnerService
         var element = res.Element;
         var what = target?.Describe() ?? "the focused element";
 
-        CheckWriteControl(element, res.Window, write, mode, "the target");
-        if (mode == ActMode.Repair && action == ActionKind.Key) CheckRepairEscape(run, res.Window);
-        if (mode == ActMode.Repair && action == ActionKind.Click && !RepairClickable.Contains(element.ControlType))
-            throw RpcErrors.PolicyRefused($"repair mode may click only tabs, list items and tree items, not a {element.ControlType}");
+        CheckTarget(run, element, res.Window, action, write, mode);
         if (action == ActionKind.Read && Redaction.HidesValue(element))
             throw RpcErrors.PolicyRefused("reading a password or credential field is not allowed");
 
@@ -311,6 +330,7 @@ public sealed class RunnerService
         }
 
         EnsureForeground(run, res.Window);
+        if (mode == ActMode.Probe) run.Probes++;
 
         void Guard(IUiNode receiver)
         {
@@ -319,6 +339,7 @@ public sealed class RunnerService
             CheckWriteControl(receiver, res.Window, write, mode, "the element under the pointer or with the keyboard focus");
             // Where the pointer lands; a repair-mode key (Escape) goes to the focused element, which is its target.
             if (mode == ActMode.Repair && action != ActionKind.Key) CheckRepairReceiver(receiver, element);
+            if (mode == ActMode.Probe && action is ActionKind.Click or ActionKind.DoubleClick) CheckRepairReceiver(receiver, element);
             // Right before the key goes out: the popup menu that allowed a repair-mode Escape may have closed.
             if (mode == ActMode.Repair && action == ActionKind.Key) CheckRepairEscape(run, res.Window);
         }
@@ -328,7 +349,7 @@ public sealed class RunnerService
             try
             {
                 var outText = _desktop.Perform(new UiOperation(element, res.Window, action, text, chord, Remaining(deadline), Guard));
-                _log.Info($"act {action} candidate={res.Candidate}{(write ? " write" : "")}{(mode == ActMode.Repair ? " repair" : "")}");
+                _log.Info($"act {action} candidate={res.Candidate}{(write ? " write" : "")}{(mode == ActMode.Repair ? " repair" : mode == ActMode.Probe ? " probe" : "")}");
                 var o = new JsonObject();
                 if (action == ActionKind.Read) o["text"] = outText ?? "";
                 return o;
@@ -345,19 +366,110 @@ public sealed class RunnerService
                 Thread.Sleep(TargetResolver.PollInterval);
                 res = target is null ? FocusedResolution(run, deadline, ct) : _resolver.Resolve(run, target, Remaining(deadline), ct);
                 element = res.Element;
-                CheckWriteControl(element, res.Window, write, mode, "the target");
-                if (mode == ActMode.Repair && action == ActionKind.Key) CheckRepairEscape(run, res.Window);
+                // The element that came back gets every check the first one got.
+                CheckTarget(run, element, res.Window, action, write, mode);
             }
         }
     }
 
+    /// <summary>Every per-element check of an act, in order: the write control, then the mode's own (repair: Escape,
+    /// clickable types, write words, combo items; probe: CheckProbe). Run after the first resolve and after every
+    /// re-resolve, so an element that comes back after it went away is checked the same way.</summary>
+    private void CheckTarget(RunState run, IUiNode element, IUiNode window, ActionKind action, bool write, ActMode mode)
+    {
+        CheckWriteControl(element, window, write, mode, "the target");
+        if (mode == ActMode.Repair)
+        {
+            if (action == ActionKind.Key) CheckRepairEscape(run, window);
+            if (action == ActionKind.Click && !RepairClickable.Contains(element.ControlType))
+                throw RpcErrors.PolicyRefused($"repair mode may click only tabs, list items and tree items, not a {element.ControlType}");
+            if (action is ActionKind.Click or ActionKind.Expand)
+            {
+                // G4: nothing that reads like a write is expanded or selected in repair mode, declared or not.
+                if (ReadsLikeWrite(element))
+                    throw RpcErrors.PolicyRefused("the target's name or automation id reads like a write (save, post, submit, confirm, ok and the like); repair mode never acts on it");
+                // Nor anything on the destructive deny list: a tab, list item or menu named so may act when it is
+                // selected or opened.
+                if (ReadsDestructive(element))
+                    throw RpcErrors.PolicyRefused("the target's name or automation id reads like it deletes, cancels, rejects or signs out; repair mode never acts on it");
+                // G2: choosing an item of a combo box changes a form value.
+                if (action == ActionKind.Click && InComboBox(element, window))
+                    throw RpcErrors.PolicyRefused("repair mode never chooses an item of a combo box: that changes a form value");
+            }
+        }
+        if (mode == ActMode.Probe) CheckProbe(element, window, action);
+    }
+
     /// <summary>Escape fires a form's cancel button (WinForms CancelButton, a Win32 dialog's IDCANCEL) whatever has the
-    /// focus, so in repair mode it is refused when its window holds a declared write control, unless a popup menu of that
-    /// window is open (then Escape only closes the menu).</summary>
+    /// focus, and a cancel button may discard or cancel something whether or not the policy declares it. So in repair mode
+    /// Escape is allowed only while a popup menu of that window is open: then it only closes the menu (G1).</summary>
     private void CheckRepairEscape(RunState run, IUiNode window)
     {
-        if (WindowHasWriteControl(window) && !PopupMenuOpenFor(run, window))
-            throw RpcErrors.PolicyRefused("in repair mode Escape could press a declared write control of this window (a cancel button), so it is allowed only while a menu is open");
+        if (!PopupMenuOpenFor(run, window))
+            throw RpcErrors.PolicyRefused("in repair mode Escape could press a cancel button of this window, so it is allowed only while a menu is open");
+    }
+
+    /// <summary>Whether the element's name or automation id has a write word (<see cref="WriteWords"/>).</summary>
+    private static bool ReadsLikeWrite(IUiNode element) => WriteWords.Has(element.Name) || WriteWords.Has(element.AutomationId);
+
+    /// <summary>Whether the element's name or automation id is on the destructive deny list (<see cref="DestructiveWords"/>).</summary>
+    private static bool ReadsDestructive(IUiNode element) => DestructiveWords.Has(element.Name) || DestructiveWords.Has(element.AutomationId);
+
+    /// <summary>Whether the element is an item of a combo box: a ComboBox above it in its window, a Win32 combo list
+    /// (class ComboLBox) above it, or the window itself is such a list. Fails closed: an element that goes away counts.</summary>
+    private static bool InComboBox(IUiNode element, IUiNode window)
+    {
+        try
+        {
+            if (window.ClassName == "ComboLBox") return true;
+            var cur = element.GetParent();
+            for (var i = 0; i < 32 && cur is not null; i++)
+            {
+                if (string.Equals(cur.ControlType, "ComboBox", StringComparison.OrdinalIgnoreCase) || cur.ClassName == "ComboLBox") return true;
+                if (cur.Id == window.Id) return false;
+                cur = cur.GetParent();
+            }
+            return false;
+        }
+        catch (ElementGoneException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Probe mode (G5): a click AI repair added or retargeted acts once, before anyone approved its control, only when it
+    /// cannot write as far as the runner can tell. Only clicks: a step that types, selects or checks waits for approval. Declared write controls are refused before this (CheckWriteControl).
+    /// The target's name and automation id must have no write word (G4). A click must be on a button, menu item, link,
+    /// tab, list item or tree item, never on a combo box item, and never in a window whose title or static text has a
+    /// write word: a dialog's default button runs whatever the dialog says, so the dialog's words count (DR3).
+    /// </summary>
+    private static void CheckProbe(IUiNode element, IUiNode window, ActionKind action)
+    {
+        if (action is not (ActionKind.Click or ActionKind.DoubleClick)) throw RpcErrors.PolicyRefused(ProbeRefusal);
+        if (ReadsLikeWrite(element))
+            throw RpcErrors.PolicyRefused("the target's name or automation id reads like a write (save, post, submit, confirm, ok and the like); probe mode never acts on it");
+        if (ReadsDestructive(element))
+            throw RpcErrors.PolicyRefused("the target's name or automation id reads like it deletes, cancels, rejects or signs out; probe mode never acts on it");
+        if (!ProbeClickable.Contains(element.ControlType))
+            throw RpcErrors.PolicyRefused($"probe mode may click only buttons, menu items, links, tabs, list items and tree items, not a {element.ControlType}");
+        if (InComboBox(element, window))
+            throw RpcErrors.PolicyRefused("probe mode never chooses an item of a combo box");
+        if (WindowReadsLikeWrite(window))
+            throw RpcErrors.PolicyRefused("the window's title or text reads like a write (save, post, submit, confirm, ok and the like), so probe mode clicks nothing in it");
+    }
+
+    /// <summary>Whether a window's title or any of its static texts has a write word. Fails closed: an unreadable window counts.</summary>
+    private static bool WindowReadsLikeWrite(IUiNode window)
+    {
+        try
+        {
+            return WriteWords.Has(window.Name) || window.FindDescendants(new Cond("Text", null, null, null, null)).Any(t => WriteWords.Has(t.Name));
+        }
+        catch (ElementGoneException)
+        {
+            return true;
+        }
     }
 
     /// <summary>
@@ -532,6 +644,7 @@ public sealed class RunnerService
             if (_policy.IsWriteControl(exe, cur.AutomationId))
             {
                 if (mode == ActMode.Repair) throw RpcErrors.PolicyRefused($"{what} is a declared write control; repair mode never acts on it");
+                if (mode == ActMode.Probe) throw RpcErrors.PolicyRefused($"{what} is a declared write control; probe mode never acts on it");
                 if (!write) throw RpcErrors.PolicyRefused($"{what} is a declared write control and needs write: true");
                 return;
             }

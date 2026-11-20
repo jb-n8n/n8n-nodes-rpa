@@ -4,7 +4,7 @@ import type { NodeContext } from './context.js';
 import type { Compiled, LaneSuccess } from './operations/quick/shared.js';
 import type { Engine } from './engine.js';
 import { CONFIG_GUIDANCE, errorJson, guidanceFor, shownMessage, type FailureDetails } from './errors.js';
-import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, leftOutList, modelSteps, NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, reviewSteps, safetyLine } from './format.js';
+import { changeList, DESKTOP_EVIDENCE_LINE, desktopRepairEvidenceLine, desktopRepairProof, evidenceLine, fullSafetyFlags, leftOutList, modelSteps, NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, reviewSteps, safetyLine } from './format.js';
 
 /** A file-name-safe form of a name (lowercase, dashes), 'rpa' when nothing is left. */
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'rpa';
@@ -158,12 +158,15 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
  * browser item, so the approval template and Sign Steps take it unchanged. Nothing was replayed: the evidence is empty,
  * the evidence line (one of DESKTOP_EVIDENCE_LINES, by where the steps came from) says so, and there are no
  * screenshots. The safety flags are the engine's full list (desktopSafetyFlags), which Sign Steps recomputes; the
- * digest covers them. `secretVariables`: the names of the steps' secret variables (never a value), for the approval email
+ * digest covers them. An AI repair's item (engine DesktopRepairProposal, a base version and evidence.proof) carries the
+ * proof in its evidence, the evidence line built from it (desktopRepairEvidenceLine) and its reviewSteps. `secretVariables`: the names of the steps' secret variables (never a value), for the approval email
  * to mark them as the review page does; shown only, neither the digest nor the signature covers them.
  */
 export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopProposal, line: string = DESKTOP_EVIDENCE_LINE, secretVariables: readonly string[] = []): IDataObject {
   const safetyFlags = engine.desktopSafetyFlags(engine.parseDesktopScript(proposal.steps));
   const p: DesktopProposal = withLeftOut({ ...proposal, safetyFlags });
+  // An AI repair's proof (version N+1 of base N): part of the evidence, so the digest covers it and the line is built from it.
+  const proof = desktopRepairProof(p);
   return {
     name: p.name,
     baseVersion: p.baseVersion,
@@ -171,14 +174,19 @@ export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopPropos
     steps: plain(p.steps) as unknown as IDataObject,
     hash: p.hash,
     digest: engine.proposalDigest(p),
-    evidence: { count: p.evidence.count, total: p.evidence.total, diff: { missing: [...p.evidence.diff.missing], extra: [...p.evidence.diff.extra] } },
+    evidence: {
+      count: p.evidence.count, total: p.evidence.total, diff: { missing: [...p.evidence.diff.missing], extra: [...p.evidence.diff.extra] },
+      ...(proof ? { proof: plain(proof) as unknown as IDataObject } : {}),
+    },
     changes: p.changes.map((c) => ({ was: c.was, now: c.now })),
     safetyFlags: [...safetyFlags],
-    evidenceLine: line,
+    evidenceLine: proof ? desktopRepairEvidenceLine(p) : line,
     changeList: changeList(p),
     safetyLine: safetyLine(p),
     ...leftOutFields(p),
     ...(secretVariables.length ? { secretVariables: [...secretVariables] } : {}),
+    // A repair's steps as the approval email lists them (an import adds its own, with its start values).
+    ...(proof ? { reviewSteps: reviewSteps(p.steps.steps, { desktop: true, secretVariables }) as unknown as IDataObject[] } : {}),
     attachmentNames: '',
   };
 }

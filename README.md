@@ -19,7 +19,7 @@ default a bot runs only steps that a person reviewed and approved.
 | Exports a report and saves the file | A `download` step (browser) or `expectFile` step (desktop) that returns the file to n8n, with checks on its name and columns |
 | Runs on a schedule on a robot machine | An n8n Schedule Trigger. On Windows Server, nobody needs to be signed in |
 | Excel, email, HTTP calls, loops and decisions | n8n's own nodes around the steps |
-| Breaks when the screen changes | Browser steps can repair themselves with an AI chat model. A person approves every repair |
+| Breaks when the screen changes | Browser and desktop steps can repair themselves with an AI chat model. A person approves every repair |
 
 ## Three ways in
 
@@ -119,9 +119,9 @@ Known limits:
 - **Windows:** tested on Windows Server 2022 (CI also installs it on Windows Server 2025). Windows 10 and 11 were not
   tested. The recorder was tried on WinForms and Win32 apps only, not on WPF apps or apps that show WebView2.
 - **n8n connects in to the Windows machine.** The machine never dials out to n8n, so n8n must reach it on the runner's port. Where it cannot, a private network or tunnel between them is needed. The product does not run one, and the Windows guide has a recipe ([When n8n cannot reach this machine](docs/install/windows.md#when-n8n-cannot-reach-this-machine)).
-- **Desktop steps** have no AI repair, no replay before approval, no loops and no right-click, scroll or drag
-  ([Steps](docs/reference/steps.md#desktop-steps)).
-- **AI-built and AI-repaired steps** read record IDs only, and AI repair does not write.
+- **Desktop steps** have no replay before an import's approval, no loops and no right-click, scroll or drag
+  ([Steps](docs/reference/steps.md#desktop-steps)). Their AI repair was tried on the ERP Demo sample app only.
+- **AI-built and AI-repaired steps** read record IDs only (browser), and AI repair does not write.
 <!-- T2: self-repair status -->
 - **Queue mode** (several n8n workers): the version 2 node's switch that shares the login breaker through RPA Redis
   was tried in unit tests only. The setup command without an API key refuses queue mode: use the API key way there.

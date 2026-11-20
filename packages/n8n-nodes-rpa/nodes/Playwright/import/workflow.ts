@@ -4,8 +4,8 @@
 // Each browser sequence n becomes Get active steps (playwright_steps, name <name>-n) feeding Run steps with signed steps
 // required and AI Repair off, so the workflow runs as generated: no Chat model credential and no approval workflow to
 // pick first; the Run steps note says how to add self-repair. Each desktop sequence n becomes Get active steps feeding a Run steps on
-// the RPA Desktop Runner credential, with signed steps required, AI Repair off (desktop steps
-// have none yet) and the variables its steps type, empty for the user to fill in (secrets from a secret source). Everything else follows a fixed table of n8n 2.41 node types. Text from the project is
+// the RPA Desktop Runner credential, with signed steps required, AI Repair off (the note says how to add it, as for
+// browser steps) and the variables its steps type, empty for the user to fill in (secrets from a secret source). Everything else follows a fixed table of n8n 2.41 node types. Text from the project is
 // never evaluated: it goes into literal parameters only when n8n cannot read it as an expression, and otherwise into
 // notes and stickies as text. The RPA credentials the import was given are attached by id and name (opts.credentials),
 // so the file needs nothing picked; without them the desktop runner is named by name only. A Run steps whose steps type a
@@ -14,6 +14,17 @@ import type { DesktopDraft, Draft, FlowNode, UiPathFlow } from 'n8n-rpa-engine';
 import { CREDENTIALS, NODE_VERSION, normalizeHost } from '../config.js';
 import { RPA_NODE_TYPE } from '../node-type.js';
 import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../rows.js';
+
+/**
+ * The Run steps note's how-to for self-repair (repair stays off as generated: a chat model must be connected and a Goal
+ * written first), for a browser pair (`the site`) and a desktop pair (`the app`).
+ */
+const REPAIR_HOW_TO = (what: 'the site' | 'the app'): string[] => [
+  `To let it repair itself when ${what} changes:`,
+  '1. Connect a chat model to its Model input (after step 2).',
+  `2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.`,
+  `3. Connect its Repaired Steps output to an Execute Workflow node that calls ${APPROVE_WORKFLOW}, and its error output to ${LOG.failed} again.`,
+];
 
 export interface WorkflowNode {
   id: string;
@@ -809,7 +820,10 @@ class Builder {
     }, {
       onError: 'continueErrorOutput',
       credentials: creds.credentials,
-      notes: `Runs the signed desktop steps ${draftName} on the desktop runner. ${pickText(creds.picked, creds.missing)}${fillIn}${secret.size ? secretNote([...secret]) : ''}`,
+      notes: [
+        `Runs the signed desktop steps ${draftName} on the desktop runner. ${pickText(creds.picked, creds.missing)}${fillIn}${secret.size ? secretNote([...secret]) : ''}`,
+        ...REPAIR_HOW_TO('the app'),
+      ].join('\n'),
     });
     this.connect([{ node: get, output: 0 }], run);
     this.desktopRunNodes.push(run);
@@ -869,10 +883,7 @@ class Builder {
           ...(Object.keys(creds.credentials).length ? { credentials: creds.credentials } : {}),
           notes: [
             `Runs the signed steps ${draftName}${accounts ? ', once for each account' : ''}. ${pickText(creds.picked, creds.missing)} ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? secretNote(vars.secret) : ''}${perAccount.size ? ` ${[...perAccount].join(', ')}: each account's own, from its item (Options → Variables).` : ''}`,
-            'To let it repair itself when the site changes:',
-            '1. Connect a chat model to its Model input (after step 2).',
-            `2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.`,
-            `3. Connect its Repaired Steps output to an Execute Workflow node that calls ${APPROVE_WORKFLOW}, and its error output to ${LOG.failed} again.`,
+            ...REPAIR_HOW_TO('the site'),
           ].join('\n'),
         });
         this.connect([{ node: accounts ?? get, output: 0 }], run);

@@ -5,7 +5,7 @@ import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson } from '../errors.js';
 import {
-  changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, importAddedSteps, isDesktopProposal, isFileDocument, leftOutList,
+  changeList, DESKTOP_EVIDENCE_LINES, desktopRepairProof, evidenceLine, fullSafetyFlags, hasDownloadStep, importAddedSteps, isDesktopProposal, isFileDocument, leftOutList,
   modelSteps, NOT_REPLAYED_EVIDENCE_LINE, POSITION_MARKS, reviewChanges, reviewSteps, safetyLine, type ReviewStep,
 } from '../format.js';
 import { configErrorItem } from '../output.js';
@@ -39,6 +39,7 @@ export const NOT_REPLAYED_CHANGES_MISMATCH = 'the change list does not show ever
 export const PROVEN_FIRST_VERSION_WRITES =
   'the evidence line says the steps were proven in a fresh browser, but a first version that submits a form, downloads through a form, types a secret or changes a password is never replayed: it must carry the not-replayed evidence line';
 export const LEFT_OUT_MALFORMED = 'the left-out steps are not a list of text';
+export const DESKTOP_REPAIR_BASE_NOT_NUMBER = 'the base version of repaired desktop steps must be a number';
 export const REVIEW_STEPS_CHANGED = 'the steps shown for approval are not the steps to sign: import the steps again';
 /** Site Login secrets shorter than this are not looked for in records (the engine's MIN_SECRET_LEN_FOR_LITERAL_CHECK). */
 const MIN_SECRET_LEN = 4;
@@ -117,7 +118,8 @@ function shownTextChanged(engine: Engine, p: Proposal | DesktopProposal, shown: 
     const value = shown[name];
     if (value === undefined) continue;
     // A desktop item's evidence line names where its steps came from, which the evidence does not record: any of them passes.
-    if (name === 'evidenceLine' && isDesktopProposal(p) && typeof value === 'string' && DESKTOP_EVIDENCE_LINES.includes(value)) continue;
+    // An AI repair's line is rebuilt from its proof instead, so an import's line never stands for a repair.
+    if (name === 'evidenceLine' && isDesktopProposal(p) && desktopRepairProof(p) === undefined && typeof value === 'string' && DESKTOP_EVIDENCE_LINES.includes(value)) continue;
     // Browser steps that were not replayed: signOne checks the conditions under which this line may stand.
     if (name === 'evidenceLine' && !isDesktopProposal(p) && value === NOT_REPLAYED_EVIDENCE_LINE) continue;
     let expected: string | undefined;
@@ -488,7 +490,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   if (leftOut) return refuse([leftOut]);
   // Reported after the engine's own reasons (a step edited after review fails the digest check first), never instead.
   const shownSteps = reviewStepsProblem(engine, p, json) ?? reviewChangesProblem(engine, p, json);
-  if (engine.isDesktopDocument(p.steps)) return signDesktop(engine, p, { key, approverId, writeStepsText, secrets: siteSecrets, at, refuse, record, shownSteps });
+  if (engine.isDesktopDocument(p.steps)) return signDesktop(engine, p, { key, approverId, writeStepsText, secrets: siteSecrets, at, refuse, record, shownSteps, rawBaseVersion: json.baseVersion });
   if (writeStepsText) return refuse([WRITE_STEPS_BROWSER]);
 
   const proposal: Proposal = {
@@ -552,7 +554,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
 }
 
 /**
- * Desktop steps (an imported desktop draft's Repaired steps item): the approver's Write Steps are added to exactly the
+ * Desktop steps (an imported desktop draft's or a desktop AI repair's Repaired steps item): the approver's Write Steps are added to exactly the
  * listed steps and the result is signed, bound to the app the steps launch (engine signDesktopSteps, which re-checks
  * the hash, the digest, the safety flags and the change list). The lines the approver read must be the ones the fields
  * give. No Site Login is bound (desktop runs refuse one); its secrets still keep a record that names one out.
@@ -563,11 +565,16 @@ function signDesktop(
     key: string; approverId: string; writeStepsText: string; secrets: (string | undefined)[]; at: Date; refuse: (r: string[]) => SignOutcome; record: (r: StepsRecord) => SignOutcome;
     /** Why the shown steps (reviewSteps) do not match, reported after the engine's reasons. */
     shownSteps?: string;
+    /** The item's baseVersion as it came, before parseRepairedSteps reads "1" as 1. */
+    rawBaseVersion?: unknown;
   },
 ): SignOutcome {
   const writeSteps = engine.parseWriteSteps(c.writeStepsText);
   if ('error' in writeSteps) return c.refuse([writeSteps.error]);
   if (malformedEvidence(p.evidence)) return c.refuse([EVIDENCE_MALFORMED]);
+  // A repair's base version is a number, as template 3 compares it: text such as "1" would read alike here and not there.
+  const hasProof = isObject(p.evidence) && (p.evidence as unknown as { proof?: unknown }).proof !== undefined;
+  if (hasProof && typeof c.rawBaseVersion !== 'number') return c.refuse([DESKTOP_REPAIR_BASE_NOT_NUMBER]);
   const proposal = {
     name: p.name ?? '', baseVersion: p.baseVersion, version: p.version ?? 0, steps: p.steps, hash: p.hash,
     evidence: p.evidence, changes: p.changes, safetyFlags: p.safetyFlags, screenshots: {}, ...leftOutOf(p),
@@ -576,6 +583,8 @@ function signDesktop(
   // Desktop steps are reviewed as written, so the change list the approver read must be there (shownTextChanged skips a
   // missing one, which older browser items need).
   if (typeof p.shownText.changeList !== 'string' || p.shownText.changeList === '') return c.refuse([SHOWN_TEXT_CHANGED]);
+  // An AI repair's proof is what the approver weighed: its evidence line must be there too (rebuilt above).
+  if (desktopRepairProof(proposal) !== undefined && typeof p.shownText.evidenceLine !== 'string') return c.refuse([SHOWN_TEXT_CHANGED]);
   let expected: string[] | undefined;
   try {
     expected = engine.desktopSafetyFlags(engine.parseDesktopScript(p.steps));

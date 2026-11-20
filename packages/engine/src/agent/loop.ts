@@ -5,7 +5,7 @@ import type { OutputSpec, RunState } from '../types.js';
 import { responseText, type ChatMessage, type ChatModel, type ChatResponse } from './model.js';
 import { describeCheck } from '../proposal/describe.js';
 import type { DownloadTemplate } from '../steps/file-check.js';
-import { AGENT_TOOLS, FILE_AGENT_TOOLS, AgentTools, MAX_TYPED, neutralize, type AgentAction, type DoneOutcome } from './tools.js';
+import { AGENT_TOOLS, FILE_AGENT_TOOLS, AgentTools, MAX_TYPED, neutralize, type AgentAction, type DoneOutcome, type ToolCall, type ToolDef } from './tools.js';
 
 export const DEFAULT_MAX_ACTIONS = 40;
 export const DEFAULT_MAX_TOKENS = 200_000;
@@ -152,48 +152,90 @@ export function firstUserMessage(failure: { intent: string; message: string } | 
 }
 
 /** A tool name the model sent, as engine text may echo it: a known tool's name, else "another tool". */
-function echoedToolName(name: string): string {
-  return AGENT_TOOL_NAMES.has(name) ? name : 'another tool';
+function echoedToolName(name: string, known: ReadonlySet<string>): string {
+  return known.has(name) ? name : 'another tool';
 }
 const AGENT_TOOL_NAMES = new Set([...AGENT_TOOLS, ...FILE_AGENT_TOOLS].map((t) => t.function.name));
 
-/** Drives the model through the agent tools on the live page until it finishes or a budget runs out. Never throws for model errors. */
-export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResult> {
-  const { ctx, state, output } = input;
-  const masker = ctx.masker;
-  const maxActions = input.budget.maxActions ?? DEFAULT_MAX_ACTIONS;
-  const maxTokens = input.budget.maxTokens ?? DEFAULT_MAX_TOKENS;
-  const tools = new AgentTools({ ctx, state, output, ...(input.download ? { download: input.download } : {}) });
-  const bound = input.model.bindTools(input.download ? FILE_AGENT_TOOLS : AGENT_TOOLS);
-  const messages: ChatMessage[] = [{ role: 'system', content: agentSystemPrompt(input.goal, output, { ...(input.download ? { download: input.download } : {}), vars: promptVars(ctx.vars, masker) }) }];
+/** What the generic loop drives: a look for the first message, one tool call at a time, and the circle guard's count. */
+export interface LoopTools<O extends string> {
+  /** Runs one tool call; `done` ends the loop with its outcome and note. */
+  run(call: ToolCall): Promise<{ text: string; error: boolean; done?: { outcome: O; note: string } }>;
+  /** How often the latest action repeated with nothing new since (the circle guard; 0 after progress). */
+  readonly lastRepeat: number;
+}
+/** One agent conversation: its tools, its prompt and the texts that differ between the browser and the desktop agent. */
+export interface LoopSpec<O extends string> {
+  model: ChatModel;
+  tools: LoopTools<O>;
+  toolDefs: ToolDef[];
+  /** Tool names the "not run" answer may echo; anything else is "another tool". */
+  toolNames: ReadonlySet<string>;
+  system: string;
+  /** The first user message (it takes the first look). A throw ends the loop as 'error' with `unreadable`: the reason. */
+  first(): Promise<string>;
+  unreadable: string;
+  masker: Masker;
+  budget: AgentBudget;
+  signal?: AbortSignal;
+  /** Checked before the first look, after a failed one, at the top of every turn and before a tool runs. */
+  stopped?(): { outcome: O; note: string } | undefined;
+  /** Told once, on the CIRCLE_NUDGE-th repeat. */
+  nudgeText: string;
+  /** The note when the circle guard stops the loop, given the repeat count. */
+  circlingNote(repeats: number): string;
+  /** Sent after a turn without a tool call. */
+  idleText: string;
+}
+export interface LoopCore<O extends string> {
+  outcome: O | 'budget' | 'circling' | 'error';
+  tokens: number;
+  llmCalls: number;
+  note: string;
+  transcript: ChatMessage[];
+}
+
+/**
+ * The agent loop over any tools: one tool call runs per turn (extra calls are answered "not run"), older page blocks are
+ * elided, three silent turns end it, model failures are masked, the circle guard nudges on the third repeat and stops on
+ * the fourth, and the action, token and time budgets stop it. Never throws for model errors.
+ */
+export async function driveAgentLoop<O extends string>(spec: LoopSpec<O>): Promise<LoopCore<O>> {
+  const { masker, tools } = spec;
+  const maxActions = spec.budget.maxActions ?? DEFAULT_MAX_ACTIONS;
+  const maxTokens = spec.budget.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const bound = spec.model.bindTools(spec.toolDefs);
+  const messages: ChatMessage[] = [{ role: 'system', content: spec.system }];
   let tokens = 0;
   let llmCalls = 0;
   let used = 0;
   let idle = 0;
   let nudged = false;
   const maskArgs = (args: Record<string, unknown>) => JSON.parse(masker.mask(JSON.stringify(args))) as Record<string, unknown>;
-  const finish = (outcome: AgentLoopResult['outcome'], note: string): AgentLoopResult => ({
-    outcome, actions: tools.actions, tokens, llmCalls, note: masker.mask(note).slice(0, 500),
+  const finish = (outcome: LoopCore<O>['outcome'], note: string): LoopCore<O> => ({
+    outcome, tokens, llmCalls, note: masker.mask(note).slice(0, 500),
     transcript: messages.map(({ raw: _raw, ...m }) => ({
       ...m, content: masker.mask(m.content),
       ...(m.tool_calls ? { tool_calls: m.tool_calls.map((c) => ({ ...c, args: maskArgs(c.args ?? {}) })) } : {}),
     })),
-    ...(tools.codeSubmittedAt ? { codeSubmittedAt: tools.codeSubmittedAt } : {}),
-    ...(tools.signInStage ? { signInStage: tools.signInStage } : {}),
   });
+  const stop = () => spec.stopped?.();
 
-  if (ctx.violations.some((v) => v.fatal)) return finish('blocked', BLOCKED_STOP);
+  let halt = stop();
+  if (halt) return finish(halt.outcome, halt.note);
   try {
-    messages.push({ role: 'user', content: firstUserMessage(input.failure, await tools.look(), masker, input.route) });
+    messages.push({ role: 'user', content: await spec.first() });
   } catch (err) {
-    if (ctx.violations.some((v) => v.fatal)) return finish('blocked', BLOCKED_STOP);
-    return finish('error', `the page could not be read: ${(err as Error)?.message ?? String(err)}`);
+    halt = stop();
+    if (halt) return finish(halt.outcome, halt.note);
+    return finish('error', `${spec.unreadable}: ${(err as Error)?.message ?? String(err)}`);
   }
 
   for (;;) {
-    if (ctx.violations.some((v) => v.fatal)) return finish('blocked', BLOCKED_STOP);
-    if (input.signal?.aborted) return finish('budget', 'the run was cancelled');
-    const left = input.budget.deadlineMs - Date.now();
+    halt = stop();
+    if (halt) return finish(halt.outcome, halt.note);
+    if (spec.signal?.aborted) return finish('budget', 'the run was cancelled');
+    const left = spec.budget.deadlineMs - Date.now();
     if (left <= 0) return finish('budget', 'the time budget ran out');
     if (tokens >= maxTokens) return finish('budget', `the token budget of ${maxTokens} ran out`);
     if (used >= maxActions) return finish('budget', `the action budget of ${maxActions} ran out`);
@@ -201,7 +243,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), left);
     const relay = () => ac.abort();
-    input.signal?.addEventListener('abort', relay, { once: true });
+    spec.signal?.addEventListener('abort', relay, { once: true });
     const aborted = new Promise<never>((_, reject) => ac.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
     aborted.catch(() => undefined);
     let res: ChatResponse;
@@ -213,11 +255,11 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
       sent = elideOldPages(messages);
       res = await Promise.race([bound.invoke(sent, { signal: ac.signal }), aborted]);
     } catch (err) {
-      if (ac.signal.aborted) return finish('budget', input.signal?.aborted ? 'the run was cancelled' : 'the time budget ran out');
+      if (ac.signal.aborted) return finish('budget', spec.signal?.aborted ? 'the run was cancelled' : 'the time budget ran out');
       return finish('error', `the model call failed: ${modelErrorText((err as Error)?.message ?? String(err), masker)}`);
     } finally {
       clearTimeout(timer);
-      input.signal?.removeEventListener('abort', relay);
+      spec.signal?.removeEventListener('abort', relay);
     }
     // Provider counts are untrusted: each one is used only as a finite, non-negative integer, so a negative or
     // fractional report can never lower the total or keep the token budget from running out.
@@ -234,24 +276,45 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
     });
     if (calls.length === 0) {
       if (++idle >= MAX_IDLE_TURNS) return finish('error', 'the model stopped calling tools');
-      messages.push({ role: 'user', content: 'Reply with exactly one tool call. Call done when you have finished.' });
+      messages.push({ role: 'user', content: spec.idleText });
       continue;
     }
     idle = 0;
     const [first, ...extra] = calls;
-    if (ctx.violations.some((v) => v.fatal)) return finish('blocked', BLOCKED_STOP);
+    halt = stop();
+    if (halt) return finish(halt.outcome, halt.note);
     const out = await tools.run(first);
     used++;
     const nudge = !out.done && !nudged && tools.lastRepeat >= CIRCLE_NUDGE && tools.lastRepeat < CIRCLE_STOP;
     if (nudge) nudged = true;
-    const content = nudge ? withNote(out.text, CIRCLE_NUDGE_TEXT) : out.text;
+    const content = nudge ? withNote(out.text, spec.nudgeText) : out.text;
     messages.push({ role: 'tool', tool_call_id: first.id, content, status: out.error ? 'error' : 'success' });
     // Every call gets its result (providers require the pairing); the extra ones say plainly that they did not run.
-    const notRun = `ERROR: not run: only the first tool call of a turn runs (only the ${echoedToolName(first.name)} call was run; read its result).`;
+    const notRun = `ERROR: not run: only the first tool call of a turn runs (only the ${echoedToolName(first.name, spec.toolNames)} call was run; read its result).`;
     for (const c of extra) messages.push({ role: 'tool', tool_call_id: c.id, content: notRun, status: 'error' });
     if (out.done) return finish(out.done.outcome, out.done.note);
-    if (tools.lastRepeat >= CIRCLE_STOP) {
-      return finish('circling', `it did the same action on the same page ${tools.lastRepeat} times without finding anything new`);
-    }
+    if (tools.lastRepeat >= CIRCLE_STOP) return finish('circling', spec.circlingNote(tools.lastRepeat));
   }
+}
+
+/** Drives the model through the agent tools on the live page until it finishes or a budget runs out. Never throws for model errors. */
+export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResult> {
+  const { ctx, state, output } = input;
+  const masker = ctx.masker;
+  const tools = new AgentTools({ ctx, state, output, ...(input.download ? { download: input.download } : {}) });
+  const blocked = () => (ctx.violations.some((v) => v.fatal) ? { outcome: 'blocked' as const, note: BLOCKED_STOP } : undefined);
+  const core = await driveAgentLoop<DoneOutcome>({
+    model: input.model, tools, toolDefs: input.download ? FILE_AGENT_TOOLS : AGENT_TOOLS, toolNames: AGENT_TOOL_NAMES,
+    system: agentSystemPrompt(input.goal, output, { ...(input.download ? { download: input.download } : {}), vars: promptVars(ctx.vars, masker) }),
+    first: async () => firstUserMessage(input.failure, await tools.look(), masker, input.route),
+    unreadable: 'the page could not be read', masker, budget: input.budget, ...(input.signal ? { signal: input.signal } : {}), stopped: blocked,
+    nudgeText: CIRCLE_NUDGE_TEXT,
+    circlingNote: (n) => `it did the same action on the same page ${n} times without finding anything new`,
+    idleText: 'Reply with exactly one tool call. Call done when you have finished.',
+  });
+  return {
+    ...core, actions: tools.actions,
+    ...(tools.codeSubmittedAt ? { codeSubmittedAt: tools.codeSubmittedAt } : {}),
+    ...(tools.signInStage ? { signInStage: tools.signInStage } : {}),
+  };
 }

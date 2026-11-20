@@ -17,8 +17,9 @@ const MAIN = { title: 'ERP Demo - Line items' };
 const LOGIN = { title: 'ERP Demo - Sign in' };
 const MAIN_CLASS = 'WindowsForms10.Window.8.app.0.2bf8098_r6_ad1';
 const DROP_DOWN_CLASS = 'WindowsForms10.Window.808.app.0.2bf8098_r6_ad1';
-const REPAIR_REFUSAL = 'policy_refused: repair mode allows only focus, expand, read, Escape without a target, and click on tabs, list items and tree items';
-const ESCAPE_REFUSAL = 'policy_refused: in repair mode Escape could press a declared write control of this window (a cancel button), so it is allowed only while a menu is open';
+const REPAIR_REFUSAL = 'policy_refused: repair mode allows only expand, read, Escape without a target, and click on tabs, list items and tree items';
+const ESCAPE_REFUSAL = 'policy_refused: in repair mode Escape could press a cancel button of this window, so it is allowed only while a menu is open';
+const WRITE_LIKE = 'reads like a write (save, post, submit, confirm, ok and the like)';
 
 let runner: FakeRunner | undefined;
 let client: RunnerClient | undefined;
@@ -41,7 +42,7 @@ async function launch(opts: FakeRunnerOptions = {}, args?: string[]): Promise<Ru
   return client;
 }
 const c = () => client!;
-const act = (target: RunnerTarget, action: 'click' | 'expand' | 'type' | 'select' | 'read' | 'focus', extra: { value?: string; write?: boolean; mode?: 'repair'; segments?: ({ text: string } | { exportDir: true })[] } = {}) =>
+const act = (target: RunnerTarget, action: 'click' | 'expand' | 'type' | 'select' | 'read' | 'focus', extra: { value?: string; write?: boolean; mode?: 'repair' | 'probe'; segments?: ({ text: string } | { exportDir: true })[] } = {}) =>
   c().call('act', { runId: RUN, target, action, timeoutMs: 200, ...extra });
 const key = (value: string, extra: { target?: RunnerTarget; write?: boolean; mode?: 'repair' } = {}) =>
   c().call('act', { runId: RUN, action: 'key', value, timeoutMs: 200, ...extra });
@@ -225,7 +226,8 @@ describe('ERP Demo v2 in the fake runner', () => {
     expect(await failure(act(t(MAIN, { automationId: 'btnPost' }), 'click', { mode: 'repair' }))).toEqual({
       code: -32003, message: 'policy_refused: the target is a declared write control; repair mode never acts on it',
     });
-    // The main form holds btnPost: a repair Escape needs an open drop-down of it.
+    // Repair mode never moves the focus (G3); a repair Escape needs an open drop-down of the window (G1).
+    expect(await failure(act(t(MAIN, { automationId: 'txtDateFrom' }), 'focus', { mode: 'repair' }))).toEqual({ code: -32003, message: REPAIR_REFUSAL });
     expect(await failure(key('Escape', { mode: 'repair' }))).toEqual({ code: -32003, message: ESCAPE_REFUSAL });
 
     await act(menuItem('Reports', MAIN), 'expand', { mode: 'repair' });
@@ -277,7 +279,7 @@ describe('ERP Demo v2 in the fake runner', () => {
     await act(t(MAIN, { automationId: 'cmbCompany' }), 'expand', { mode: 'repair' });
   });
 
-  it('Continue opens the Save dialog; Escape on Confirm export cancels the export', async () => {
+  it('Continue opens the Save dialog; repair Escape and a probe of Continue are refused on Confirm export', async () => {
     await launch({ erpUi: 'v2' });
     await signIn();
     await search();
@@ -298,14 +300,24 @@ describe('ERP Demo v2 in the fake runner', () => {
       ['Button', 'btnConfirmExport', 'Continue'],
       ['Button', 'btnCancelExport', 'Cancel'],
     ]);
-    // No write control in Confirm export: a repair Escape cancels it.
-    await key('Escape', { mode: 'repair' });
+    // G1: no menu is open, so a repair Escape (Cancel) is refused even with no write control in the dialog.
+    expect(await failure(key('Escape', { mode: 'repair' }))).toEqual({ code: -32003, message: ESCAPE_REFUSAL });
+    // G4/G5: Continue's id, btnConfirmExport, and the title "Confirm export" have the write word "confirm".
+    expect(await failure(act(t({ title: 'Confirm export' }, { controlType: 'Button', name: 'Continue' }), 'click', { mode: 'probe' }))).toEqual({
+      code: -32003, message: `policy_refused: the target's name or automation id ${WRITE_LIKE}; probe mode never acts on it`,
+    });
+    // Cancel reads destructive (the engine's denylist), checked before the window's words.
+    expect(await failure(act(t({ title: 'Confirm export' }, { controlType: 'Button', name: 'Cancel' }), 'click', { mode: 'probe' }))).toEqual({
+      code: -32003, message: "policy_refused: the target's name or automation id reads like it deletes, cancels, rejects or signs out; probe mode never acts on it",
+    });
+    await key('Escape');
     expect(await windows()).toEqual([{ title: 'ERP Demo - Line items', exe: ERP_EXE, automationId: 'MainForm', className: MAIN_CLASS, foreground: true }]);
 
     await openConfirm();
     await act(t({ title: 'Confirm export' }, { controlType: 'Button', name: 'Continue' }), 'click');
     expect((await windows())[0]).toEqual({ title: 'Export line items', exe: ERP_EXE, automationId: '', className: '#32770', foreground: true });
-    await key('Escape', { mode: 'repair' });
+    expect(await failure(key('Escape', { mode: 'repair' }))).toEqual({ code: -32003, message: ESCAPE_REFUSAL });
+    await key('Escape');
     expect(await titles()).toEqual(['ERP Demo - Line items']);
 
     // Cancel cancels; Continue, a file name and Save write the CSV.

@@ -56,7 +56,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     return configError(errorMessage(error), safeParam(ctx, i, 'options.name'));
   }
   // Routed by the steps' own (signed) surface: desktop steps run on the desktop runner, never in a browser.
-  if (p.steps.kind === 'steps' && engine.isDesktopDocument(p.steps.raw)) return await runDesktopStepsItem(ctx, engine, i, p);
+  if (p.steps.kind === 'steps' && engine.isDesktopDocument(p.steps.raw)) return await runDesktopStepsItem(ctx, engine, i, p, deps);
   try {
     endpoint = browserConfig(await browserCredentials(ctx, i, BROWSER_STEPS_NEED_BROWSER_CREDENTIAL));
     // A CDP connection cannot read downloaded files: stored steps with a download, or a first run asked for an Expected File.

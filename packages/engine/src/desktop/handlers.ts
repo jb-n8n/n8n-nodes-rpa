@@ -3,6 +3,7 @@
 // owner is the only one that carries the write marker.
 
 import { emptyChoice, runBinaryTooLarge, UNSIGNED_SECRET_VARIABLE } from '../messages.js';
+import { looksDestructive } from '../policy/destructive.js';
 import { renderVars, SECRET_FILL_VALUE } from '../secrets/render.js';
 import { secretFillValues } from '../secrets/secret-fills.js';
 import { FILE_CHECK_FAILED_PREFIX, checkFile } from '../steps/file-check.js';
@@ -14,7 +15,7 @@ import { EXPORT_DIR_TOKEN, MAX_EXPECTED_FILE_BYTES } from '../steps/parse.js';
 import { poll } from '../steps/poll.js';
 import type { Handler, StepContext } from '../steps/run.js';
 import type { DesktopLocator, DesktopStep, DesktopStepBase, RunState } from '../types.js';
-import { PolicyRefusedError, type RunnerAction, type Segment } from './protocol.js';
+import { PolicyRefusedError, RUNNER_ERROR_CODES, type RunnerAction, type Segment } from './protocol.js';
 import { describeDesktopLocator, DesktopDriftError, runnerTarget, type DesktopSurface } from './surface.js';
 
 type D<K extends string> = Extract<DesktopStep, Record<K, unknown>>;
@@ -51,13 +52,30 @@ async function actOn(
   extra: { value?: string; segments?: Segment[] } = {},
 ): Promise<{ candidate?: number; text?: string }> {
   const s = desktopOf(ctx);
+  // A step AI repair added or retargeted acts on a control nobody approved yet: a click goes out in probe mode, a read in
+  // repair mode, and nothing else is sent (the repair stops before such a step instead).
+  const mark = s.changedSteps.get(ctx.stepIndex ?? -1);
+  let mode: 'step' | 'probe' | 'repair' | undefined;
+  if (mark === undefined || mark === 'checkOnly') mode = 'step';
+  else if (mark === 'probe') mode = action === 'click' || action === 'doubleClick' ? 'probe' : action === 'read' ? 'repair' : undefined;
+  else if (mark === 'expand' && action === 'click') { mode = 'repair'; action = 'expand'; }
+  else if (mark === 'select' && action === 'click') mode = 'repair';
+  else if (mark === 'escape' && action === 'key' && loc === undefined && extra.value === 'Escape') mode = 'repair';
+  if (mode === undefined || (mark !== undefined && step.write === true)) throw new Error(CHANGED_STEP_NOT_RUN);
   const t0 = Date.now();
   const target = loc ? runnerTarget(loc) : undefined;
   const candidate = target ? (await s.rpc('resolve', { target, timeoutMs: timeout })).candidate : undefined;
+  // A recorded menu or selection the repair kept replays in repair mode on an unapproved control: never on one whose
+  // name or id (of the candidate that resolved) reads like it deletes, cancels, rejects or signs out. The runner checks
+  // the element itself too.
+  if ((mark === 'select' || mark === 'expand') && loc && candidate !== undefined) {
+    const own = candidateCondition(loc, candidate);
+    if (!own || looksDestructive(own.name ?? '', own.automationId ?? '')) throw new PolicyRefusedError(RUNNER_ERROR_CODES.policy_refused, `policy_refused: ${CHANGED_STEP_DESTRUCTIVE}`);
+  }
   const timeoutMs = Math.max(MIN_ACT_MS, timeout - (Date.now() - t0));
   const write = step.write === true;
   try {
-    const r = await s.rpc('act', { ...(target ? { target } : {}), action, ...extra, ...(write ? { write: true } : {}), mode: 'step', timeoutMs });
+    const r = await s.rpc('act', { ...(target ? { target } : {}), action, ...extra, ...(write ? { write: true } : {}), mode, timeoutMs });
     if (write) state.submitted = true;
     return { ...(candidate !== undefined ? { candidate } : {}), ...(r.text !== undefined ? { text: r.text } : {}) };
   } catch (err) {
@@ -66,6 +84,18 @@ async function actOn(
     throw err;
   }
 }
+
+/** A kept menu or selection whose control reads destructive: never replayed before approval. */
+export const CHANGED_STEP_DESTRUCTIVE = "a menu or item AI repair kept reads like it deletes, cancels, rejects or signs out, so it is not opened or selected before approval";
+
+/** The own condition (the last of its path) of the locator's candidate `i` (0: the primary, then the fallbacks). */
+function candidateCondition(loc: DesktopLocator, i: number): { name?: string; automationId?: string } | undefined {
+  const t = i === 0 ? loc.uia : loc.fallbacks?.[i - 1]?.uia;
+  return t?.path[t.path.length - 1];
+}
+
+/** A step AI repair changed that would type, choose, check or press a key: it never runs before approval. */
+export const CHANGED_STEP_NOT_RUN = 'a step AI repair added or changed runs before approval only as the click, read, menu, selection or Escape it was';
 
 const VAR_REF = /\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g;
 
