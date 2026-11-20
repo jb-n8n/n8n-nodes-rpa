@@ -39,6 +39,7 @@ export const NOT_REPLAYED_CHANGES_MISMATCH = 'the change list does not show ever
 export const PROVEN_FIRST_VERSION_WRITES =
   'the evidence line says the steps were proven in a fresh browser, but a first version that submits a form, downloads through a form, types a secret or changes a password is never replayed: it must carry the not-replayed evidence line';
 export const LEFT_OUT_MALFORMED = 'the left-out steps are not a list of text';
+export const DESKTOP_REPAIR_BASE_NOT_NUMBER = 'the base version of repaired desktop steps must be a number';
 export const REVIEW_STEPS_CHANGED = 'the steps shown for approval are not the steps to sign: import the steps again';
 /** Site Login secrets shorter than this are not looked for in records (the engine's MIN_SECRET_LEN_FOR_LITERAL_CHECK). */
 const MIN_SECRET_LEN = 4;
@@ -489,7 +490,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   if (leftOut) return refuse([leftOut]);
   // Reported after the engine's own reasons (a step edited after review fails the digest check first), never instead.
   const shownSteps = reviewStepsProblem(engine, p, json) ?? reviewChangesProblem(engine, p, json);
-  if (engine.isDesktopDocument(p.steps)) return signDesktop(engine, p, { key, approverId, writeStepsText, secrets: siteSecrets, at, refuse, record, shownSteps });
+  if (engine.isDesktopDocument(p.steps)) return signDesktop(engine, p, { key, approverId, writeStepsText, secrets: siteSecrets, at, refuse, record, shownSteps, rawBaseVersion: json.baseVersion });
   if (writeStepsText) return refuse([WRITE_STEPS_BROWSER]);
 
   const proposal: Proposal = {
@@ -564,11 +565,16 @@ function signDesktop(
     key: string; approverId: string; writeStepsText: string; secrets: (string | undefined)[]; at: Date; refuse: (r: string[]) => SignOutcome; record: (r: StepsRecord) => SignOutcome;
     /** Why the shown steps (reviewSteps) do not match, reported after the engine's reasons. */
     shownSteps?: string;
+    /** The item's baseVersion as it came, before parseRepairedSteps reads "1" as 1. */
+    rawBaseVersion?: unknown;
   },
 ): SignOutcome {
   const writeSteps = engine.parseWriteSteps(c.writeStepsText);
   if ('error' in writeSteps) return c.refuse([writeSteps.error]);
   if (malformedEvidence(p.evidence)) return c.refuse([EVIDENCE_MALFORMED]);
+  // A repair's base version is a number, as template 3 compares it: text such as "1" would read alike here and not there.
+  const hasProof = isObject(p.evidence) && (p.evidence as unknown as { proof?: unknown }).proof !== undefined;
+  if (hasProof && typeof c.rawBaseVersion !== 'number') return c.refuse([DESKTOP_REPAIR_BASE_NOT_NUMBER]);
   const proposal = {
     name: p.name ?? '', baseVersion: p.baseVersion, version: p.version ?? 0, steps: p.steps, hash: p.hash,
     evidence: p.evidence, changes: p.changes, safetyFlags: p.safetyFlags, screenshots: {}, ...leftOutOf(p),

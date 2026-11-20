@@ -250,6 +250,18 @@ describe('DR10b: a step that only signs in does not stop the repair or the proof
     expect(firstStopIndex(doc(enter), 0, { isSecretVar: secret, changed: new Set([1]) }), 'changed by the repair').toBe(1);
     expect(firstStopIndex({ ...doc(enter), steps: [doc(enter).steps[0]!, { ...enter, write: true }] }, 0, { isSecretVar: secret }), 'a declared write').toBe(1);
   });
+  it('the window check fails closed on a view cut short, and reads the unmasked names (a masked value cannot hide a word)', async () => {
+    const LOGIN_W = { exe: 'erpdemo.exe', title: 'ERP Demo - Sign in' };
+    const item = (name: string, automationId = '') => ({ ref: 'e1', depth: 1, controlType: 'Button', name, fullName: name, automationId, className: '', enabled: true });
+    const stub = (truncated: boolean, shown: string, raw: string) => ({
+      view: async () => ({ window: { title: 'ERP Demo - Sign in', exe: 'ErpDemo.exe' }, truncated, items: [item(shown)] }),
+      rawItems: () => [item(raw)],
+    }) as unknown as Parameters<typeof signInWindowClear>[0];
+    const masker = createMasker([]);
+    expect(await signInWindowClear(stub(false, 'Sign in', 'Sign in'), masker, LOGIN_W)).toBe(true);
+    expect(await signInWindowClear(stub(true, 'Sign in', 'Sign in'), masker, LOGIN_W)).toBe(false);
+    expect(await signInWindowClear(stub(false, '[secret]', 'Post invoice'), masker, LOGIN_W)).toBe(false);
+  });
   it('the window check: clear for ERP Demo\'s sign-in window, not clear once it holds a write or destructive control, and closed when it cannot be read', async () => {
     const { client, surface } = await onErpSignIn('signin-check');
     const masker = createMasker([]);

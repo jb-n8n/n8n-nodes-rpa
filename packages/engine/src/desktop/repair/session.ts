@@ -10,9 +10,8 @@ import type { ChatModel } from '../../agent/model.js';
 import type { ToolCall } from '../../agent/tools.js';
 import { neutralize } from '../../agent/tools.js';
 import { looksDestructive } from '../../policy/destructive.js';
-import { hasWriteWord, looksLikeWrite } from '../../proposal/desktop.js';
+import { firstStopIndex, hasWriteWord, looksLikeWrite, signInChecks, signInWindow, type DesktopStopOpts } from '../../proposal/desktop.js';
 import { maskClipped, type Masker } from '../../secrets/mask.js';
-import { canonicalize } from '../../sign.js';
 import { runSteps, type StepContext } from '../../steps/run.js';
 import type { DesktopLocator, DesktopScript, DesktopStep, ErrorCode, RunState, Step, WindowSel } from '../../types.js';
 import { PolicyRefusedError, RunnerError, type RunnerAction, type RunnerWindow } from '../protocol.js';
@@ -101,86 +100,22 @@ function actionOf(step: DesktopStep): RunnerAction | undefined {
   return undefined;
 }
 
-/** A fill whose whole value is one secret variable (`{{var.password}}`): the only way a signed step types a secret. */
-const SECRET_FILL_VALUE_RE = /^\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}$/;
-/** A sign-in window's title (exact, never a pattern) has one of these. */
-const SIGN_IN_TITLE = /\b(?:sign ?in|log ?in|login|logon)\b/i;
-/** A sign-in button's own name is one of these, and nothing else. */
-const SIGN_IN_BUTTON = /^\s*(?:sign ?in|log ?in|login|logon)\s*$/i;
-
-type StopOpts = { isSecretVar?: (name: string) => boolean; changed?: ReadonlySet<number> };
-const sameJson = (a: unknown, b: unknown): boolean => {
-  try { return canonicalize(a) === canonicalize(b); } catch { return false; }
-};
-
-/** The sign-in window of step i's sign-in, from the secret fill right before it (its field's window), or undefined. */
-export function signInWindow(doc: DesktopScript, i: number): WindowSel | undefined {
-  const prev = doc.steps[i - 1];
-  return prev && 'fill' in prev ? prev.fill.field.uia.window : undefined;
-}
-
-/**
- * DR10 as tightened by DR10b: whether step `i` only signs in, judged on the steps (signInWindowClear judges the window
- * when the step is reached). True only for a step that is not a declared write and that the repair did not change
- * (`changed`), right after an unchanged fill whose whole value is one secret variable, whose field names its window by
- * an exact title (never a pattern) with a sign-in word (sign in, log in, login, logon), and that is one of:
- * - the key Enter whose target is that same field (the same locator, fallbacks included); a target-less Enter goes to
- *   whatever has the focus, so it is not exempt;
- * - a click on a button whose own name is a sign-in word (Sign in, Log in, Login, Logon), in that same window, by every
- *   candidate of its locator. OK, Submit and any other button are never exempt.
- * Anything else that looks like a write stops the repair and the proof (DR9). Without `isSecretVar` nothing is exempt.
- */
-export function signsInOnly(doc: DesktopScript, i: number, o: StopOpts = {}): boolean {
-  const step = doc.steps[i];
-  const prev = doc.steps[i - 1];
-  if (!o.isSecretVar || !step || !prev || step.write === true || prev.write === true || o.changed?.has(i) || o.changed?.has(i - 1)) return false;
-  if (!('fill' in prev)) return false;
-  const v = SECRET_FILL_VALUE_RE.exec(prev.fill.value);
-  if (!v || !o.isSecretVar(v[1]!)) return false;
-  const field = prev.fill.field;
-  const win = field.uia.window;
-  if (!win || typeof win.title !== 'string' || win.titlePattern !== undefined || !SIGN_IN_TITLE.test(win.title)) return false;
-  if ('key' in step) return step.key.key === 'Enter' && step.key.target !== undefined && sameJson(step.key.target, field);
-  if (!('click' in step)) return false;
-  const candidates = [step.click.uia, ...(step.click.fallbacks ?? []).map((f) => f.uia)];
-  return candidates.every((t) => {
-    const own = t.path[t.path.length - 1];
-    return sameJson(t.window, win) && own?.controlType === 'Button' && typeof own.name === 'string' && SIGN_IN_BUTTON.test(own.name);
-  });
-}
-
-/**
- * The index of the first step at or after `from` that is a declared write or looks like one (looksLikeWrite: what the
- * review page flags as a candidate write), or the number of steps. Repair and proof run no such step: they resolve it.
- * A step that only signs in (signsInOnly) does not stop them here; signInChecks lists those, which run only when
- * signInWindowClear passes when they are reached.
- */
-export function firstStopIndex(doc: DesktopScript, from = 0, o: StopOpts = {}): number {
-  for (let i = from; i < doc.steps.length; i++) {
-    const s = doc.steps[i]!;
-    if (s.write === true) return i;
-    if (looksLikeWrite(s) && !signsInOnly(doc, i, o)) return i;
-  }
-  return doc.steps.length;
-}
-
-/** The steps in [from, to) that look like a write but only sign in (signsInOnly): each runs only after signInWindowClear. */
-export function signInChecks(doc: DesktopScript, from: number, to: number, o: StopOpts = {}): number[] {
-  const out: number[] = [];
-  for (let i = from; i < to; i++) if (looksLikeWrite(doc.steps[i]!) && signsInOnly(doc, i, o)) out.push(i);
-  return out;
-}
+export { firstStopIndex, signInChecks, signInWindow, signsInOnly } from '../../proposal/desktop.js';
+type StopOpts = DesktopStopOpts;
 
 /**
  * DR10b's window check, when the sign-in step is reached: the sign-in window as UI Automation shows it now has no
  * control whose name or automation id has a write word (save, post, submit, ok and the like) or reads destructive.
- * The sign-in words are neither. Fails closed: a window that cannot be read is not clear.
+ * The sign-in words are neither. Fails closed: a window that cannot be read, or whose view was cut short, is not clear.
  */
 export async function signInWindowClear(surface: DesktopSurface, masker: Masker, window: WindowSel | undefined): Promise<boolean> {
   if (!window) return false;
   try {
     const view = await surface.view(masker, { window });
-    return !view.items.some((it) => hasWriteWord(it.name) || hasWriteWord(it.automationId) || looksDestructive(it.name, it.automationId));
+    // A view cut short may leave the very control out: not clear. The words are read on the unmasked names (rawItems:
+    // engine-only, never shown or sent to the model), so a masked value cannot hide one.
+    if (view.truncated) return false;
+    return !surface.rawItems().some((it) => hasWriteWord(it.name) || hasWriteWord(it.automationId) || looksDestructive(it.name, it.automationId));
   } catch {
     return false;
   }

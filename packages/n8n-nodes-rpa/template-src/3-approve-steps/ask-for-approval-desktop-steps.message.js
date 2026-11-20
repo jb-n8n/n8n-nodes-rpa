@@ -21,7 +21,27 @@
       ),
       proof
         ? [
-          'Repaired by AI: ' + e($('Repaired steps received').item.json.evidenceLine),
+          'Repaired by AI (as reported by the run): ' + e($('Repaired steps received').item.json.evidenceLine),
+          (
+            (inUse) => (
+              inUse !== $('Repaired steps received').item.json.baseVersion
+                ? '⚠ Version ' + e($('Repaired steps received').item.json.baseVersion) + ' is no longer the one in use'
+                  + (inUse === null ? '' : ' (version ' + e(inUse) + ' is)')
+                  + ': the steps are not compared with it and no step starts ticked. Read every step.'
+                : ''
+            )
+          )(DESKTOP_IN_USE),
+          base
+            && (
+              (mine, theirs) => mine.length !== theirs.length || mine.some((k) => !theirs.includes(k))
+            )(
+              base.at.map((k, i) => (k < 0 ? i + 1 : 0)).filter((k) => k),
+              [].concat(proof.changedSteps ?? [], proof.addedSteps ?? [])
+            )
+            ? '⚠ The steps the repair reports it changed or added are not the steps that differ from version '
+              + e(base.version)
+              + ': read the steps marked below.'
+            : '',
           base
             ? e(
               (COMPARE_STEPS)(
@@ -43,7 +63,7 @@
               )
             )(base.write.map((w, i) => (w ? i + 1 : 0)).filter((k) => k))
             : 'No step starts ticked.'
-        ]
+        ].filter((l) => l !== '')
         : ['Not tried by the import: read every step before you approve.']
     ).join('\n')
       + (
@@ -157,9 +177,9 @@
             base && base.at[i] >= 0
               ? 'as approved in version ' + base.version
               : [].concat(proof.addedSteps ?? []).includes(i + 1)
-              ? 'added by AI repair'
+              ? 'added by AI repair (as reported by the run)'
               : [].concat(proof.changedSteps ?? []).includes(i + 1)
-              ? 'retargeted by AI repair'
+              ? 'retargeted by AI repair (as reported by the run)'
               : base
               ? '⚠ not in the approved version'
               : 'unchanged, as the repair reports it'

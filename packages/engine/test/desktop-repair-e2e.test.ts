@@ -158,6 +158,10 @@ describe('desktop self-repair on the fake runner', () => {
     expect(craft({ ...p, evidence: { ...p.evidence, proof: { ...proof, changedSteps: [12, 9] } } } as DesktopProposal)).toContain(DESKTOP_PROOF_INVALID);
     expect(craft({ ...p, evidence: { ...p.evidence, proof: { ...proof, note: 'trust me' } } } as DesktopProposal)).toContain(DESKTOP_PROOF_INVALID);
     expect(craft({ ...p, evidence: { ...p.evidence, proof: { ...proof, stoppedBecause: 'looks fine' } } } as DesktopProposal)).toContain(DESKTOP_PROOF_INVALID);
+    // A proof may not claim it ran past the first step the stop rule stops at (step 14, Continue: "confirm" in its id),
+    // here over Click Save (17): the line would say Save was proven.
+    expect(craft({ ...p, evidence: { ...p.evidence, proof: { ...proof, replayed: 16, stoppedAt: 17, stoppedBecause: 'declared write' } } } as DesktopProposal)).toContain(DESKTOP_PROOF_INVALID);
+    expect(craft({ ...p, evidence: { ...p.evidence, proof: { ...proof, replayed: 18, stoppedAt: null, stoppedBecause: null } } } as DesktopProposal)).toContain(DESKTOP_PROOF_INVALID);
     expect(craft({ ...p, baseVersion: 2 })).toContain(DESKTOP_REPAIR_VERSION);
     const { proof: _gone, ...noProof } = p.evidence as unknown as Record<string, unknown>;
     expect(craft({ ...p, evidence: noProof } as unknown as DesktopProposal)).toContain(DESKTOP_NEEDS_FIRST_VERSION);

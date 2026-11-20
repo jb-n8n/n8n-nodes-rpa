@@ -67,7 +67,7 @@ function byName(t: Template, name: string): TemplateNode {
 }
 
 // ---- expressions: the ones templates 2 and 3 use in the nodes the emulator runs, each implemented in code ----
-interface Scope { now: number; settings: IDataObject; pending: IDataObject[]; active: IDataObject; repaired: IDataObject; approval: IDataObject; json: IDataObject }
+interface Scope { now: number; settings: IDataObject; pending: IDataObject[]; active: IDataObject; repaired: IDataObject; approval: IDataObject; json: IDataObject; inUse?: IDataObject[] }
 const emptyScope = (now = Date.now()): Scope => ({ now, settings: {}, pending: [], active: {}, repaired: {}, approval: {}, json: {} });
 const AI_REPAIR = "={{ $('Get pending').all().filter(i => i.json.hash && DateTime.fromISO(i.json.expiresAt) > $now).length === 0 }}";
 const EXPRESSIONS: Record<string, (s: Scope) => unknown> = {
@@ -99,6 +99,9 @@ const EXPRESSIONS: Record<string, (s: Scope) => unknown> = {
   // Supersede older versions: $json is the row Save signed steps wrote (n8n returns updated rows with their id).
   '={{ $json.id }}': (s) => s.json.id,
   "={{ $('Repaired steps received').item.json.steps?.surface === 'desktop' }}": (s) => (s.repaired.steps as IDataObject | undefined)?.surface === 'desktop',
+  // Higher than the version in use?: desktop steps go to approval only above the active version (The active version).
+  "={{ $('Repaired steps received').item.json.evidence?.proof === undefined || !$('The active version').all().some((r) => Number(r.json.version) >= Number($('Repaired steps received').item.json.version)) }}": (s) =>
+    (s.repaired.evidence as IDataObject | undefined)?.proof === undefined || !(s.inUse ?? []).some((r) => Number(r.version) >= Number(s.repaired.version)),
   // Supersede older versions: an approved first version (an import) supersedes every other active row of its name.
   "={{ $('Repaired steps received').item.json.baseVersion === null ? 2147483647 : $('Repaired steps received').item.json.version }}": (s) =>
     (s.repaired.baseVersion === null ? 2147483647 : s.repaired.version),
@@ -312,6 +315,12 @@ async function approvalRun(
   // Desktop steps get the form (Decision, the candidate writes as tick boxes, a field for any other step), which Desktop
   // answer turns into { data: { approved, writeSteps } }.
   if (ifNode(t, 'Desktop steps?', s)) {
+    // The active version (the first branch, before Desktop steps? in n8n's order), then the version check.
+    s.inUse = tableNode(t, 'The active version', table, s);
+    if (!ifNode(t, 'Higher than the version in use?', s)) {
+      tableNode(t, 'Record refusal', table, s);
+      return { outcome: 'not higher' as const };
+    }
     s.json = decision === 'timeout' ? { ...pendingRow } : {
       data: {
         Decision: decision === 'approve' ? 'Approve and sign' : 'Reject', 'Steps that save, send or submit': o.ticked ?? [],
@@ -591,6 +600,9 @@ describe('a desktop AI repair through Run Steps and template 3 (deterministic, D
       // Template 3: Continue (14) and Save (17) ticked again.
       const approved = await approvalRun(table, repaired[0]!, 'approve', feed, { ticked: ['Step 14: Click Continue', 'Step 17: Click Save'] });
       expect(approved).toMatchObject({ outcome: 'active', signed: { version: 2, writeLine: 'Signed as writes: step 14 (Click Continue), step 17 (Click Save)' } });
+      expect(table.rows.filter((r) => r.status === 'active').map((r) => r.version)).toEqual([2]);
+      // The same version 2 sent again (another repair item of the same version) is not sent for approval: refused.
+      expect((await approvalRun(table, repaired[0]!, 'approve', feed, { ticked: ['Step 17: Click Save'] })).outcome).toBe('not higher');
       expect(table.rows.filter((r) => r.status === 'active').map((r) => r.version)).toEqual([2]);
       const v2 = table.rows.find((r) => r.status === 'active')!;
       const next = fakeModel([]);

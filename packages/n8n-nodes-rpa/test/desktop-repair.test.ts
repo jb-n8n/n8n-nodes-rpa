@@ -60,7 +60,7 @@ describe('AI Repair of desktop steps through the node', () => {
     const item = repaired[0]!.json;
     expect(item).toMatchObject({ name: 'erp-1', baseVersion: 1, version: 2 });
     expect(item.evidenceLine).toBe(
-      'Proven in a fresh start of ErpDemo.exe: steps 1 to 13 ran; step 14 was found and not run (it looks like a write). AI repair retargeted steps 9 and 13 and added steps 12 and 14; every other step is as in version 1. Check every step, and mark each step that saves, posts or submits as a write.',
+      'Proven in a fresh start of ErpDemo.exe (as reported by the run): steps 1 to 13 ran; step 14 was found and not run (it looks like a write). The run reports that AI repair retargeted steps 9 and 13 and added steps 12 and 14, and that every other step is as in version 1. Check every step, and mark each step that saves, posts or submits as a write.',
     );
     expect((item.evidence as IDataObject).proof).toEqual({ replayed: 13, stoppedAt: 14, stoppedBecause: 'looks like a write', changedSteps: [9, 13], addedSteps: [12, 14] });
     expect(item.reviewSteps as unknown[]).toHaveLength(18);
@@ -74,6 +74,9 @@ describe('AI Repair of desktop steps through the node', () => {
     expect(row.error).toBeUndefined();
     expect(row).toMatchObject({ name: 'erp-1', version: 2, status: 'active', writeLine: 'Signed as writes: step 14 (Click Continue), step 17 (Click Save)' });
 
+    // A base version given as text is refused on a repair item (template 3 compares numbers).
+    const [textBase] = await executeSignSteps(harness({ params: signP, items: [{ json: { ...item, baseVersion: '1' } }], credentials: { playwrightScriptSigningApi: { secretKey: KEY } }, continueOnFail: true }), engine);
+    expect(String(textBase[0]!.json.error)).toContain('the base version of repaired desktop steps must be a number');
     // An import's evidence line on a repair item is refused: the line is rebuilt from the proof.
     const swapped = { ...item, evidenceLine: 'Not replayed: desktop steps imported from a recording are reviewed as written (there is no desktop proof yet). Check every step, and mark each step that saves, posts or submits as a write.' };
     const [refused] = await executeSignSteps(harness({ params: signP, items: [{ json: swapped }], credentials: { playwrightScriptSigningApi: { secretKey: KEY } }, continueOnFail: true }), engine);

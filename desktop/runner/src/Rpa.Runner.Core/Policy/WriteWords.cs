@@ -22,15 +22,13 @@ public static partial class WriteWords
     /// <summary>The engine's <c>words</c>: <c>btnPost</c> -> <c>btn Post</c>, <c>save_as</c> -> <c>save as</c>.</summary>
     public static string SplitWords(string text) => Separators().Replace(Hump().Replace(text, "$1 $2"), " ");
 
-    /// <summary>Whether the text, read as words (<see cref="SplitWords"/>), has a write word: case-insensitive for ASCII
-    /// letters only, as the engine's JavaScript pattern is.</summary>
+    /// <summary>Whether the text, read as words (<see cref="SplitWords"/>) and folded as the destructive list folds it
+    /// (<see cref="DestructiveWords.Normalize"/>: look-alike letters, accents, invisible characters, full-width forms,
+    /// lower case), has a write word: the engine's hasWriteWord does the same.</summary>
     public static bool Has(string? text)
     {
         if (string.IsNullOrEmpty(text)) return false;
-        var split = SplitWords(text);
-        var lower = new StringBuilder(split.Length);
-        foreach (var c in split) lower.Append(c is >= 'A' and <= 'Z' ? (char)(c + 32) : c);
-        return WriteWord().IsMatch(lower.ToString());
+        return WriteWord().IsMatch(DestructiveWords.Normalize(SplitWords(text)));
     }
 }
 

@@ -718,9 +718,9 @@ const REPAIR_WAITING =
       : []
   );
 
-// The approved version a desktop AI repair started from, lined up with the repaired steps, or null: only a row of that
-// name and base version that was approved (active or superseded, with a signature and Approved By) and whose signature
-// fits (Check the approved version, Check Only), as COMPARED_WITH_BASE finds it. `at[i]` is the index of the approved
+// The approved version a desktop AI repair started from, lined up with the repaired steps, or null: only the ACTIVE row of
+// that name and base version (the version in use), with a signature and Approved By, whose signature fits (Check the
+// approved version, Check Only). A superseded base is never compared with and never pre-ticks: DESKTOP_IN_USE says so. `at[i]` is the index of the approved
 // step that repaired step i is (the same step, its write mark aside; -1 for a step the repair changed or added), from
 // the longest common run of steps; `write[i]` is that approved step's own write mark. Never from the item: its own
 // claims (evidence.proof) only label steps. Template 3, the desktop approval email and form.
@@ -779,7 +779,7 @@ const DESKTOP_REPAIR_BASE =
         (storedRows, signatureChecks) => storedRows.filter(
           (stored, at) => stored.name === repaired.name
             && stored.version === repaired.baseVersion
-            && ['active', 'superseded'].includes(stored.status)
+            && stored.status === 'active'
             && typeof stored.steps === 'string'
             && stored.steps !== ''
             && typeof stored.signature === 'string'
@@ -788,8 +788,6 @@ const DESKTOP_REPAIR_BASE =
             && stored.approvedBy !== ''
             && signatureChecks.length === storedRows.length
             && ((check) => Boolean(check && check.approvedVersion && check.approvedVersion.signatureFits === true))(signatureChecks[at])
-        ).sort(
-          (first, second) => (first.status === 'active' ? 0 : 1) - (second.status === 'active' ? 0 : 1)
         )[0]
       )(
         $('The approved version').all().map((found) => found.json),
@@ -806,4 +804,15 @@ const DESKTOP_PROOF =
       && typeof repaired.baseVersion === 'number'
       ? repaired.evidence.proof
       : null
+  );
+
+// The version in use under the item's name (the highest active row The active version found), or null when none is
+// active. Template 3, the desktop approval email.
+const DESKTOP_IN_USE =
+  (
+    (versions) => (versions.length ? Math.max(...versions) : null)
+  )(
+    $('The active version').isExecuted
+      ? $('The active version').all().map((found) => Number(found.json.version)).filter((v) => Number.isInteger(v))
+      : []
   );

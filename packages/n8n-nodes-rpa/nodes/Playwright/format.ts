@@ -117,9 +117,9 @@ const PROOF_STOP_WORDS: Record<string, string> = {
 };
 
 /**
- * The evidence line of a desktop AI repair, from its proof (the run's report of it; Sign Steps rebuilds the line from
- * the same numbers): what ran in a fresh start of the app, where the proof stopped and why, and which steps the repair
- * retargeted and added.
+ * The evidence line of a desktop AI repair, from its proof (the run's report of it, and the line says so; Sign Steps
+ * rebuilds the line from the same numbers): what ran in a fresh start of the app, where the proof stopped and why, and
+ * which steps the repair says it retargeted and added.
  */
 export function desktopRepairEvidenceLine(p: DesktopProposal): string {
   const proof = desktopRepairProof(p);
@@ -128,8 +128,9 @@ export function desktopRepairEvidenceLine(p: DesktopProposal): string {
   const stop = proof.stoppedAt === null ? ' (every step)' : `; step ${proof.stoppedAt} was found and not run (${PROOF_STOP_WORDS[String(proof.stoppedBecause)] ?? String(proof.stoppedBecause)})`;
   const base = p.baseVersion === null ? '' : ` ${p.baseVersion}`;
   return oneLine(
-    `Proven in a fresh start of ${String(p.steps.app?.exe ?? '')}: ${ran}${stop}. AI repair retargeted ${stepNumbers(proof.changedSteps)} and added ${stepNumbers(proof.addedSteps)}; `
-    + `every other step is as in version${base}. Check every step, and mark each step that saves, posts or submits as a write.`,
+    `Proven in a fresh start of ${String(p.steps.app?.exe ?? '')} (as reported by the run): ${ran}${stop}. The run reports that AI repair retargeted `
+    + `${stepNumbers(proof.changedSteps)} and added ${stepNumbers(proof.addedSteps)}, and that every other step is as in version${base}. `
+    + 'Check every step, and mark each step that saves, posts or submits as a write.',
   );
 }
 

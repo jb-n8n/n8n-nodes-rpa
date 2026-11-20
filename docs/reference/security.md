@@ -148,10 +148,12 @@ a file only its user can read, which is removed right after, never in a command'
 - **A desktop AI repair** comes to approval as a whole new version, as an import does: every step is listed, none is
   marked a write, and the approver ticks the writes again. In the approval email each step says whether it is as
   approved in the version the repair started from, retargeted by the repair or added by it, and whether the proof ran
-  it. "As approved" and the starting ticks come only from that version's row in `playwright_steps` when Sign Steps'
-  check says its signature fits; otherwise the email says the steps could not be compared and no box starts ticked.
-  Sign Steps signs only a version higher than its base with a well-formed proof, rebuilds the evidence line from the
-  proof, and refuses an item that marks a write.
+  it, both as the run reported them. "As approved" and the starting ticks come only from that version's row in
+  `playwright_steps` when it is the active row and Sign Steps' check says its signature fits; otherwise the email says
+  the steps could not be compared and no box starts ticked. Sign Steps signs only a version higher than its base (a
+  number) with a well-formed proof, refuses a proof that claims to have run past the first step that is a write or
+  looks like one, rebuilds the evidence line from the proof, and refuses an item that marks a write. Template 3 sends
+  a desktop AI repair for approval only as a higher version than the one in use.
 - **Changing or signing again on the form.** With **Bot file** left empty, the form's next page shows the steps of the
   `active` row of the name typed, and a name it does not find ends on a page that lists every approved bot's name.
   When that row's signature does not fit the form, the person first says why, on a page that shows no step: a bot
@@ -276,7 +278,7 @@ the gated keys and the export folder. n8n cannot switch it off.
     window whose title and text have no write word, at most 12 times a run.
   A step that would type, choose, check or press another key on a new control is never run before approval, nor is a
   declared write step, a step the review page flags as a candidate write (a click on a control with a write word, or
-  Enter or a save shortcut), or anything after one. The exception is signing in, right after a step that types a
+  any key that is not plain navigation: Tab, arrows, Home, End, PageUp, PageDown, Escape), or anything after one. The exception is signing in, right after a step that types a
   secret variable in a window whose exact title says sign in, log in, login or logon: Enter in that same field, or a
   click on its button named Sign in, Log in, Login or Logon, and only while that window shows no control that reads
   like a write or a destructive action. Enter with no target, OK and Submit are never exempt. AI repair never

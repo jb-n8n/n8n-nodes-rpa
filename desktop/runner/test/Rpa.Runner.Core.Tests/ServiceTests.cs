@@ -809,6 +809,9 @@ public sealed class ServiceTests : IDisposable
         foreach (var s in json["destructive"]!.AsArray()) Assert.True(Rpa.Runner.Core.Policy.DestructiveWords.Has(s!.GetValue<string>()), s.GetValue<string>());
         foreach (var s in json["discard"]!.AsArray()) Assert.True(Rpa.Runner.Core.Policy.DestructiveWords.Has(s!.GetValue<string>()), s.GetValue<string>());
         foreach (var s in json["notDestructive"]!.AsArray()) Assert.False(Rpa.Runner.Core.Policy.DestructiveWords.Has(s!.GetValue<string>()), s.GetValue<string>());
+        // Write words: the recorder's list, folded the same way as the engine's hasWriteWord.
+        foreach (var s in json["writeWords"]!["writes"]!.AsArray()) Assert.True(Rpa.Runner.Core.Policy.WriteWords.Has(s!.GetValue<string>()), s.GetValue<string>());
+        foreach (var s in json["writeWords"]!["notWrites"]!.AsArray()) Assert.False(Rpa.Runner.Core.Policy.WriteWords.Has(s!.GetValue<string>()), s.GetValue<string>());
 
         // The homoglyph table and the invisible characters are the engine's, entry for entry.
         var ts = File.ReadAllText(Path.Combine(root.FullName, "packages", "engine", "src", "policy", "destructive.ts"));
