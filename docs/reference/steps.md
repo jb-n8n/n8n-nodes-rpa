@@ -306,9 +306,11 @@ types and ids, typed values masked, no screenshot) and fixes the steps from ther
   a menu). A changed click runs once in probe mode: a button, menu item, link, tab, list or tree item whose name, id,
   window title and window text have no write word. Anything else is added for the approver without being run.
 - The steps go on after a fix up to the first step that is a declared write or looks like one (what the review page
-  flags as a candidate write): that step's control is found and not run. A key Enter or a click in the field a secret
-  variable was typed into in the step before, and the sign-in window's own OK or Submit right after it, sign in and post nothing:
-  they run.
+  flags as a candidate write): that step's control is found and not run. Signing in is the one exception: right after
+  a step that types a secret variable into a field of a window whose title (an exact title, not a pattern) says sign
+  in, log in, login or logon, a key Enter in that same field, or a click on that window's button named Sign in, Log in,
+  Login or Logon, runs, when that window then has no control whose name or id reads like a write or like delete,
+  cancel, reject or sign out. Enter with no target, OK, Submit and any other button stop the run as above.
 - The proof starts the app afresh on the same runner (the runner keeps itself for it for 30 seconds), replays the
   repaired steps up to that first write-like step, and only finds that one. A step the repair changed must match on
   its first locator.

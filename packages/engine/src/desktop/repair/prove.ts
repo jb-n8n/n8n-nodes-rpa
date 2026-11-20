@@ -10,7 +10,7 @@ import type { DesktopScript, ErrorCode, PortalPolicy, Script, Step, StepLogEntry
 import type { RunnerClient } from '../client.js';
 import { RunnerError } from '../protocol.js';
 import { createDesktopSurface, runnerTarget, type ChangedStep, type DesktopSurface } from '../surface.js';
-import { firstStopIndex, stepTarget, type RepairStop } from './session.js';
+import { firstStopIndex, signInChecks, signInWindow, signInWindowClear, stepTarget, type RepairStop } from './session.js';
 
 /** What the proof showed, in step numbers (1-based), for the proposal and the reviewer. */
 export interface DesktopProofEvidence {
@@ -70,10 +70,11 @@ export async function proveDesktopRepair(input: DesktopProveInput): Promise<Desk
   let surface: DesktopSurface | undefined;
   // The proof replays from step 1, so it stops at the first step that writes or looks like a write (DR9), or where the
   // repair stopped, whichever comes first: such a step is only resolved, never run a second time.
-  const flagged = firstStopIndex(doc, 0, { ...(input.isSecretVar ? { isSecretVar: input.isSecretVar } : {}), changed: new Set([...input.changed, ...input.added, ...input.marks.keys()]) });
-  const stopAt = Math.min(flagged, input.stop ? input.stop.index : doc.steps.length);
-  const stopped = stopAt < doc.steps.length;
-  const because: DesktopProofEvidence['stoppedBecause'] = !stopped ? null
+  const stopOpts = { ...(input.isSecretVar ? { isSecretVar: input.isSecretVar } : {}), changed: new Set([...input.changed, ...input.added, ...input.marks.keys()]) };
+  const flagged = firstStopIndex(doc, 0, stopOpts);
+  let stopAt = Math.min(flagged, input.stop ? input.stop.index : doc.steps.length);
+  let stopped = stopAt < doc.steps.length;
+  let because: DesktopProofEvidence['stoppedBecause'] = !stopped ? null
     : stopAt === flagged ? (doc.steps[stopAt]!.write === true ? 'declared write' : 'looks like a write')
     : input.stop!.reason === 'held' ? 'held for approval' : input.stop!.reason === 'write' ? 'declared write' : 'looks like a write';
   const changed = new Set([...input.changed, ...input.added]);
@@ -94,10 +95,20 @@ export async function proveDesktopRepair(input: DesktopProveInput): Promise<Desk
     const s = surface;
     s.trackStep(() => ctx.stepIndex);
     for (const [i, m] of input.marks) s.changedSteps.set(i, m);
-    const res = await runSteps(ctx, doc.steps.slice(0, stopAt) as unknown as Step[], {
+    const state = {
       rows: [], evidence: [], downloads: [], outputs: [], detected: {}, lastCheckpoint: -1, log: [], credentialsSubmitted: false, submitClicked: false,
       extractRan: false, attributeFields: [], submitted: false,
-    });
+    };
+    // A sign-in step (DR10b) runs only when its window is clear when it is reached; otherwise the proof stops there.
+    let cur = 0;
+    let res: Awaited<ReturnType<typeof runSteps>> | undefined;
+    for (const c of signInChecks(doc, 0, stopAt, stopOpts)) {
+      res = await runSteps(ctx, doc.steps.slice(0, c) as unknown as Step[], state, { startAt: cur });
+      if (!res.ok) break;
+      cur = c;
+      if (!(await signInWindowClear(s, input.mask(s), signInWindow(doc, c)))) { stopAt = c; stopped = true; because = 'looks like a write'; break; }
+    }
+    if (!res || res.ok) res = await runSteps(ctx, doc.steps.slice(0, stopAt) as unknown as Step[], state, { startAt: cur });
     if (!res.ok) return fail('drift_detected', `step ${res.failure.index + 1} (${res.failure.intent}) failed: ${res.failure.message}`, res.state.log);
     if (res.state.submitted) return fail('policy_violation', 'a write step ran during the proof', res.state.log);
     const fallback = res.state.log.find((e) => probed.has(e.index) && e.status === 'ok' && (e.candidate ?? 0) > 0);

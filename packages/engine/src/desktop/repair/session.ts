@@ -103,56 +103,87 @@ function actionOf(step: DesktopStep): RunnerAction | undefined {
 
 /** A fill whose whole value is one secret variable (`{{var.password}}`): the only way a signed step types a secret. */
 const SECRET_FILL_VALUE_RE = /^\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}$/;
-/** The write words a sign-in window's own button may carry and still only sign in (OK, Submit). */
-const SIGN_IN_WRITE_WORDS = /\b(ok|submit)\b/gi;
-const camelWords = (t: string): string => t.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_.\-]+/g, ' ');
+/** A sign-in window's title (exact, never a pattern) has one of these. */
+const SIGN_IN_TITLE = /\b(?:sign ?in|log ?in|login|logon)\b/i;
+/** A sign-in button's own name is one of these, and nothing else. */
+const SIGN_IN_BUTTON = /^\s*(?:sign ?in|log ?in|login|logon)\s*$/i;
+
+type StopOpts = { isSecretVar?: (name: string) => boolean; changed?: ReadonlySet<number> };
+const sameJson = (a: unknown, b: unknown): boolean => {
+  try { return canonicalize(a) === canonicalize(b); } catch { return false; }
+};
+
+/** The sign-in window of step i's sign-in, from the secret fill right before it (its field's window), or undefined. */
+export function signInWindow(doc: DesktopScript, i: number): WindowSel | undefined {
+  const prev = doc.steps[i - 1];
+  return prev && 'fill' in prev ? prev.fill.field.uia.window : undefined;
+}
 
 /**
- * DR10, the sign-in exemption from DR9: whether step `i` only signs in. True only for a step that is not a declared write,
- * that the repair did not change (`changed`), right after an unchanged fill whose whole value is one secret variable,
- * and that is one of:
- * - the key Enter in that same field (its primary target is the fill's, or it has no target, so the key goes to the field
- *   the secret was just typed into);
- * - a click on that same field;
- * - a click in the same window as that field (both primary targets name the same window) whose only write words, in its
- *   intent and in the names and ids of its locator, are OK or Submit: the sign-in window's own submit button.
- * Signing in posts nothing, so such a step is run in the repair and in the proof. Anything else that looks like a write
- * stops them as DR9 says. Without `isSecretVar` nothing is exempt (fails closed).
+ * DR10 as tightened by DR10b: whether step `i` only signs in, judged on the steps (signInWindowClear judges the window
+ * when the step is reached). True only for a step that is not a declared write and that the repair did not change
+ * (`changed`), right after an unchanged fill whose whole value is one secret variable, whose field names its window by
+ * an exact title (never a pattern) with a sign-in word (sign in, log in, login, logon), and that is one of:
+ * - the key Enter whose target is that same field (the same locator, fallbacks included); a target-less Enter goes to
+ *   whatever has the focus, so it is not exempt;
+ * - a click on a button whose own name is a sign-in word (Sign in, Log in, Login, Logon), in that same window, by every
+ *   candidate of its locator. OK, Submit and any other button are never exempt.
+ * Anything else that looks like a write stops the repair and the proof (DR9). Without `isSecretVar` nothing is exempt.
  */
-export function signsInOnly(doc: DesktopScript, i: number, o: { isSecretVar?: (name: string) => boolean; changed?: ReadonlySet<number> } = {}): boolean {
+export function signsInOnly(doc: DesktopScript, i: number, o: StopOpts = {}): boolean {
   const step = doc.steps[i];
   const prev = doc.steps[i - 1];
   if (!o.isSecretVar || !step || !prev || step.write === true || prev.write === true || o.changed?.has(i) || o.changed?.has(i - 1)) return false;
   if (!('fill' in prev)) return false;
   const v = SECRET_FILL_VALUE_RE.exec(prev.fill.value);
   if (!v || !o.isSecretVar(v[1]!)) return false;
-  const field = prev.fill.field.uia;
-  const same = (a: unknown, b: unknown): boolean => {
-    try { return canonicalize(a) === canonicalize(b); } catch { return false; }
-  };
-  if ('key' in step) return step.key.key === 'Enter' && (step.key.target === undefined || same(step.key.target.uia, field));
+  const field = prev.fill.field;
+  const win = field.uia.window;
+  if (!win || typeof win.title !== 'string' || win.titlePattern !== undefined || !SIGN_IN_TITLE.test(win.title)) return false;
+  if ('key' in step) return step.key.key === 'Enter' && step.key.target !== undefined && sameJson(step.key.target, field);
   if (!('click' in step)) return false;
-  const target = step.click.uia;
-  if (same(target, field)) return true;
-  if (field.window === undefined || target.window === undefined || !same(target.window, field.window)) return false;
-  const conds = [target, ...(step.click.fallbacks ?? []).map((f) => f.uia)].flatMap((t) => t.path);
-  const texts = [step.intent, ...conds.flatMap((c) => [c.name ?? '', camelWords(c.automationId ?? '')])];
-  if (texts.some((t) => looksDestructive(t, ''))) return false;
-  return !texts.some((t) => hasWriteWord(camelWords(t).replace(SIGN_IN_WRITE_WORDS, ' ')));
+  const candidates = [step.click.uia, ...(step.click.fallbacks ?? []).map((f) => f.uia)];
+  return candidates.every((t) => {
+    const own = t.path[t.path.length - 1];
+    return sameJson(t.window, win) && own?.controlType === 'Button' && typeof own.name === 'string' && SIGN_IN_BUTTON.test(own.name);
+  });
 }
 
 /**
  * The index of the first step at or after `from` that is a declared write or looks like one (looksLikeWrite: what the
  * review page flags as a candidate write), or the number of steps. Repair and proof run no such step: they resolve it.
- * A step that only signs in (signsInOnly, DR10) does not stop them.
+ * A step that only signs in (signsInOnly) does not stop them here; signInChecks lists those, which run only when
+ * signInWindowClear passes when they are reached.
  */
-export function firstStopIndex(doc: DesktopScript, from = 0, o: { isSecretVar?: (name: string) => boolean; changed?: ReadonlySet<number> } = {}): number {
+export function firstStopIndex(doc: DesktopScript, from = 0, o: StopOpts = {}): number {
   for (let i = from; i < doc.steps.length; i++) {
     const s = doc.steps[i]!;
     if (s.write === true) return i;
     if (looksLikeWrite(s) && !signsInOnly(doc, i, o)) return i;
   }
   return doc.steps.length;
+}
+
+/** The steps in [from, to) that look like a write but only sign in (signsInOnly): each runs only after signInWindowClear. */
+export function signInChecks(doc: DesktopScript, from: number, to: number, o: StopOpts = {}): number[] {
+  const out: number[] = [];
+  for (let i = from; i < to; i++) if (looksLikeWrite(doc.steps[i]!) && signsInOnly(doc, i, o)) out.push(i);
+  return out;
+}
+
+/**
+ * DR10b's window check, when the sign-in step is reached: the sign-in window as UI Automation shows it now has no
+ * control whose name or automation id has a write word (save, post, submit, ok and the like) or reads destructive.
+ * The sign-in words are neither. Fails closed: a window that cannot be read is not clear.
+ */
+export async function signInWindowClear(surface: DesktopSurface, masker: Masker, window: WindowSel | undefined): Promise<boolean> {
+  if (!window) return false;
+  try {
+    const view = await surface.view(masker, { window });
+    return !view.items.some((it) => hasWriteWord(it.name) || hasWriteWord(it.automationId) || looksDestructive(it.name, it.automationId));
+  } catch {
+    return false;
+  }
 }
 
 /** The engine's destructive denylist on a desktop control's name and automation id (policy/destructive.ts). */
@@ -536,9 +567,19 @@ export class DesktopRepairSession {
 
   /** After a fix: the steps go on up to the first step that writes or looks like a write (resolved only), or to the end. */
   private async goOn(from: number, done: string): Promise<string> {
-    const stopAt = firstStopIndex(this.doc, from, { isSecretVar: (n) => this.h.isSecretVar(n), changed: new Set(this.markMap().keys()) });
-    if (from < stopAt) {
-      const res = await this.runRange(from, stopAt);
+    const opts: StopOpts = { isSecretVar: (n) => this.h.isSecretVar(n), changed: new Set(this.markMap().keys()) };
+    let stopAt = firstStopIndex(this.doc, from, opts);
+    // A sign-in step (DR10b) runs only when its window is clear when it is reached; otherwise the run-on stops there.
+    let cur = from;
+    let res: Awaited<ReturnType<typeof this.runRange>> | undefined;
+    for (const c of signInChecks(this.doc, from, stopAt, opts)) {
+      res = await this.runRange(cur, c);
+      if (!res.ok) break;
+      cur = c;
+      if (!(await signInWindowClear(this.surface, this.masker, signInWindow(this.doc, c)))) { stopAt = c; break; }
+    }
+    if ((!res || res.ok) && cur < stopAt) res = await this.runRange(cur, stopAt);
+    if (res) {
       if (!res.ok) {
         const j = res.failure.index;
         const step = this.doc.steps[j]!;

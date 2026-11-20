@@ -196,6 +196,15 @@ describe('desktop self-repair on the fake runner', () => {
     expect(out.note).toContain('the proof stopped at step 14 (looks like a write: found, not run)');
   });
 
+  it('a sign-in window that holds a write or destructive control: the Enter is found, not run, and the proof stops there (DR10b)', async () => {
+    const { r, runner: fr } = await run(V2_TURNS, { script: EXPECTED, erpChanges: ['rename', 'menu', 'confirm', 'signInDiscard'] });
+    const out = repaired(r);
+    expect(out.proof).toMatchObject({ replayed: 3, stoppedAt: 4, stoppedBecause: 'looks like a write' });
+    const begins = fr.requests.filter((q) => q.method === 'run.begin').map((q) => q.params.runId);
+    const proofReqs = fr.requests.slice(fr.requests.findIndex((q) => q.method === 'run.begin' && q.params.runId === begins[1]));
+    expect(proofReqs.some((q) => q.method === 'act' && q.params.action === 'key')).toBe(false);
+  });
+
   it('without the secret variables named, the sign-in Enter still stops the proof (DR10 fails closed)', async () => {
     const { r } = await run(V2_TURNS, { script: EXPECTED, more: { secretVars: [] } });
     // The password is no secret here, so nothing marks step 4 as a sign-in: DR9 stops the proof there.

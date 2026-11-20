@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRunner } from '../src/desktop/client.js';
 import { CHANGED_STEP_DESTRUCTIVE, CHANGED_STEP_NOT_RUN } from '../src/desktop/handlers.js';
-import { firstStopIndex, looksDestructive, probeBlock, signsInOnly } from '../src/desktop/repair/session.js';
+import { firstStopIndex, looksDestructive, probeBlock, signInChecks, signInWindowClear, signsInOnly } from '../src/desktop/repair/session.js';
 import { buildTree } from '../src/desktop/repair/tree.js';
 import { createDesktopSurface, type ChangedStep, type DesktopViewItem } from '../src/desktop/surface.js';
 import { runDesktopTask, type DesktopTaskResult } from '../src/desktop/task.js';
@@ -45,6 +45,15 @@ async function onErp(runId: string) {
   await client.call('act', { runId, target: { window: login, path: [{ automationId: 'txtPassword' }] }, action: 'type', value: ERP_PASSWORD, timeoutMs: 1000 });
   await client.call('act', { runId, target: { window: login, path: [{ automationId: 'btnSignIn' }] }, action: 'click', timeoutMs: 1000 });
   return { client, surface, ctx, runId };
+}
+
+/** ERP Demo v2 on the sign-in window (nothing typed yet), with a surface on the run. */
+async function onErpSignIn(runId: string) {
+  runner = await FakeRunner.start({ app: 'erp', policy: ERP_POLICY, erpUi: 'v2' });
+  const client = await connectRunner(runner.endpoint);
+  await client.call('run.begin', { runId, leaseMs: 5000 });
+  await client.call('app.launch', { runId, app: { exe: 'ErpDemo.exe' } });
+  return { client, surface: createDesktopSurface(client, runId, { exe: 'ErpDemo.exe' }) };
 }
 
 const acts = () => runner!.requests.filter((q) => q.method === 'act').slice(3).map((q) => [q.params.action, q.params.mode ?? 'step']);
@@ -195,46 +204,60 @@ describe('the per-fix cap', () => {
   });
 });
 
-describe('DR10: a step that only signs in does not stop the repair or the proof', () => {
+describe('DR10b: a step that only signs in does not stop the repair or the proof', () => {
   const LOGIN = { exe: 'erpdemo.exe', title: 'ERP Demo - Sign in' };
   const pwd = at(LOGIN, { controlType: 'Edit', automationId: 'txtPassword', name: 'Password' });
-  const doc = (next: DesktopStep, fillValue = '{{var.password}}'): DesktopScript => ({
+  const doc = (next: DesktopStep, fillValue = '{{var.password}}', field = pwd): DesktopScript => ({
     surface: 'desktop', app: { exe: 'ErpDemo.exe' },
     steps: [
-      { intent: 'Type into Password', fill: { field: pwd, value: fillValue } },
+      { intent: 'Type into Password', fill: { field, value: fillValue } },
       next,
       { intent: 'Click Save', click: at(MAIN, { controlType: 'Button', automationId: 'btnSave', name: 'Save' }) },
     ],
   });
   const secret = (n: string) => n === 'password';
-  it('Enter in the field, Enter with no target, a click on the field, OK or Submit in the sign-in window: run', () => {
+  const enter: DesktopStep = { intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } };
+  it('Enter in the secret field, and a Sign in / Log in / Login / Logon button, in a window titled for signing in: run (after the window check)', () => {
     for (const next of [
-      { intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } },
-      { intent: 'Press Enter', key: { key: 'Enter' } },
-      { intent: 'Click Password', click: pwd },
-      { intent: 'Click OK', click: at(LOGIN, { controlType: 'Button', automationId: 'btnOk', name: 'OK' }) },
-      { intent: 'Click Submit', click: at(LOGIN, { controlType: 'Button', automationId: 'btnSubmit', name: 'Submit' }) },
+      enter,
+      { intent: 'Click Sign in', click: at(LOGIN, { controlType: 'Button', automationId: 'btnSignIn', name: 'Sign in' }) },
+      { intent: 'Click Log in', click: at(LOGIN, { controlType: 'Button', name: 'Log in' }) },
+      { intent: 'Click Logon and post', click: at(LOGIN, { controlType: 'Button', name: 'Logon' }) },
     ] as DesktopStep[]) {
       expect(signsInOnly(doc(next), 1, { isSecretVar: secret }), next.intent).toBe(true);
       expect(firstStopIndex(doc(next), 0, { isSecretVar: secret }), next.intent).toBe(2);
     }
+    expect(signInChecks(doc(enter), 0, 3, { isSecretVar: secret })).toEqual([1]);
   });
   it('anything else that looks like a write still stops them (DR9)', () => {
+    const titled = (title: string | undefined, pattern?: string) => at({ exe: 'erpdemo.exe', ...(title !== undefined ? { title } : {}), ...(pattern ? { titlePattern: pattern } : {}) }, { controlType: 'Edit', automationId: 'txtPassword' });
     const cases: [DesktopScript, string][] = [
+      [doc({ intent: 'Press Enter', key: { key: 'Enter' } }), 'Enter with no target (goes to whatever has the focus)'],
       [doc({ intent: 'Press Ctrl+Enter', key: { key: 'Ctrl+Enter', target: pwd } }), 'another key'],
       [doc({ intent: 'Press Enter in Date', key: { key: 'Enter', target: at(LOGIN, { automationId: 'txtDate' }) } }), 'another field'],
+      [doc({ intent: 'Click OK', click: at(LOGIN, { controlType: 'Button', automationId: 'btnOk', name: 'OK' }) }), 'OK is never exempt'],
+      [doc({ intent: 'Click Submit', click: at(LOGIN, { controlType: 'Button', automationId: 'btnSubmit', name: 'Submit' }) }), 'Submit is never exempt'],
       [doc({ intent: 'Click Save', click: at(LOGIN, { controlType: 'Button', automationId: 'btnSave', name: 'Save' }) }), 'a save in the sign-in window'],
-      [doc({ intent: 'Click OK and post', click: at(LOGIN, { controlType: 'Button', automationId: 'btnOk', name: 'OK' }) }), 'an intent that posts'],
-      [doc({ intent: 'Click OK', click: at(MAIN, { controlType: 'Button', automationId: 'btnOk', name: 'OK' }) }), 'another window'],
-      [doc({ intent: 'Click OK', click: at(LOGIN, { controlType: 'Button', automationId: 'btnCancelOk', name: 'OK' }) }), 'a destructive id'],
-      [doc({ intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } }, '{{var.user}}'), 'not a secret'],
-      [doc({ intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } }, 'x{{var.password}}'), 'not a whole secret fill'],
-      [{ ...doc({ intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } }), steps: [{ intent: 'Wait', waitFor: { target: pwd } }, { intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } }] }, 'not right after a fill'],
+      [doc({ intent: 'Click Sign in', click: at(MAIN, { controlType: 'Button', name: 'Sign in and post' }) }), 'not a sign-in word alone, another window'],
+      [doc({ intent: 'Press Enter in Password', key: { key: 'Enter', target: titled('Payments') } }, '{{var.password}}', titled('Payments')), 'a window not titled for signing in'],
+      [doc({ intent: 'Press Enter in Password', key: { key: 'Enter', target: titled(undefined, 'Sign in.*') } }, '{{var.password}}', titled(undefined, 'Sign in.*')), 'a title pattern'],
+      [doc(enter, '{{var.user}}'), 'not a secret'],
+      [doc(enter, 'x{{var.password}}'), 'not a whole secret fill'],
+      [{ ...doc(enter), steps: [{ intent: 'Wait', waitFor: { target: pwd } }, enter] }, 'not right after a fill'],
     ];
     for (const [d, why] of cases) expect(firstStopIndex(d, 0, { isSecretVar: secret }), why).toBe(1);
-    const enter = doc({ intent: 'Press Enter in Password', key: { key: 'Enter', target: pwd } });
-    expect(firstStopIndex(enter, 0, {}), 'no secrets known').toBe(1);
-    expect(firstStopIndex(enter, 0, { isSecretVar: secret, changed: new Set([1]) }), 'changed by the repair').toBe(1);
-    expect(firstStopIndex({ ...enter, steps: [enter.steps[0]!, { ...enter.steps[1]!, write: true }] }, 0, { isSecretVar: secret }), 'a declared write').toBe(1);
+    expect(firstStopIndex(doc(enter), 0, {}), 'no secrets known').toBe(1);
+    expect(firstStopIndex(doc(enter), 0, { isSecretVar: secret, changed: new Set([1]) }), 'changed by the repair').toBe(1);
+    expect(firstStopIndex({ ...doc(enter), steps: [doc(enter).steps[0]!, { ...enter, write: true }] }, 0, { isSecretVar: secret }), 'a declared write').toBe(1);
+  });
+  it('the window check: clear for ERP Demo\'s sign-in window, not clear once it holds a write or destructive control, and closed when it cannot be read', async () => {
+    const { client, surface } = await onErpSignIn('signin-check');
+    const masker = createMasker([]);
+    expect(await signInWindowClear(surface, masker, LOGIN)).toBe(true);
+    expect(await signInWindowClear(surface, masker, { exe: 'erpdemo.exe', title: 'No such window' })).toBe(false);
+    expect(await signInWindowClear(surface, masker, undefined)).toBe(false);
+    runner!.addToWindow('ERP Demo - Sign in', { controlType: 'Button', automationId: 'btnReset', name: 'Delete account' });
+    expect(await signInWindowClear(surface, masker, LOGIN)).toBe(false);
+    await client.close();
   });
 });

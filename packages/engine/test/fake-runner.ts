@@ -319,6 +319,12 @@ export class FakeRunner {
   run: Run | undefined;
   /** The demo app of the last run (kept after run.end for assertions). */
   lastApp: AppModel | undefined;
+  /** Tests: adds a control to a window of the running app (by its title), as an app that changed would show it. */
+  addToWindow(title: string, c: { controlType: string; automationId?: string; name: string }): void {
+    const win = this.lastApp?.windows.find((w) => w.title === title);
+    if (!win) throw new Error(`no window "${title}"`);
+    win.root.children = [...(win.root.children ?? []), el(c.controlType, c.automationId ?? '', c.name)];
+  }
   /** Which app model app.launch starts. */
   readonly app: 'orders' | 'erp' | 'authenticator';
   readonly noClipboardMethod: boolean;
@@ -962,8 +968,9 @@ export const ERP_CSV_HEADER = 'Document,Date,Company,Vendor,Amount,Currency,Stat
  * first in a Confirm export form, whose Continue opens the Save dialog. 'customSave' (not in the real app): the export
  * dialog is a WinForms form (#ExportForm) whose save button is Export (btnExportSave), not a Win32 Save dialog.
  * 'sharedNote' (not in the real app): an id-less Text "Note" under both grpSearch and pnlDetail.
+ * 'signInDiscard' (not in the real app): a "Discard session" button on the sign-in window (DR10b's window check).
  */
-export type ErpChange = 'rename' | 'menu' | 'confirm' | 'customSave' | 'sharedNote';
+export type ErpChange = 'rename' | 'menu' | 'confirm' | 'customSave' | 'sharedNote' | 'signInDiscard';
 /** ERP Demo v2 (--ui v2): its changes. */
 export const ERP_V2: readonly ErpChange[] = ['rename', 'menu', 'confirm'];
 /** The class of the app's forms, and of its menu drop-downs (each a top-level window of its own), as UI Automation reports them. */
@@ -1055,7 +1062,7 @@ class ErpApp implements AppModel {
     const button = el('Button', 'btnSignIn', 'Sign in', { onClick: signIn });
     return {
       title: 'ERP Demo - Sign in', exe: ERP_EXE, automationId: 'LoginForm', className: ERP_FORM_CLASS,
-      root: el('Window', 'LoginForm', 'ERP Demo - Sign in', { children: [el('Text', 'lblUser', 'User name'), user, el('Text', 'lblPassword', 'Password'), password, error, button] }),
+      root: el('Window', 'LoginForm', 'ERP Demo - Sign in', { children: [el('Text', 'lblUser', 'User name'), user, el('Text', 'lblPassword', 'Password'), password, error, button, ...(this.changes.has('signInDiscard') ? [el('Button', 'btnDiscard', 'Discard session')] : [])] }),
     };
   }
 

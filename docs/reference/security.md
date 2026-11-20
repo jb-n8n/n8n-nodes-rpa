@@ -276,8 +276,10 @@ the gated keys and the export folder. n8n cannot switch it off.
     window whose title and text have no write word, at most 12 times a run.
   A step that would type, choose, check or press another key on a new control is never run before approval, nor is a
   declared write step, a step the review page flags as a candidate write (a click on a control with a write word, or
-  Enter or a save shortcut), or anything after one. The exception is signing in: Enter or a click in the field a
-  secret variable was typed into in the step before, and the sign-in window's own OK or Submit right after it. AI repair never
+  Enter or a save shortcut), or anything after one. The exception is signing in, right after a step that types a
+  secret variable in a window whose exact title says sign in, log in, login or logon: Enter in that same field, or a
+  click on its button named Sign in, Log in, Login or Logon, and only while that window shows no control that reads
+  like a write or a destructive action. Enter with no target, OK and Submit are never exempt. AI repair never
   changes a declared write step and never moves a step that types a secret variable. The proof starts the app again
   and replays the steps up to that point. Its claims are the runner's, as for browser evidence (accepted risks below).
   Until an app's write controls are in the policy, these word rules are what stands between a repair and a write.
