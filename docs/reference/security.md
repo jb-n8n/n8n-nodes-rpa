@@ -276,16 +276,17 @@ the gated keys and the export folder. n8n cannot switch it off.
     holds a window of another program gives no screenshot.
   - Black boxes, not blur, over every password or credential-like field, every control the run typed into (found
     again by its id if the app recreates it), and every control whose name, value, document text or accessible name
-    or value contains a value the run typed (secret variables included), a text it read from the clipboard, or a
-    value the engine masks, compared without case. The runner looks for these controls in every window before and
+    or value contains a value the engine masks (every secret variable value, typed in this run or not, the runner's
+    token, every value the run typed, every text it read from the clipboard), compared without case. The step-signing
+    key never goes to the runner. The runner looks for these controls in every window before and
     after it takes the picture and covers both. An element whose text it cannot read is covered whole.
   - No screenshot for that look, and a line in the conversation saying why, when the runner cannot tell where such a
     control is, cannot read a window through UI Automation, a window moved or changed size meanwhile, Windows scales
-    a window's drawing for its display, a window title contains such a value, or there are more than 5,000 elements
-    to check.
+    a window's drawing for its display, a window title contains such a value, there are more than 5,000 elements to
+    check, or there are more masked values than the runner looks for (64).
   - Text drawn without UI Automation telling the runner (inside an image, or a control drawn by hand) cannot be
-    checked, and neither can a value of 3 characters or fewer, or a secret variable the run did not type. Such text
-    reaches the provider when the app shows it. Turn the option off for apps that show secrets that way.
+    checked, and neither can a typed value of 3 characters or fewer, or a value the app shows encoded or split
+    across controls. Such text reaches the provider when the app shows it. Turn the option off for apps that show secrets that way.
   - Screenshots go to the chat model only: never to an output, the transcript, a log or the run's row. The runner
     logs only their size.
   Before approval it acts only in two runner modes, both refused on a declared write

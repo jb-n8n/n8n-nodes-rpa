@@ -612,7 +612,7 @@ labelled `labelStart + i` on its bounding box when it is a control a repair acts
 tree item, edit, combo box, check box, radio button, link, split button, document; not grid cells or text). Before it is encoded, opaque black boxes cover every password or
 credential-like field, every control the run typed into (by runtime id, or by process, control type and automation
 id), and every control whose name, value, TextPattern text or LegacyIAccessible name or value contains a `mask` text
-(at most 64, each at most 4096 characters; the engine sends the run's typed variable values and clipboard texts) or a
+(at most 64, each at most 4096 characters; the engine sends the values it masks, except the step-signing key) or a
 text the run typed, compared without case, ignoring texts under 4 characters. Elements are found in UI Automation's
 raw view before and after the capture, and both sets are covered; an element whose text cannot be read is covered
 whole. When a covered control's rectangle cannot be read, a window cannot be read through UI Automation, holds a child

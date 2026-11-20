@@ -302,8 +302,8 @@ screenshot of the app's windows too, and fixes the steps from there:
 - The screenshot shows the app's own windows only (the window in front, its dialogs and open menus), never the rest
   of the desktop, at most 1280 pixels on its longer side, with the number of each control's ref drawn on the
   controls a repair acts on (buttons, menu items, tabs, list and tree items, fields; label 12 is `e12`). Before it leaves the Windows machine, the runner covers with black boxes every password or
-  credential-like field, every field the run typed into, and every control showing a value the run typed, a secret
-  variable it typed or a text it read from the clipboard. When the runner cannot tell where such a control is, or
+  credential-like field, every field the run typed into, and every control showing a secret variable's value, a
+  value the run typed or a text it read from the clipboard. When the runner cannot tell where such a control is, or
   cannot read a window, that look goes without a screenshot and says why. The model still acts only through the
   refs, so every rule below holds as before. Screenshots go to the chat model only: never to an output, the Repaired
   Steps item, a log or the run's row. A chat model that does not take pictures gets the text view for the rest of
