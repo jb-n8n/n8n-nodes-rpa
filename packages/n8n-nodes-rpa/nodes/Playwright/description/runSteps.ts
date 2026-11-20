@@ -212,8 +212,9 @@ export const runStepsProperties: INodeProperties[] = [
     description: 'What the data is, in plain words. The chat model uses it when it repairs the steps or builds the first version.',
     displayOptions: { show: { operation: ['runSteps'], aiRepair: [true] } },
   },
+  // Browser steps only: a desktop run never reads it (runDesktopSteps.ts), so hiding it, and n8n dropping its value, changes no run.
   expectedFileProperty(
-    { show: { operation: ['runSteps'], aiRepair: [true] } },
+    { show: { operation: ['runSteps'], aiRepair: [true] }, hide: { runsOn: ['desktop'] } },
     'Used when AI repair builds the first version of steps that download a file. Steps that already exist carry their own checks on the download step (check).',
   ),
 ];

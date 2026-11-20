@@ -165,9 +165,10 @@ describe('Run Steps and Sign Steps fields', () => {
     expect(field('source').displayOptions).toEqual(importOnly);
     expect(field('stepsName').displayOptions).toEqual(importOnly);
   });
-  it('Expected File shows only with AI Repair and lists the six file types', () => {
+  it('Expected File shows only with AI Repair, not for A Windows desktop app, and lists the six file types', () => {
     const f = field('expectedFile');
-    expect(f).toMatchObject({ displayName: 'Expected File (First Version)', type: 'fixedCollection', displayOptions: { show: { operation: ['runSteps'], aiRepair: [true] } } });
+    expect(f).toMatchObject({ displayName: 'Expected File (First Version)', type: 'fixedCollection' });
+    expect(f.displayOptions).toEqual({ show: { operation: ['runSteps'], aiRepair: [true] }, hide: { runsOn: ['desktop'] } });
     const values = (f.options as { name: string; values: INodeProperties[] }[])[0].values;
     expect(values.map((v) => v.displayName)).toEqual(['File Type', 'File Name Pattern (Regex)', 'Minimum Size (Bytes)', 'Required Columns', 'Minimum Rows']);
     expect((values[0].options as INodePropertyOptions[]).map((o) => o.name)).toEqual(['CSV', 'Excel (XLSX)', 'PDF', 'Text', 'JSON', 'ZIP']);

@@ -21,12 +21,16 @@ export const INPUT_CONTAINS_SECRET = 'an input value contains a credential secre
 export const AGENT_OUT_OF_BUDGET = 'the agent ran out of budget';
 /** The circle guard stopped the agent: `the repair went in circles: …` (`the AI …` on a first build). */
 export const WENT_IN_CIRCLES = 'went in circles';
+/** What a repair used, as one sentence: `It used 4 chat model calls and 27,321 tokens.` */
+export function costSentence(llmCalls: number, tokens: number): string {
+  const n = (x: number) => x.toLocaleString('en-US');
+  return `It used ${n(llmCalls)} chat model ${llmCalls === 1 ? 'call' : 'calls'} and ${n(tokens)} tokens.`;
+}
+
 /** An agent-lane failure once the model was called: the message ends with what it used. */
 export function withCost(message: string, llmCalls: number, tokens: number): string {
   if (llmCalls <= 0) return message;
-  const n = (x: number) => x.toLocaleString('en-US');
-  const used = `It used ${n(llmCalls)} chat model ${llmCalls === 1 ? 'call' : 'calls'} and ${n(tokens)} tokens.`;
-  return `${message}${/[.!?]$/.test(message) ? '' : '.'} ${used}`;
+  return `${message}${/[.!?]$/.test(message) ? '' : '.'} ${costSentence(llmCalls, tokens)}`;
 }
 
 // Agent lane: the run ended on a login outcome after the agent's own sign_in.

@@ -306,7 +306,10 @@ types and ids, typed values masked, no screenshot) and fixes the steps from ther
   a menu). A changed click runs once in probe mode: a button, menu item, link, tab, list or tree item whose name, id,
   window title and window text have no write word. Anything else is added for the approver without being run.
 - The steps go on after a fix up to the first step that is a declared write or looks like one (what the review page
-  flags as a candidate write): that step's control is found and not run. Signing in is the one exception: right after
+  flags as a candidate write): that step's control is found and not run. Only the failed step waits its full timeout
+  before the chat model is asked. While the repair runs the steps on, each waits at most 5 seconds for its control to
+  appear (or twice the slowest step that passed in this run, when that is longer), so a later step that changed too
+  goes to the chat model sooner. Acting keeps the step's timeout, and the proof waits the full timeout. Signing in is the one exception: right after
   a step that types a secret variable into a field of a window whose title (an exact title, not a pattern) says sign
   in, log in, login or logon, a key Enter in that same field, or a click on that window's button named Sign in, Log in,
   Login or Logon, runs, when that window then has no control whose name or id reads like a write or like delete,
@@ -317,7 +320,9 @@ types and ids, typed values masked, no screenshot) and fixes the steps from ther
 - The result is version N+1 on **Repaired Steps**, with every step listed and no write marks: the approver ticks the
   writes again (see [RPA: 3 Approve steps](templates.md#rpa-3-approve-steps)). Its evidence line says which steps
   ran in the proof, where it stopped and why, and which steps the repair retargeted or added. Data gets the run's
-  values and file only when the proof ran every step.
+  values and file only when the proof ran every step. The Repaired Steps item always says what the repair used:
+  `llmCalls`, `llmTokens` and `costLine` (`It used 4 chat model calls and 27,321 tokens.`). These are shown only:
+  Sign Steps does not read them, and the signature does not cover them.
 - Not tried: a run that failed after a write step ran, a control that was found but did not respond, a file whose
   checks failed, unsigned steps. Once per execution, the cost sentence, the hold after a failed repair and **AI Repair
   Reset Key** work as for browser steps. **Deliver Unconfirmed Rows** is refused for desktop steps.

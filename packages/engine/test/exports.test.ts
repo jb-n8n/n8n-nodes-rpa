@@ -25,7 +25,7 @@ const EXPORTS = [
   'ScriptShapeError', 'SignInPolicyError', 'UNVERIFIED_COUNT_FLAG', 'USE_CASE_WORDS', 'VALUE_NOT_TAKEN', 'WENT_IN_CIRCLES', 'WORKFLOW_CODE', 'WRITE_STEPS_INVALID',
   'absoluteHttpUrl', 'adoptDraft', 'agentSystemPrompt', 'binaryName', 'build', 'buildProposal', 'candidatesFor', 'candidatesOf',
   'canonicalize', 'changeListMatches', 'checkDesktopTrust', 'checkFile', 'checkRequest', 'checkTrust', 'clampBudget', 'classifyFailure',
-  'codeWorkflowFailed', 'compileProposal', 'connectRunner', 'countingModel', 'createAddressGuard', 'createMasker', 'currentIdentity', 'declareWrites',
+  'codeWorkflowFailed', 'compileProposal', 'connectRunner', 'costSentence', 'countingModel', 'createAddressGuard', 'createMasker', 'currentIdentity', 'declareWrites',
   'defaultResolveHost', 'describeCheck', 'describeDesktopStep', 'describeInterrupt', 'describeLocator', 'describeStep', 'desktopBinding',
   'desktopProofProblem', 'desktopProposal', 'desktopSafetyFlags', 'desktopVerbOf', 'desktopWriteCandidates', 'detectImportSource', 'detectTotal',
   'downloadTemplateIssues', 'downloadTemplateOf', 'driveAgentLoop', 'effectivePolicy', 'effectiveWriteMode', 'elideOldPages', 'extractsFields', 'fileFacts', 'filesEvidenceProblem', 'filesEvidenceText',

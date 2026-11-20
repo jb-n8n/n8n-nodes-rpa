@@ -19,6 +19,15 @@ export const BROWSER_STEPS_NEED_BROWSER_CREDENTIAL = 'These are browser steps: t
 export const DESKTOP_NO_SITE_LOGIN = 'Desktop steps do not use an RPA Site Login yet: remove it from this node.';
 /** Deliver Unconfirmed Rows hands over a browser repair's rows without proof: desktop steps read no rows. */
 export const DESKTOP_NO_UNCONFIRMED = 'Deliver Unconfirmed Rows applies to browser steps only: turn it off for desktop steps.';
+/**
+ * What a desktop repair used, on its Repaired Steps item: the Data item's names (llmCalls, llmTokens) and the sentence a
+ * failed repair ends with (costLine). Shown only: neither the digest nor the signature covers them, and Sign Steps reads
+ * neither, so an item with other numbers signs the same steps the same way.
+ */
+export function repairCost(engine: Engine, llmCalls: number, tokens: number): IDataObject {
+  return { llmCalls, llmTokens: tokens, costLine: engine.costSentence(llmCalls, tokens) };
+}
+
 export const DESKTOP_NO_ROW_CHECKS = 'Row checks (ID Pattern, Stated Total Pattern, Required Fields, Text That Means No Results) do not apply to desktop steps: clear them.';
 
 /**
@@ -100,10 +109,11 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
   }
   if (r.lane === 'agent') {
     // Repaired: the new version goes to Repaired Steps for approval. The run's data comes out on Data only when the proof
-    // ran every step (no write, nothing held); otherwise the bot's work waits for the approved version.
+    // ran every step (no write, nothing held); otherwise the bot's work waits for the approved version. What the repair
+    // used is on the item either way (shown only: outside the digest, and Sign Steps never reads it).
     try {
       const repaired: INodeExecutionData = {
-        json: desktopRepairedStepsJson(engine, r.proposal, undefined, p.secretVars), pairedItem: paired,
+        json: { ...desktopRepairedStepsJson(engine, r.proposal, undefined, p.secretVars), ...repairCost(engine, r.llmCalls, r.tokens) }, pairedItem: paired,
       };
       if (!r.completed) return { kind: 'ok', repaired };
       const files = r.files;

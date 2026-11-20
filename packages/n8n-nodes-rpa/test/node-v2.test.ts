@@ -66,6 +66,11 @@ const scenarios = (): INodeParameters[] =>
   OPERATIONS.flatMap((operation) => RUNS_ON_VALUES.flatMap((on) => EXTRAS.map((extra) => ({ operation, ...(on === undefined ? {} : { runsOn: on }), ...extra }))));
 const BASE_NAMES = new Set(base.properties.map((p) => p.name));
 const without = (p: INodeParameters, key: string): INodeParameters => Object.fromEntries(Object.entries(p).filter(([k]) => k !== key));
+/**
+ * The one field a version 1 node shows less of since: Expected File (First Version) on Run Steps is hidden for A Windows
+ * desktop app, as Start URL is (browser steps only; a desktop run never reads it, so n8n dropping its value changes no run).
+ */
+const hiddenSince = (p: INodeParameters, field: string): boolean => field === 'expectedFile' && p.operation === 'runSteps' && p.runsOn === 'desktop';
 
 describe('the node has versions 1 and 2', () => {
   it('a new node gets version 2; the import\'s workflow file and the templates use it', () => {
@@ -111,8 +116,10 @@ describe('a stored version 1 node shows, keeps and runs what it did before versi
       expect(slots(parameters, 1), what).toEqual(slots(parameters, 1, BEFORE));
       const now = fields(parameters, 1);
       const before = fields(parameters, 1, BEFORE);
-      // Fields another change adds later may show too; every field shown before shows as it did, and no version 2 field.
-      expect(now.params.filter((r) => BASE_NAMES.has(r[0] as string)), what).toEqual(before.params);
+      // Fields another change adds later may show too; every field shown before shows as it did (but hiddenSince), and no
+      // version 2 field.
+      expect(now.params.filter((r) => BASE_NAMES.has(r[0] as string)), what).toEqual(before.params.filter((r) => !hiddenSince(parameters, r[0] as string)));
+      if (before.params.some((r) => hiddenSince(parameters, r[0] as string))) expect(names(now.params), what).not.toContain('expectedFile');
       expect(names(now.params).filter((n) => V2_ONLY.includes(n)), what).toEqual([]);
       expect(now.settings, what).toEqual([]);
     }
@@ -127,7 +134,8 @@ describe('a stored version 1 node shows, keeps and runs what it did before versi
       const node = stored({ ...parameters, ...values }, 1);
       const now = runParameters(node);
       const before = runParameters(node, BEFORE);
-      expect(Object.fromEntries(Object.keys(before).map((k) => [k, now[k]])), JSON.stringify(parameters)).toEqual(before);
+      const kept = Object.keys(before).filter((k) => !hiddenSince(parameters, k));
+      expect(Object.fromEntries(kept.map((k) => [k, now[k]])), JSON.stringify(parameters)).toEqual(Object.fromEntries(kept.map((k) => [k, before[k]])));
       // Nothing that was there before appears: only the switch (and fields a later change may add).
       const added = Object.keys(now).filter((k) => !(k in before));
       for (const k of added) expect(k === SHARE_ACROSS_WORKERS || !BASE_NAMES.has(k), `${JSON.stringify(parameters)} adds ${k}`).toBe(true);
