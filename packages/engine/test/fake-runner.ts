@@ -288,11 +288,18 @@ export interface FakeRunnerOptions {
   padSnapshotIds?: number;
   /** A runner older than `clipboard.read`: it answers -32601. */
   noClipboardMethod?: boolean;
+  /** A runner older than `look`: it answers -32601. */
+  noLookMethod?: boolean;
+  /** `look` answers noPicture with this reason instead of a picture (the runner could not make one safely). */
+  lookRefusal?: string;
   /** The authenticator's web view helper does not descend from the app (some other program started it). */
   helperOutsideRun?: boolean;
 }
 
 export interface Received { method: string; params: Record<string, unknown> }
+
+/** A 1 by 1 PNG: the fake runner's picture. */
+export const FAKE_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
 
 /** The fake runner. `start()` listens on 127.0.0.1; `url`, `fingerprint` and `token` make the credential. */
 export class FakeRunner {
@@ -328,6 +335,8 @@ export class FakeRunner {
   /** Which app model app.launch starts. */
   readonly app: 'orders' | 'erp' | 'authenticator';
   readonly noClipboardMethod: boolean;
+  readonly noLookMethod: boolean;
+  lookRefusal: string | undefined;
   readonly helperOutsideRun: boolean;
   /** The clipboard's text (the authenticator's Copy buttons set it through copy(); tests may too). */
   clipboard: string | undefined;
@@ -373,6 +382,8 @@ export class FakeRunner {
     this.noWindowsMethod = opts.noWindowsMethod ?? false;
     this.padSnapshotIds = opts.padSnapshotIds ?? 0;
     this.noClipboardMethod = opts.noClipboardMethod ?? false;
+    this.noLookMethod = opts.noLookMethod ?? false;
+    this.lookRefusal = opts.lookRefusal;
     this.helperOutsideRun = opts.helperOutsideRun ?? false;
     this.cert = selfSignedCert();
     this.fingerprint = this.cert.fingerprint;
@@ -734,6 +745,18 @@ export class FakeRunner {
         };
         walk(win.root, 0, true);
         return { window: { title: win.title, exe: win.exe }, nodes, ...(truncated ? { truncated: true } : {}) };
+      }
+      case 'look': {
+        // RunnerService.Look: the snapshot, and a picture (here a 1-pixel PNG standing for 800 by 600) or noPicture.
+        if (this.noLookMethod) throw new RpcError(METHOD_NOT_FOUND, 'method not found');
+        this.requireRun(p);
+        if (!Number.isInteger(p.labelStart)) throw new RpcError(INVALID_PARAMS, 'invalid params: labelStart is required');
+        if (!Array.isArray(p.mask) || p.mask.some((t) => typeof t !== 'string')) throw new RpcError(INVALID_PARAMS, 'invalid params: mask must be an array of strings');
+        const { labelStart: _l, mask: _m, maxEdge: _e, ...snapParams } = p;
+        const snap = await this.answer('snapshot', snapParams) as { nodes: RunnerNode[] };
+        if (this.lookRefusal) return { ...snap, noPicture: this.lookRefusal };
+        const masked = snap.nodes.filter((n) => n.valueHidden).length;
+        return { ...snap, picture: { mime: 'image/png', base64: FAKE_PNG, width: 800, height: 600, masked, labels: snap.nodes.length } };
       }
       case 'windows': {
         if (this.noWindowsMethod) throw new RpcError(METHOD_NOT_FOUND, 'method not found');

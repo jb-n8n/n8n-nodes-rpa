@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { ChatMessage, ChatModel, ChatResponse, ToolDef } from 'n8n-rpa-engine';
+import type { ChatModel, ChatResponse, ContentPart, ModelMessage, ToolDef } from 'n8n-rpa-engine';
 
 export const DEFAULT_MODEL = 'claude-sonnet-5-5';
 
@@ -21,11 +21,24 @@ export function toAnthropicTools(defs: ToolDef[]): Anthropic.Tool[] {
   return defs.map((d) => ({ name: d.function.name, description: d.function.description, input_schema: d.function.parameters as Anthropic.Tool.InputSchema }));
 }
 
+/** A message's text, or its parts as Messages API blocks: text, and a picture (a base64 data URL) as an image block. */
+function userContent(content: string | ContentPart[]): string | Anthropic.ContentBlockParam[] {
+  if (typeof content === 'string') return content;
+  return content.flatMap((p): Anthropic.ContentBlockParam[] => {
+    if (p.type === 'text') return p.text ? [{ type: 'text', text: p.text }] : [];
+    const m = /^data:(image\/(?:png|jpeg));base64,(.+)$/s.exec(p.image_url.url);
+    if (!m) throw new Error('only base64 PNG or JPEG pictures are sent');
+    return [{ type: 'image', source: { type: 'base64', media_type: m[1] as 'image/png' | 'image/jpeg', data: m[2] } }];
+  });
+}
+const textOf = (content: string | ContentPart[]): string =>
+  typeof content === 'string' ? content : content.map((p) => (p.type === 'text' ? p.text : '')).join('');
+
 /**
  * Converts the engine's plain messages to Messages API params. The history stays append-only: an assistant turn with
  * `raw` content (what the API returned) is replayed unchanged, which keeps reasoning blocks valid.
  */
-export function toAnthropicMessages(messages: ChatMessage[]): { system: string; messages: Anthropic.MessageParam[] } {
+export function toAnthropicMessages(messages: ModelMessage[]): { system: string; messages: Anthropic.MessageParam[] } {
   const system: string[] = [];
   const out: Anthropic.MessageParam[] = [];
   let results: Anthropic.ToolResultBlockParam[] = [];
@@ -35,15 +48,16 @@ export function toAnthropicMessages(messages: ChatMessage[]): { system: string; 
   };
   for (const m of messages) {
     if (m.role === 'tool') {
-      results.push({ type: 'tool_result', tool_use_id: m.tool_call_id ?? '', content: m.content, ...(m.status === 'error' ? { is_error: true } : {}) });
+      results.push({ type: 'tool_result', tool_use_id: m.tool_call_id ?? '', content: textOf(m.content), ...(m.status === 'error' ? { is_error: true } : {}) });
       continue;
     }
     flush();
-    if (m.role === 'system') { system.push(m.content); continue; }
-    if (m.role === 'user') { out.push({ role: 'user', content: m.content }); continue; }
+    if (m.role === 'system') { system.push(textOf(m.content)); continue; }
+    if (m.role === 'user') { out.push({ role: 'user', content: userContent(m.content) }); continue; }
     if (Array.isArray(m.raw) && m.raw.length) { out.push({ role: 'assistant', content: m.raw as Anthropic.ContentBlockParam[] }); continue; }
     const blocks: Anthropic.ContentBlockParam[] = [];
-    if (m.content) blocks.push({ type: 'text', text: m.content });
+    const text = textOf(m.content);
+    if (text) blocks.push({ type: 'text', text });
     for (const c of m.tool_calls ?? []) blocks.push({ type: 'tool_use', id: c.id, name: c.name, input: c.args });
     if (blocks.length) out.push({ role: 'assistant', content: blocks });
   }
@@ -97,7 +111,7 @@ export function anthropicChatModel(opts: AnthropicModelOptions = {}): ChatModel 
     bindTools(defs: ToolDef[]) {
       const tools = toAnthropicTools(defs);
       return {
-        async invoke(messages: ChatMessage[], options?: { signal?: AbortSignal }): Promise<ChatResponse> {
+        async invoke(messages: ModelMessage[], options?: { signal?: AbortSignal }): Promise<ChatResponse> {
           const { system, messages: params } = toAnthropicMessages(messages);
           const res = await client.messages.create(
             {

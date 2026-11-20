@@ -1,5 +1,6 @@
 // The ERP Demo v2 repair as a fake chat model plays it (the turns the live model took), shared by the engine's e2e test
 // and the node's desktop repair test.
+import { modelMessageText, type ModelMessage } from '../src/agent/model.js';
 import type { FakeTurn } from './fake-model.js';
 
 /** The ref of the element `ControlType "name"` in the latest view of a tool result (the view's lines are indented). */
@@ -10,7 +11,7 @@ export function ref(text: string, controlType: string, name: string): string {
   return m[1]!;
 }
 /** The latest view the model saw (a refused tool call carries none: the view before it still holds). */
-export const latestView = (messages: { content: string }[]): string => [...messages].reverse().find((m) => m.content.includes('<page_content>'))?.content ?? '';
+export const latestView = (messages: ModelMessage[]): string => [...messages].map(modelMessageText).reverse().find((t) => t.includes('<page_content>')) ?? '';
 export const on = (tool: string, controlType: string, name: string): FakeTurn => (_t, messages) => ({ name: tool, args: { ref: ref(latestView(messages), controlType, name) } });
 export const call = (tool: string, args: Record<string, unknown> = {}): FakeTurn => () => ({ name: tool, args });
 

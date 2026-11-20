@@ -1,5 +1,5 @@
 import {
-  proposalDigest, runTask, signScript, signSteps, type ChatMessage, type ChatModel, type SaveTrace, type Script, type TaskInput, type TaskResult, type ToolDef,
+  proposalDigest, runTask, signScript, signSteps, type ChatModel, type ModelMessage, type SaveTrace, type Script, type TaskInput, type TaskResult, type ToolDef,
 } from 'n8n-rpa-engine';
 import { SANDBOX, type SandboxPortal } from 'n8n-rpa-sandbox/testing.js';
 import { APPROVER, baselineScript, bootstrapBaseline, GOAL, LOCAL, OUTPUT, policyFor, SECRETS, SIGNING_KEY } from './fixtures.js';
@@ -107,7 +107,7 @@ export function countingModel(inner: ChatModel): ChatModel & { calls: number } {
     bindTools(defs: ToolDef[]) {
       const bound = inner.bindTools(defs);
       return {
-        invoke: (messages: ChatMessage[], options?: { signal?: AbortSignal }) => {
+        invoke: (messages: ModelMessage[], options?: { signal?: AbortSignal }) => {
           counter.calls++;
           return bound.invoke(messages, options);
         },

@@ -207,7 +207,9 @@ To let the bot repair itself, follow the note on the RPA node: connect a chat mo
 **AI Repair** and write the **Goal** in plain words (for example "Export the line items of company 1000 for 2026 as a
 CSV file"), then send its **Repaired Steps** output to **RPA: 3 Approve steps**. Repair stays off until you do.
 
-The next run that fails asks the model once. It looks at the app's window (no screenshot), points the failed steps at
+The next run that fails asks the model once. It looks at the app's window, as a list of its controls and as a
+screenshot on which password fields and the values the bot typed are covered black (turn **Options → Show the Model
+Screenshots** off to send none), points the failed steps at
 the controls they moved to, starts the app again and replays the steps to prove them, without running anything that
 looks like a save. The result is the next version of the steps, which waits for you: the approval email lists every
 step, says which ones the repair changed or added and which ones it proved, and you tick the steps that save, send or

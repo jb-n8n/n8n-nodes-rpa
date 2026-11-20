@@ -143,6 +143,8 @@ export interface AgentLaneSuccess {
 }
 export type TaskFailure = LaneFailure & {
   lane: 'script' | 'agent'; configError?: boolean; agentLog?: AgentActionSummary[]; tokens?: number; llmCalls?: number; transcript?: ChatMessage[];
+  /** Desktop repair: screenshots the model got and their estimated share of `tokens`; why it went on without them. */
+  pictures?: { count: number; tokens: number }; pictureNote?: string;
 };
 export type TaskResult = LaneSuccess | AgentLaneSuccess | TaskFailure;
 

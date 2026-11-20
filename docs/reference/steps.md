@@ -297,7 +297,18 @@ the **Repaired Steps** output. Nothing repaired runs until Sign Steps signs it.
 **Desktop steps.** AI repair works on signed desktop steps too, with the same switches: a chat model on the Model
 input, **AI Repair** on and a **Goal**. When a step no longer finds its control (a button renamed, a command moved to
 another menu, a new dialog in the way), the model looks at the app's window as UI Automation describes it (names,
-types and ids, typed values masked, no screenshot) and fixes the steps from there:
+types and ids, typed values masked) and, with **Options → Show the Model Screenshots** on (the default), at a
+screenshot of the app's windows too, and fixes the steps from there:
+- The screenshot shows every visible top-level window of the processes the run started (the app's windows, its
+  dialogs and open menus), each drawn from its own content, never the rest of the desktop or another program's window, at most 1280 pixels on its longer side, with the number of each control's ref drawn on the
+  controls a repair acts on (buttons, menu items, tabs, list and tree items, fields; label 12 is `e12`). Before it leaves the Windows machine, the runner covers with black boxes every password or
+  credential-like field, every field the run typed into, and every control showing a secret variable's value, a
+  value the run typed or a text it read from the clipboard. When the runner cannot tell where such a control is, or
+  cannot read a window, that look goes without a screenshot and says why. The model still acts only through the
+  refs, so every rule below holds as before. Screenshots go to the chat model only: never to an output, the Repaired
+  Steps item, a log or the run's row. A chat model that does not take pictures gets the text view for the rest of
+  the repair, and the repair's note says so. Turn the option off to send no screenshot at all; browser steps never
+  send one.
 - It may point a failed step at another control, open menus and expand items to look, and add up to 2 steps (a click
   through a new dialog). It never changes a declared write step, never moves a step that types a secret variable, and
   gives up with its reason when a fix would need either.
@@ -321,7 +332,9 @@ types and ids, typed values masked, no screenshot) and fixes the steps from ther
   writes again (see [RPA: 3 Approve steps](templates.md#rpa-3-approve-steps)). Its evidence line says which steps
   ran in the proof, where it stopped and why, and which steps the repair retargeted or added. Data gets the run's
   values and file only when the proof ran every step. The Repaired Steps item always says what the repair used:
-  `llmCalls`, `llmTokens` and `costLine` (`It used 4 chat model calls and 27,321 tokens.`). These are shown only:
+  `llmCalls`, `llmTokens` and `costLine` (`It used 4 chat model calls and 27,321 tokens.`, with screenshots
+  `It used 4 chat model calls and 31,040 tokens, about 5,464 of them for 4 screenshots.`: the provider counts
+  pictures inside its input tokens, so their share is an estimate from their size). These are shown only:
   Sign Steps does not read them, and the signature does not cover them.
 - Not tried: a run that failed after a write step ran, a control that was found but did not respond, a file whose
   checks failed, unsigned steps. Once per execution, the cost sentence, the hold after a failed repair and **AI Repair

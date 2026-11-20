@@ -1,3 +1,4 @@
+import { modelMessageText } from '../src/agent/model.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { CIRCLE_NUDGE_TEXT, modelErrorText, runAgentLoop, type AgentLoopInput } from '../src/agent/loop.js';
@@ -100,7 +101,7 @@ describe('runAgentLoop', () => {
       expect(system.role).toBe('system');
       expect(system.content).toContain(GOAL);
       expect(system.content).toContain('untrusted data');
-      expect(user.content.startsWith('There are no steps for this site yet.')).toBe(true);
+      expect(modelMessageText(user).startsWith('There are no steps for this site yet.')).toBe(true);
       expect(user.content).toContain('<page_content>');
       expect(model.invocations[1].at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'call_1_0', status: 'success' });
       expect(res.transcript).toHaveLength(10);
@@ -222,9 +223,9 @@ describe('runAgentLoop', () => {
       const sent = model.invocations[6];
       const tools = sent.filter((m) => m.role === 'tool');
       expect(tools).toHaveLength(6);
-      expect(tools.filter((m) => m.content.includes('<page_content>'))).toHaveLength(2);
+      expect(tools.filter((m) => modelMessageText(m).includes('<page_content>'))).toHaveLength(2);
       expect(tools[0].content).toContain('(earlier page omitted)');
-      expect(tools[0].content.startsWith('OK')).toBe(true);
+      expect(modelMessageText(tools[0]).startsWith('OK')).toBe(true);
       // the initial user message keeps its page by design
       expect(sent[1].content).toContain('<page_content>');
       for (const c of sent.flatMap((m) => m.tool_calls ?? [])) expect(tools.some((m) => m.tool_call_id === c.id)).toBe(true);
@@ -242,7 +243,7 @@ describe('runAgentLoop', () => {
       await loop(ctx, state, model);
       const sent = model.invocations[3];
       const tools = sent.filter((m) => m.role === 'tool');
-      expect(tools.filter((m) => m.content.includes('<page_content>'))).toHaveLength(2);
+      expect(tools.filter((m) => modelMessageText(m).includes('<page_content>'))).toHaveLength(2);
       const executed = tools.find((m) => m.tool_call_id === 'call_2_0');
       expect(executed?.content).toContain('<page_content>');
     } finally { await session.close(); }

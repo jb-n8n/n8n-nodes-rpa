@@ -10,7 +10,7 @@ import { strToU8, zipSync } from 'fflate';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ICredentialDataDecryptedObject, IDataObject, INodeExecutionData } from 'n8n-workflow';
-import { adoptDraft, importSource, runTask, signSteps, UNVERIFIED_COUNT_FLAG, type ChatMessage, type ChatModel, type Script, type TaskInput, type TaskResult } from 'n8n-rpa-engine';
+import { adoptDraft, importSource, runTask, signSteps, UNVERIFIED_COUNT_FLAG, type ChatModel, type ModelMessage, type Script, type TaskInput, type TaskResult } from 'n8n-rpa-engine';
 import { SANDBOX, startPortal, type SandboxPortal } from 'n8n-rpa-sandbox/testing.js';
 import { clickNamed, done, fakeModel, refByName, use, type FakeTurn } from '../../engine/test/fake-model.js';
 import { V2_TURNS as ERP_V2_TURNS } from '../../engine/test/erp-v2-turns.js';
@@ -233,11 +233,11 @@ const feedName = (feed: Feed) => String(setNode(feed.template, 'Settings', empty
 interface Recorder extends ChatModel {
   readonly calls: number;
   /** Every message the engine sent the model (system, user and tool messages): the LLM transcript the leak scan covers. */
-  readonly sent: ChatMessage[][];
+  readonly sent: ModelMessage[][];
 }
 /** Counts calls and keeps the transcript. The model's own turns are left out: a model typing a secret is not the engine leaking it. */
 function recording(inner: ChatModel): Recorder {
-  const sent: ChatMessage[][] = [];
+  const sent: ModelMessage[][] = [];
   return {
     sent,
     get calls() { return sent.length; },

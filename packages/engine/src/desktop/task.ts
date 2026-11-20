@@ -85,6 +85,17 @@ export interface DesktopRepairInput {
   held?: string;
   /** Tests: a fixed wait for the steps the repair runs on after a fix (default: repair/session.ts runOnWaitMs). */
   runOnWaitMs?: number;
+  /**
+   * Each view also goes to the chat model as the runner's screenshot of the app's windows, masked by the runner and
+   * labelled with the view's ref numbers (the node's Show the Model Screenshots). No picture when the runner cannot make
+   * one with every such control covered, when it is too old, or once the chat model did not take one: the text view goes on alone.
+   */
+  pictures?: boolean;
+  /**
+   * DEBUG, for an engine script that films a demo only (the node never sets it): writes every screenshot sent to the
+   * model and every move it made to this local folder (repair/film.ts).
+   */
+  debugFilmDir?: string;
 }
 
 /**
@@ -109,6 +120,10 @@ export interface DesktopRepairSuccess {
   log: StepLogEntry[];
   tokens: number;
   llmCalls: number;
+  /** Screenshots the model got, and about how many of `tokens` they took (an estimate). */
+  pictures?: { count: number; tokens: number };
+  /** Set when the chat model did not take a screenshot and the repair went on with the text view only. */
+  pictureNote?: string;
   transcript: ChatMessage[];
   durationMs: number;
   /** What the repair did, one sentence (masked). */
@@ -395,7 +410,8 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     }
     runId = id;
     lease = client.startLease(runId, leaseMs);
-    surface = createDesktopSurface(client, runId, script.app);
+    // The step-signing key never goes to the runner, not even as a value to cover in a screenshot.
+    surface = createDesktopSurface(client, runId, script.app, { neverToRunner: input.trust.key ? [input.trust.key] : [] });
     try {
       await launchApp(surface, script.app);
     } catch (err) {
@@ -457,16 +473,20 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
         mask: sessionMask, isSecretVar,
         classify: (index, message) => repairableCause(desktop.errors.get(index), message),
         ...(repair.runOnWaitMs !== undefined ? { runOnWaitMs: repair.runOnWaitMs } : {}),
+        ...(repair.pictures ? { pictures: true } : {}),
+        ...(repair.debugFilmDir ? { debugFilmDir: repair.debugFilmDir } : {}),
       });
       const { loop } = session;
       const llmCalls = Math.max(calls.n, loop.llmCalls);
       const tokens = loop.tokens;
       const sm = sessionMask();
       const agentLog: AgentActionSummary[] = session.actions.map((a) => ({ tool: a.tool, ok: a.ok, url: sm.mask(desktop.address()), ...(a.note ? { note: sm.mask(a.note) } : {}) }));
-      const agentExtra = { lane: 'agent' as const, agentLog, tokens, llmCalls, transcript: loop.transcript };
+      const pictureExtra = { ...(loop.pictures ? { pictures: loop.pictures } : {}), ...(loop.pictureNote ? { pictureNote: loop.pictureNote } : {}) };
+      const agentExtra = { lane: 'agent' as const, agentLog, tokens, llmCalls, transcript: loop.transcript, ...pictureExtra };
       const repairLog = () => maskedLog(res.state.log, sessionMask());
+      const pictureNote = loop.pictureNote ? ` (${loop.pictureNote})` : '';
       const failAgent = (c: ErrorCode, message: string): TaskFailure => ({
-        ...fail(c, withCost(message, llmCalls, tokens), { ...base, log: repairLog(), ...(res.state.submitted ? { submitted: true } : {}) }), ...agentExtra,
+        ...fail(c, withCost(`${message}${pictureNote}`, llmCalls, tokens, loop.pictures), { ...base, log: repairLog(), ...(res.state.submitted ? { submitted: true } : {}) }), ...agentExtra,
       });
       const o2 = override(res.failure.intent);
       if (o2) return failAgent(o2.code, o2.message);
@@ -508,7 +528,8 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
         ok: true, lane: 'agent', surface: 'desktop', name: script.name ?? null, version: version ?? null, hash, completed,
         files: completed ? proof.files : [], outputs: completed ? maskedOutputs(proof.outputs, end.doc, secrets, proof.surface) : [],
         proposal, digest, proof: proof.evidence, agentLog, log: [...repairLog(), ...maskedLog(proof.log, pm)], tokens, llmCalls, transcript: loop.transcript,
-        durationMs: Date.now() - t0, note: pm.mask(`repaired ${end.fixes} step${end.fixes === 1 ? '' : 's'} and replayed the steps in a fresh start of the app${stopNote}${repairNote}`).slice(0, 500),
+        ...pictureExtra,
+        durationMs: Date.now() - t0, note: pm.mask(`repaired ${end.fixes} step${end.fixes === 1 ? '' : 's'} and replayed the steps in a fresh start of the app${stopNote}${repairNote}${loop.pictureNote ? `; ${loop.pictureNote}` : ''}`).slice(0, 500),
         submitted: false,
       };
     }

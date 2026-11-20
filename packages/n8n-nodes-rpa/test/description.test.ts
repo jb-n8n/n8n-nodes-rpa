@@ -204,7 +204,7 @@ describe('Run Steps and Sign Steps fields', () => {
     const forRunOrSign = optionEntries.filter((o) => (o.displayOptions?.show?.['/operation'] ?? []).some((op) => op === 'runSteps' || op === 'signSteps'));
     expect(forRunOrSign.map((o) => o.name)).toEqual([
       'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'idPattern', 'totalPattern', 'requiredFields', 'emptyPattern',
-      'variables', 'name', 'expectedVersion', 'allowUnsignedWrites', 'deliverUnconfirmed', 'maxActions', 'maxTokens', 'repairResetKey', 'codeWorkflowId', 'codeTimeout', 'breakerResetKey',
+      'variables', 'name', 'expectedVersion', 'allowUnsignedWrites', 'deliverUnconfirmed', 'maxActions', 'maxTokens', 'showModelScreenshots', 'repairResetKey', 'codeWorkflowId', 'codeTimeout', 'breakerResetKey',
       'saveTrace', 'maxItems',
     ]);
     for (const name of ['deliverUnconfirmed', 'maxActions', 'maxTokens', 'repairResetKey']) expect(option(name).displayOptions?.show).toEqual({ '/operation': ['runSteps'], '/aiRepair': [true] });
@@ -219,6 +219,10 @@ describe('Run Steps and Sign Steps fields', () => {
     expect(option('maxActions')).toMatchObject({ default: 40, typeOptions: { minValue: 1, maxValue: 200 } });
     expect(option('maxTokens')).toMatchObject({ default: 200000, typeOptions: { minValue: 1000, maxValue: 1000000 } });
     expect(option('repairResetKey')).toMatchObject({ displayName: 'AI Repair Reset Key', type: 'string', default: '', noDataExpression: true });
+    // Desktop AI repair only (hidden when the node runs browser steps only), on by default, typed.
+    expect(option('showModelScreenshots')).toMatchObject({ displayName: 'Show the Model Screenshots', type: 'boolean', default: true, noDataExpression: true });
+    expect(option('showModelScreenshots').displayOptions).toEqual({ show: { '/operation': ['runSteps'], '/aiRepair': [true] }, hide: { '/runsOn': ['browser'] } });
+    expect(option('showModelScreenshots').description).toContain('Must be set directly, not with an expression.');
     expect(option('saveTrace')).toMatchObject({ displayName: 'Debug Trace', default: 'onFailure' });
     expect(option('maxItems')).toMatchObject({ default: 100, typeOptions: { minValue: 1 } });
   });

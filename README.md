@@ -120,7 +120,8 @@ Known limits:
   tested. The recorder was tried on WinForms and Win32 apps only, not on WPF apps or apps that show WebView2.
 - **n8n connects in to the Windows machine.** The machine never dials out to n8n, so n8n must reach it on the runner's port. Where it cannot, a private network or tunnel between them is needed. The product does not run one, and the Windows guide has a recipe ([When n8n cannot reach this machine](docs/install/windows.md#when-n8n-cannot-reach-this-machine)).
 - **Desktop steps** have no replay before an import's approval, no loops and no right-click, scroll or drag
-  ([Steps](docs/reference/steps.md#desktop-steps)). Their AI repair was tried on the ERP Demo sample app only.
+  ([Steps](docs/reference/steps.md#desktop-steps)). Their AI repair was tried on the ERP Demo sample app only, and
+  its screenshots with one chat model (Anthropic) only.
 - **AI-built and AI-repaired steps** read record IDs only (browser), and AI repair does not write.
 <!-- T2: self-repair status -->
 - **Queue mode** (several n8n workers): the version 2 node's switch that shares the login breaker through RPA Redis

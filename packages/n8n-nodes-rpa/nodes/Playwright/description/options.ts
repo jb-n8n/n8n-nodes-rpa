@@ -298,6 +298,15 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     displayOptions: withAiRepair,
   },
   {
+    displayName: 'Show the Model Screenshots',
+    name: 'showModelScreenshots',
+    type: 'boolean',
+    default: true,
+    noDataExpression: true,
+    description: `Whether AI repair of desktop steps also shows the chat model screenshots of the app's windows, with a number on each control. Before a screenshot leaves the runner, black boxes cover password fields, the fields the run typed into and every control showing a value the run masks. Off, the model reads the text view of the controls only. Browser steps never send screenshots. ${LITERAL}`,
+    displayOptions: { show: { '/operation': ['runSteps'], '/aiRepair': [true] }, hide: { '/runsOn': ['browser'] } },
+  },
+  {
     displayName: 'AI Repair Reset Key',
     name: 'repairResetKey',
     type: 'string',
