@@ -13,6 +13,9 @@ public sealed record WindowSel(string? Exe, string? Title, string? TitlePattern,
 /// <summary>UI Automation properties to match; <c>Index</c> picks among siblings that match the rest (0-based).</summary>
 public sealed record Cond(string? ControlType, string? AutomationId, string? Name, string? ClassName, int? Index)
 {
+    /// <summary>Matches every element (a search for all descendants).</summary>
+    public static readonly Cond Any = new(null, null, null, null, null);
+
     public override string ToString() => Describe.Fields(("controlType", ControlType), ("automationId", AutomationId),
         ("name", Name), ("className", ClassName), ("index", Index?.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 }

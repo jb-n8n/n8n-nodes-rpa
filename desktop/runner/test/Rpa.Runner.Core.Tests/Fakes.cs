@@ -42,6 +42,10 @@ public sealed class FakeNode : IUiNode
     public bool IsPassword { get; set; }
     public int ProcessId { get; set; }
     public string? Value { get; set; }
+
+    /// <summary>The bounding rectangle; null: it cannot be read. When <see cref="Gone"/>, reading it throws.</summary>
+    private PixelRect? _bounds;
+    public PixelRect? Bounds { get => Gone ? throw new ElementGoneException("gone") : _bounds; set => _bounds = value; }
     public FakeNode? Parent { get; private set; }
 
     public FakeNode Add(FakeNode child)
@@ -152,6 +156,36 @@ public sealed class FakeDesktop : IDesktop
     }
 
     public byte[] CaptureWindowPng(IUiNode window) => [0x89, 0x50, 0x4E, 0x47];
+
+    /// <summary>
+    /// Window captures for AI repair's picture. Without an entry, a window with <see cref="FakeNode.Bounds"/> is drawn in
+    /// <see cref="WindowColor"/> (one solid color per window, so a test can tell whose pixels a spot shows), and a window
+    /// without bounds is not drawn (as a minimized one).
+    /// </summary>
+    public Dictionary<string, WindowCapture> Captures { get; } = [];
+
+    /// <summary>The color a window is drawn in when it has no entry in <see cref="Captures"/>.</summary>
+    public Dictionary<string, (byte R, byte G, byte B)> WindowColor { get; } = [];
+
+    /// <summary>Child window processes a window reports (another application's embedded window, for the refusal).</summary>
+    public Dictionary<string, int[]> ChildProcesses { get; } = [];
+
+    public WindowCapture? CaptureWindow(IUiNode window)
+    {
+        var n = (FakeNode)window;
+        if (Captures.TryGetValue(n.Id, out var c)) return c;
+        if (n.Bounds is not { IsEmpty: false } b) return null;
+        var (r, g, bl) = WindowColor.TryGetValue(n.Id, out var col) ? col : ((byte)200, (byte)200, (byte)200);
+        var px = new byte[b.Width * b.Height * 4];
+        for (var i = 0; i < px.Length; i += 4)
+        {
+            px[i] = bl;
+            px[i + 1] = g;
+            px[i + 2] = r;
+            px[i + 3] = 255;
+        }
+        return new WindowCapture(b, px, ChildProcesses.TryGetValue(n.Id, out var pids) ? pids : []);
+    }
 
     /// <summary>The clipboard's Unicode text (null: no text on it). Setting it alone changes neither the owner nor the
     /// sequence number; <see cref="Copy"/> does what an application's copy does.</summary>

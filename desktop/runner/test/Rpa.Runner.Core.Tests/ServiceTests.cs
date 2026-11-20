@@ -36,7 +36,7 @@ public sealed class ServiceTests : IDisposable
     [Fact]
     public void Methods_other_than_hello_and_run_begin_need_the_active_run_id()
     {
-        foreach (var m in new[] { "run.heartbeat", "run.end", "app.launch", "snapshot", "isVisible", "resolve", "act", "windows", "file.retrieve", "screenshot", "clipboard.read" })
+        foreach (var m in new[] { "run.heartbeat", "run.end", "app.launch", "snapshot", "isVisible", "resolve", "act", "windows", "file.retrieve", "screenshot", "clipboard.read", "look" })
             _h.Err(m, new { runId = "nope" }, RpcErrors.NoRunCode);
         _h.Begin();
         _h.Err("snapshot", new { runId = "other" }, RpcErrors.NoRunCode);

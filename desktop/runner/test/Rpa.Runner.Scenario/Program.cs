@@ -240,6 +240,24 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 File.WriteAllBytes(Path.Combine(outDir, "screenshot-main.png"), png);
             });
 
+            await Step("look returns the snapshot and a masked, labelled PNG of the run's windows (AI repair's picture)", async () =>
+            {
+                // Every control whose name or value shows "1000-0001" (the detail box, the first cell) is covered.
+                var r = await Call("look", new { runId = _runId, labelStart = 1, mask = new[] { "1000-0001" } });
+                Expect(r["nodes"]!.AsArray().Count > 5, "the snapshot comes back");
+                if (r["picture"] is null)
+                {
+                    Expect(false, $"a picture (got noPicture: {r["noPicture"]})");
+                    return;
+                }
+                var png = Convert.FromBase64String(r["picture"]!["base64"]!.GetValue<string>());
+                Expect(png.Length > 100 && png[0] == 0x89 && png[1] == 'P', "PNG signature");
+                Expect(r["picture"]!["width"]!.GetValue<int>() <= 1280 && r["picture"]!["height"]!.GetValue<int>() <= 1280, "at most 1280 pixels on each side");
+                Expect(r["picture"]!["masked"]!.GetValue<int>() >= 1, $"the controls showing the masked text are covered (masked {r["picture"]!["masked"]})");
+                Expect(r["picture"]!["labels"]!.GetValue<int>() > 5, "the controls carry number labels");
+                File.WriteAllBytes(Path.Combine(outDir, "look-main.png"), png);
+            });
+
             await Step("a write control with write: true acts (Post)", async () =>
             {
                 await Act(TW(MainTitle, new { automationId = "btnPost" }), "click", new { write = true });

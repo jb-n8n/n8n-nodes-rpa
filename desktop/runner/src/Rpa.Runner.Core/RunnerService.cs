@@ -100,6 +100,7 @@ public sealed class RunnerService
         "windows" => WithRun(p, ct, Windows),
         "file.retrieve" => WithRun(p, ct, FileRetrieve, ui: false),
         "screenshot" => WithRun(p, ct, Screenshot),
+        "look" => WithRun(p, ct, Look),
         "clipboard.read" => WithRun(p, ct, ClipboardRead),
         _ => throw new RpcException(RpcErrors.MethodNotFound, "method_not_found", "method not found"),
     };
@@ -348,6 +349,8 @@ public sealed class RunnerService
         {
             try
             {
+                // Before the text goes out: a field that took even part of it is covered in AI repair's picture.
+                if (action == ActionKind.Type) run.NoteTypedInto(element.Id);
                 var outText = _desktop.Perform(new UiOperation(element, res.Window, action, text, chord, Remaining(deadline), Guard));
                 _log.Info($"act {action} candidate={res.Candidate}{(write ? " write" : "")}{(mode == ActMode.Repair ? " repair" : mode == ActMode.Probe ? " probe" : "")}");
                 var o = new JsonObject();
@@ -683,6 +686,101 @@ public sealed class RunnerService
         RequireSession();
         var window = _scope.CurrentWindow(run) ?? throw RpcErrors.NotFound("a window of the run", null);
         return new JsonObject { ["base64"] = Convert.ToBase64String(_desktop.CaptureWindowPng(window)) };
+    }
+
+    /// <summary>The most masked texts a look takes, and the longest one.</summary>
+    public const int MaxMaskTexts = 64;
+    public const int MaxMaskTextLength = 4096;
+
+    /// <summary>
+    /// AI repair's look: the snapshot of a window (as <c>snapshot</c>) and, when it can be made, the masked, labelled picture
+    /// of the run's windows (RepairPicture): node i of the snapshot is labelled <c>labelStart + i</c>. <c>mask</c> lists the
+    /// texts whose controls are covered (the engine's typed variable values and clipboard texts); the runner also covers
+    /// password and credential-like fields and every control the run typed into. When no picture can be made safely the
+    /// answer has <c>noPicture</c> with the reason instead, and the snapshot alone. The picture is never logged.
+    /// </summary>
+    private JsonNode Look(RunState run, Params p, CancellationToken ct)
+    {
+        var sel = p.OptWindow("window");
+        var maxNodes = (int)(p.OptLong("maxNodes", 1, 5000) ?? DefaultMaxNodes);
+        var maxDepth = (int)(p.OptLong("maxDepth", 1, 100) ?? DefaultMaxDepth);
+        var labelStart = p.ReqLong("labelStart", 0, 1_000_000_000);
+        var maxEdge = (int)(p.OptLong("maxEdge", 64, RepairPicture.MaxEdge) ?? RepairPicture.MaxEdge);
+        var masks = MaskTexts(p);
+        RequireSession();
+        var window = _scope.CurrentWindow(run, sel)
+                     ?? throw RpcErrors.NotFound(sel is null ? "a window of the run" : $"window {sel}", null);
+        var sources = new List<IUiNode>();
+        var result = SnapshotBuilder.Build(window, maxNodes, maxDepth, sources);
+        var nodes = new JsonArray();
+        foreach (var n in result.Nodes) nodes.Add(System.Text.Json.JsonSerializer.SerializeToNode(n));
+        var o = new JsonObject
+        {
+            ["window"] = new JsonObject { ["title"] = window.Name, ["exe"] = _scope.ExeOf(window.ProcessId) ?? "" },
+            ["nodes"] = nodes,
+        };
+        if (result.Truncated) o["truncated"] = true;
+        var marks = sources.Select((e, i) => new RepairPicture.Mark(labelStart + i, e)).ToList();
+        try
+        {
+            var pic = Picture(run, window, marks, masks, maxEdge, ct);
+            o["picture"] = new JsonObject
+            {
+                ["mime"] = "image/png", ["base64"] = Convert.ToBase64String(pic.Png), ["width"] = pic.Width, ["height"] = pic.Height,
+                ["masked"] = pic.Masked, ["labels"] = pic.Labels,
+            };
+            _log.Info($"look picture {pic.Width}x{pic.Height} masked={pic.Masked} labels={pic.Labels}");
+        }
+        catch (PictureRefusedException e)
+        {
+            o["noPicture"] = e.Message;
+            _log.Info($"look no picture: {e.Message}");
+        }
+        return o;
+    }
+
+    private static IReadOnlyList<string> MaskTexts(Params p)
+    {
+        if (!p.Root.TryGetProperty("mask", out var v) || v.ValueKind == System.Text.Json.JsonValueKind.Null) return [];
+        if (v.ValueKind != System.Text.Json.JsonValueKind.Array) throw RpcErrors.InvalidParamsError("mask must be an array of strings");
+        var list = new List<string>();
+        foreach (var e in v.EnumerateArray())
+        {
+            if (e.ValueKind != System.Text.Json.JsonValueKind.String) throw RpcErrors.InvalidParamsError("mask must be an array of strings");
+            var t = e.GetString()!;
+            if (t.Length > MaxMaskTextLength) throw RpcErrors.InvalidParamsError($"a mask text may be at most {MaxMaskTextLength} characters");
+            list.Add(t);
+        }
+        if (list.Count > MaxMaskTexts) throw RpcErrors.InvalidParamsError($"mask may hold at most {MaxMaskTexts} texts");
+        return list;
+    }
+
+    /// <summary>The picture, tried up to three times while the UI changes under it; then refused, never partly checked.</summary>
+    private RepairPicture.Result Picture(RunState run, IUiNode shown, IReadOnlyList<RepairPicture.Mark> marks, IReadOnlyList<string> masks, int maxEdge, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                var layers = new List<RepairPicture.Layer>();
+                foreach (var w in _scope.RunWindows(run, null).Take(MaxWindows))
+                {
+                    var c = _desktop.CaptureWindow(w);
+                    if (c is not null) layers.Add(new RepairPicture.Layer(w, c));
+                }
+                if (!layers.Any(l => l.Window.Id == shown.Id)) throw new PictureRefusedException("the window shown could not be captured");
+                return RepairPicture.Make(layers, pid => _scope.IsRunProcess(run, pid), run.WasTypedInto, masks, marks, maxEdge);
+            }
+            catch (ElementGoneException) when (attempt < 3)
+            {
+                ct.ThrowIfCancellationRequested();
+                Thread.Sleep(TargetResolver.PollInterval);
+            }
+            catch (ElementGoneException)
+            {
+                throw new PictureRefusedException("the UI kept changing while the runner checked what to cover");
+            }
+        }
     }
 
     /// <summary>

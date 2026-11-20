@@ -458,6 +458,40 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
         return ms.ToArray();
     }
 
+    /// <summary>
+    /// The window's own pixels through PrintWindow (PW_RENDERFULLCONTENT): never the screen, so whatever overlaps it,
+    /// another application's window included, is not in it. Its child windows' processes are listed so the core can refuse
+    /// a window that embeds another application's.
+    /// </summary>
+    public WindowCapture? CaptureWindow(IUiNode window)
+    {
+        var h = window is UiaNode u ? u.Handle : window is HwndNode hn ? hn.Handle : IntPtr.Zero;
+        if (h == IntPtr.Zero) throw new ElementGoneException("the window has no handle");
+        if (Native.IsIconic(h) || !Native.IsWindowVisible(h)) return null;
+        if (!Native.GetWindowRect(h, out var r)) throw new ElementGoneException("the window's position cannot be read");
+        var width = r.Right - r.Left;
+        var height = r.Bottom - r.Top;
+        if (width <= 0 || height <= 0) return null;
+        using var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            var hdc = g.GetHdc();
+            try
+            {
+                if (!Native.PrintWindow(h, hdc, Native.PW_RENDERFULLCONTENT)) throw new ElementGoneException("the window could not be drawn");
+            }
+            finally { g.ReleaseHdc(hdc); }
+        }
+        var data = bmp.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        var bytes = new byte[width * height * 4];
+        try
+        {
+            for (var y = 0; y < height; y++) Marshal.Copy(data.Scan0 + y * data.Stride, bytes, y * width * 4, width * 4);
+        }
+        finally { bmp.UnlockBits(data); }
+        return new WindowCapture(new PixelRect(r.Left, r.Top, width, height), bytes, Native.ChildWindowProcesses(h));
+    }
+
     public uint GetClipboardSequenceNumber() => Native.GetClipboardSequenceNumber();
 
     /// <summary>

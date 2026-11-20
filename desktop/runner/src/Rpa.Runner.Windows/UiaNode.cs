@@ -40,6 +40,12 @@ internal sealed class UiaNode : IUiNode
     public int ProcessId => Guard(() => Element.Properties.ProcessId.ValueOrDefault);
     public IntPtr Handle => Guard(() => Element.Properties.NativeWindowHandle.ValueOrDefault);
 
+    public PixelRect? Bounds => Guard(() =>
+    {
+        if (!Element.Properties.BoundingRectangle.TryGetValue(out var r)) return (PixelRect?)null;
+        return new PixelRect(r.X, r.Y, r.Width, r.Height);
+    });
+
     public string? Value => Guard(() =>
     {
         if (!Element.Patterns.Value.IsSupported) return null;
@@ -81,7 +87,7 @@ internal sealed class UiaNode : IUiNode
         if (cond.ClassName is not null) parts.Add(cf.ByClassName(cond.ClassName));
         // The control view, like the tree walker GetChildren and GetParent use.
         parts.Add(new PropertyCondition(_automation.PropertyLibrary.Element.IsControlElement, true));
-        ConditionBase condition = new AndCondition(parts.ToArray());
+        ConditionBase condition = parts.Count == 1 ? parts[0] : new AndCondition(parts.ToArray());
         return Element.FindAll(TreeScope.Descendants, condition).Select(e => (IUiNode)new UiaNode(_automation, e)).ToList();
     });
 
@@ -120,6 +126,7 @@ internal sealed class HwndNode(IntPtr hwnd) : IUiNode
     public int ProcessId => Native.PidOf(hwnd);
     public string? Value => null;
     public IntPtr Handle => hwnd;
+    public PixelRect? Bounds => Native.GetWindowRect(hwnd, out var r) ? new PixelRect(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top) : null;
     public IReadOnlyList<IUiNode> GetChildren() => [];
     public IUiNode? GetParent() => null;
     // Its contents cannot be read, so it cannot answer "holds no write control": callers that fail closed on a gone

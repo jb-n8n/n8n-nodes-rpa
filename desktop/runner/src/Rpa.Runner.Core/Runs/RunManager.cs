@@ -55,6 +55,20 @@ public sealed class RunState
     /// <summary>Probe acts the run made (RunnerService.MaxProbesPerRun caps them).</summary>
     internal int Probes { get; set; }
 
+    private readonly HashSet<string> _typedInto = new(StringComparer.Ordinal);
+
+    /// <summary>Records an element the run typed into (by its runtime id): AI repair's picture covers it (RepairPicture).</summary>
+    internal void NoteTypedInto(string elementId)
+    {
+        lock (_gate) _typedInto.Add(elementId);
+    }
+
+    /// <summary>Whether the run typed into the element.</summary>
+    internal bool WasTypedInto(string elementId)
+    {
+        lock (_gate) return _typedInto.Contains(elementId);
+    }
+
     /// <summary>The run's most recent act: the clipboard's sequence number right before it, and when it finished (or
     /// started, while it is still running). Null before the run's first act. clipboard.read compares against it.</summary>
     internal ActMark? LastAct { get; set; }

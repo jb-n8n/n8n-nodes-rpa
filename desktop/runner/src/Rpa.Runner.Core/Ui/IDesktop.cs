@@ -26,6 +26,10 @@ public interface IUiNode
     /// <summary>The value (UI Automation ValuePattern), or null when the element has none.</summary>
     string? Value { get; }
 
+    /// <summary>The bounding rectangle on the screen (physical pixels; empty when nothing of it is shown), or null when it
+    /// cannot be read.</summary>
+    PixelRect? Bounds { get; }
+
     IReadOnlyList<IUiNode> GetChildren();
 
     IUiNode? GetParent();
@@ -91,6 +95,13 @@ public interface IDesktop
 
     /// <summary>A PNG of one window (its own pixels, not what overlaps it).</summary>
     byte[] CaptureWindowPng(IUiNode window);
+
+    /// <summary>
+    /// One top-level window's own pixels (not what overlaps it) and the processes of its child windows, for AI repair's
+    /// masked picture (RepairPicture). Null when the window is minimized or has no size. Throws ElementGoneException when
+    /// it went away.
+    /// </summary>
+    WindowCapture? CaptureWindow(IUiNode window);
 
     /// <summary>
     /// The clipboard's sequence number (GetClipboardSequenceNumber): it changes every time the clipboard's content

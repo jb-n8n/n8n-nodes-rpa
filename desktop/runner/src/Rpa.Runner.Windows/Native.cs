@@ -302,6 +302,21 @@ internal static partial class Native
         return (int)pid;
     }
 
+    [DllImport("user32.dll")]
+    public static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    /// <summary>The processes of every child window (at any depth) of a window, each once.</summary>
+    public static List<int> ChildWindowProcesses(IntPtr hwnd)
+    {
+        var pids = new HashSet<int>();
+        EnumChildWindows(hwnd, (h, _) =>
+        {
+            pids.Add(PidOf(h));
+            return true;
+        }, IntPtr.Zero);
+        return pids.ToList();
+    }
+
     /// <summary>Visible top-level windows, front to back (EnumWindows returns them in z-order).</summary>
     public static List<IntPtr> VisibleTopLevelWindows()
     {

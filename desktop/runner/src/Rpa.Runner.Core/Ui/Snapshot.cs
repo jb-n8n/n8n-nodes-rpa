@@ -35,7 +35,9 @@ public static class SnapshotBuilder
 
     public sealed record Result(IReadOnlyList<SnapshotNode> Nodes, bool Truncated);
 
-    public static Result Build(IUiNode window, int maxNodes, int maxDepth)
+    /// <param name="sources">When given, gets the element behind each emitted node, in the same order (AI repair's
+    /// picture labels them).</param>
+    public static Result Build(IUiNode window, int maxNodes, int maxDepth, List<IUiNode>? sources = null)
     {
         var nodes = new List<SnapshotNode>();
         var truncated = false;
@@ -55,7 +57,11 @@ public static class SnapshotBuilder
                 offscreen = !root && n.IsOffscreen;
                 if (offscreen) return;
                 emit = root || !(Flattenable.Contains(n.ControlType) && n.Name.Length == 0 && n.AutomationId.Length == 0);
-                if (emit) nodes.Add(ToNode(n, $"n{nodes.Count}", depth));
+                if (emit)
+                {
+                    nodes.Add(ToNode(n, $"n{nodes.Count}", depth));
+                    sources?.Add(n);
+                }
             }
             catch (ElementGoneException)
             {
