@@ -22,15 +22,19 @@ export const AGENT_OUT_OF_BUDGET = 'the agent ran out of budget';
 /** The circle guard stopped the agent: `the repair went in circles: …` (`the AI …` on a first build). */
 export const WENT_IN_CIRCLES = 'went in circles';
 /** What a repair used, as one sentence: `It used 4 chat model calls and 27,321 tokens.` */
-export function costSentence(llmCalls: number, tokens: number): string {
+export function costSentence(llmCalls: number, tokens: number, pictures?: { count: number; tokens: number }): string {
   const n = (x: number) => x.toLocaleString('en-US');
-  return `It used ${n(llmCalls)} chat model ${llmCalls === 1 ? 'call' : 'calls'} and ${n(tokens)} tokens.`;
+  // Desktop repair's screenshots: the provider reports them inside the input tokens; their share is an estimate.
+  const shots = pictures && pictures.count > 0
+    ? `, about ${n(Math.min(pictures.tokens, tokens))} of them for ${n(pictures.count)} ${pictures.count === 1 ? 'screenshot' : 'screenshots'}`
+    : '';
+  return `It used ${n(llmCalls)} chat model ${llmCalls === 1 ? 'call' : 'calls'} and ${n(tokens)} tokens${shots}.`;
 }
 
 /** An agent-lane failure once the model was called: the message ends with what it used. */
-export function withCost(message: string, llmCalls: number, tokens: number): string {
+export function withCost(message: string, llmCalls: number, tokens: number, pictures?: { count: number; tokens: number }): string {
   if (llmCalls <= 0) return message;
-  return `${message}${/[.!?]$/.test(message) ? '' : '.'} ${costSentence(llmCalls, tokens)}`;
+  return `${message}${/[.!?]$/.test(message) ? '' : '.'} ${costSentence(llmCalls, tokens, pictures)}`;
 }
 
 // Agent lane: the run ended on a login outcome after the agent's own sign_in.

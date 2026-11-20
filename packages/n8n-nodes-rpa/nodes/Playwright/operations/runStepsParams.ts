@@ -71,6 +71,8 @@ export interface RunStepsParams {
   breakerResetKey: string;
   /** Options → AI Repair Reset Key: a new value lets a repair that failed try again (repair-stop.ts). */
   repairResetKey: string;
+  /** Show the Model Screenshots (desktop AI repair; literal). */
+  showModelScreenshots: boolean;
   /** Options → One-Time Code Workflow: the workflow ID, '' when not set. */
   codeWorkflowId: string;
   /** Options → Code Timeout (Seconds), in ms. */
@@ -167,6 +169,8 @@ export function readRunStepsParams(ctx: NodeContext, i: number): RunStepsParams 
   const breakerResetKey = literalString(ctx, 'options.breakerResetKey', 'Login Breaker Reset Key');
   // Literal too: a per-item or per-run value would let every run try a failed repair again.
   const repairResetKey = literalString(ctx, 'options.repairResetKey', 'AI Repair Reset Key');
+  // Literal: item data must not turn screenshots on where the owner turned them off.
+  const showModelScreenshots = literalBoolean(ctx, i, 'options.showModelScreenshots', 'Show the Model Screenshots', true);
   const common = readCommonOptions(ctx, i);
   const options = get('options', {});
   const opt = (name: string): unknown => field(options, name);
@@ -195,6 +199,7 @@ export function readRunStepsParams(ctx: NodeContext, i: number): RunStepsParams 
     maxTokens: clamp(Math.floor(asNumber(opt('maxTokens'), 200_000)), 1000, 1_000_000),
     breakerResetKey,
     repairResetKey,
+    showModelScreenshots,
     ...codeWorkflowOptions(ctx, opt),
     common,
   };

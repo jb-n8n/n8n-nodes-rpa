@@ -1,5 +1,6 @@
 // How steps AI repair added or changed act before approval (DesktopSurface.changedSteps), the engine's deny list on
 // names and ids, add_step after a failed check, and the per-fix cap checked before any click.
+import { modelMessageText, type ModelMessage } from '../src/agent/model.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRunner } from '../src/desktop/client.js';
 import { CHANGED_STEP_DESTRUCTIVE, CHANGED_STEP_NOT_RUN } from '../src/desktop/handlers.js';
@@ -139,7 +140,7 @@ function signed(script: DesktopScript) {
   if (!s.ok) throw new Error(s.reasons.join('; '));
   return { script: JSON.parse(JSON.stringify(s.row.steps)) as unknown, trust: { required: true, signature: s.row.signature, approvedBy: OWNER, key: KEY } };
 }
-const latestView = (messages: { content: string }[]): string => [...messages].reverse().find((m) => m.content.includes('<page_content>'))?.content ?? '';
+const latestView = (messages: ModelMessage[]): string => [...messages].map(modelMessageText).reverse().find((t) => t.includes('<page_content>')) ?? '';
 function ref(text: string, controlType: string, name: string | RegExp): string {
   const view = text.slice(text.lastIndexOf('<page_content>'));
   const m = [...view.matchAll(/^\s*\[(e\d+)\] (\S+) "([^"]*)"/gm)].find((x) => x[2] === controlType && (typeof name === 'string' ? x[3] === name : name.test(x[3]!)));

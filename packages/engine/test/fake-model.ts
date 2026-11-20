@@ -1,5 +1,6 @@
 // Deterministic drivers for the agent loop: each turn returns the next scripted tool call(s).
-import type { ChatMessage, ChatModel, ChatResponse } from '../src/agent/model.js';
+import { modelMessageText, type ChatModel, type ChatResponse, type ModelMessage } from '../src/agent/model.js';
+import { DESKTOP_PICTURE_CAPTION } from '../src/desktop/repair/prompt.js';
 import type { ToolDef } from '../src/agent/tools.js';
 
 /** The ref of the element with this exact name (or matching this pattern) in the latest snapshot inside `text`. */
@@ -16,22 +17,28 @@ export function refByName(text: string, name: string | RegExp): string {
   return found;
 }
 
-/** The text the model last observed: the latest tool result, or the first user message. */
-export function lastObservation(messages: ChatMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === 'tool' || messages[i].role === 'user') return messages[i].content;
+/** The text the model last observed: the latest tool result, or the first user message (a screenshot's caption is skipped). */
+export function lastObservation(messages: ModelMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'tool' && m.role !== 'user') continue;
+    const text = modelMessageText(m);
+    if (m.role === 'user' && text.startsWith(DESKTOP_PICTURE_CAPTION)) continue;
+    return text;
+  }
   return '';
 }
 
 export type FakeCall = { name: string; args?: Record<string, unknown> };
-export type FakeTurn = (lastText: string, messages: ChatMessage[]) => FakeCall | FakeCall[] | null;
+export type FakeTurn = (lastText: string, messages: ModelMessage[]) => FakeCall | FakeCall[] | null;
 export interface FakeModel extends ChatModel {
-  readonly invocations: ChatMessage[][];
+  readonly invocations: ModelMessage[][];
   readonly texts: string[];
   readonly tools: ToolDef[];
 }
 
 export function fakeModel(turns: FakeTurn[], opts: { tokensPerCall?: number } = {}): FakeModel {
-  const invocations: ChatMessage[][] = [];
+  const invocations: ModelMessage[][] = [];
   const texts: string[] = [];
   let tools: ToolDef[] = [];
   let turn = 0;
@@ -42,7 +49,7 @@ export function fakeModel(turns: FakeTurn[], opts: { tokensPerCall?: number } = 
     bindTools(defs: ToolDef[]) {
       tools = defs;
       return {
-        async invoke(messages: ChatMessage[]): Promise<ChatResponse> {
+        async invoke(messages: ModelMessage[]): Promise<ChatResponse> {
           invocations.push(structuredClone(messages));
           const last = lastObservation(messages);
           texts.push(last);

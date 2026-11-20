@@ -24,8 +24,8 @@ export const DESKTOP_NO_UNCONFIRMED = 'Deliver Unconfirmed Rows applies to brows
  * failed repair ends with (costLine). Shown only: neither the digest nor the signature covers them, and Sign Steps reads
  * neither, so an item with other numbers signs the same steps the same way.
  */
-export function repairCost(engine: Engine, llmCalls: number, tokens: number): IDataObject {
-  return { llmCalls, llmTokens: tokens, costLine: engine.costSentence(llmCalls, tokens) };
+export function repairCost(engine: Engine, llmCalls: number, tokens: number, pictures?: { count: number; tokens: number }): IDataObject {
+  return { llmCalls, llmTokens: tokens, costLine: engine.costSentence(llmCalls, tokens, pictures) };
 }
 
 export const DESKTOP_NO_ROW_CHECKS = 'Row checks (ID Pattern, Stated Total Pattern, Required Fields, Text That Means No Results) do not apply to desktop steps: clear them.';
@@ -66,6 +66,8 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
         goal: p.goal,
         agentBudget: { maxActions: p.maxActions, maxTokens: p.maxTokens },
         alreadyRan: repairAlreadyRan(ctx),
+        // The runner's masked, labelled screenshots (Show the Model Screenshots). No film folder: that is for engine scripts only.
+        pictures: p.showModelScreenshots,
       }
     : undefined;
   // A repair that failed for these steps and Goal is not tried again until a person acts (repair-stop.ts).
@@ -113,7 +115,7 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
     // used is on the item either way (shown only: outside the digest, and Sign Steps never reads it).
     try {
       const repaired: INodeExecutionData = {
-        json: { ...desktopRepairedStepsJson(engine, r.proposal, undefined, p.secretVars), ...repairCost(engine, r.llmCalls, r.tokens) }, pairedItem: paired,
+        json: { ...desktopRepairedStepsJson(engine, r.proposal, undefined, p.secretVars), ...repairCost(engine, r.llmCalls, r.tokens, r.pictures) }, pairedItem: paired,
       };
       if (!r.completed) return { kind: 'ok', repaired };
       const files = r.files;

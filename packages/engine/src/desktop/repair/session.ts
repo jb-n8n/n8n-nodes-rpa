@@ -6,7 +6,7 @@
 // like a write is not run at all: the repair stops before it, and the proof resolves it without acting.
 import { createHash } from 'node:crypto';
 import { driveAgentLoop, type AgentBudget, type LoopCore } from '../../agent/loop.js';
-import type { ChatModel } from '../../agent/model.js';
+import type { ChatImage, ChatModel } from '../../agent/model.js';
 import type { ToolCall } from '../../agent/tools.js';
 import { neutralize } from '../../agent/tools.js';
 import { looksDestructive } from '../../policy/destructive.js';
@@ -18,8 +18,10 @@ import { PolicyRefusedError, RunnerError, type RunnerAction, type RunnerWindow }
 import { runnerTarget, type ChangedStep, type DesktopSurface, type DesktopView } from '../surface.js';
 import { desktopCandidatesFor, TargetError } from './candidates.js';
 import { compileFix, PatchError, unrepairable, type AddedKind, type FailedPart, type Recorded } from './patch.js';
+import { filmWriter, type FilmWriter } from './film.js';
 import {
-  DESKTOP_AGENT_TOOL_NAMES, DESKTOP_AGENT_TOOLS, DESKTOP_CIRCLE_NUDGE_TEXT, desktopNextFailureText, desktopRepairFirstMessage, desktopRepairSystemPrompt,
+  DESKTOP_AGENT_TOOL_NAMES, DESKTOP_AGENT_TOOLS, DESKTOP_CIRCLE_NUDGE_TEXT, DESKTOP_PICTURE_CAPTION, desktopNextFailureText, desktopRepairFirstMessage,
+  desktopRepairSystemPrompt,
 } from './prompt.js';
 import { buildTree, type TreeNode } from './tree.js';
 
@@ -70,6 +72,10 @@ export interface DesktopRepairHandoff {
   classify(index: number, message: string): FailureClass;
   /** A fixed wait for steps the repair runs on (tests); default runOnWaitMs of the run's log so far. */
   runOnWaitMs?: number;
+  /** Each view also goes to the model as the runner's masked, labelled screenshot (DesktopRepairInput.pictures). */
+  pictures?: boolean;
+  /** A local folder for the film of what the model saw (DesktopRepairInput.debugFilmDir): engine scripts only. */
+  debugFilmDir?: string;
 }
 
 /**
@@ -205,12 +211,37 @@ export class DesktopRepairSession {
   private progress = false;
   /** Names of the menu-bar headers (MenuItem directly under a MenuBar) seen in any view. */
   private topHeaders = new Set<string>();
+  /** Screenshots go with each view until the chat model does not take one (picturesRefused). */
+  private picturesOn: boolean;
+  /** The latest view's picture, not yet handed to the loop. */
+  private pending: ChatImage[] | undefined;
+  /** The picture the model saw last (the film's), and the masked names of the latest view's refs. */
+  private seenPicture: ChatImage | undefined;
+  private names = new Map<string, string>();
+  private readonly film: FilmWriter | undefined;
 
   constructor(private readonly h: DesktopRepairHandoff) {
     this.doc = structuredClone(h.base);
     this.marks = h.base.steps.map(() => undefined);
     this.isNew = h.base.steps.map(() => false);
     this.failure = h.failure;
+    this.picturesOn = h.pictures === true;
+    this.film = h.debugFilmDir ? filmWriter(h.debugFilmDir) : undefined;
+  }
+
+  /** The chat model did not take a picture: views go on as text only. */
+  picturesRefused(): void {
+    this.picturesOn = false;
+    this.pending = undefined;
+    this.seenPicture = undefined;
+  }
+
+  /** The pictures for the model with the latest result (each once). */
+  private takePictures(): ChatImage[] | undefined {
+    const p = this.pending;
+    this.pending = undefined;
+    if (p?.length) this.seenPicture = p[p.length - 1];
+    return p;
   }
 
   private get surface(): DesktopSurface { return this.h.surface; }
@@ -223,7 +254,8 @@ export class DesktopRepairSession {
     this.lastWindows = wins;
     const chosen = window !== undefined && Number.isInteger(window) && window > 0 ? wins[window] : undefined;
     if (window !== undefined && !chosen) throw new ToolError(`there is no window ${String(window).slice(0, 10)}; use a number from "Other windows"`);
-    const view = await this.surface.view(this.masker, chosen ? { window: selectorOf(chosen) } : {});
+    const view = await this.surface.view(this.masker, { ...(chosen ? { window: selectorOf(chosen) } : {}), ...(this.picturesOn ? { picture: true } : {}) });
+    this.names = new Map(view.items.map((it) => [it.ref, it.name]));
     const raw = this.surface.rawItems();
     const byRef = new Map(raw.map((i) => [i.ref, i]));
     for (const i of raw) if (i.controlType === 'MenuItem' && i.parent && byRef.get(i.parent)?.controlType === 'MenuBar' && i.name) this.topHeaders.add(i.name);
@@ -235,20 +267,48 @@ export class DesktopRepairSession {
     }
     const m = this.masker;
     const others = wins.map((w, i) => (i === 0 ? '' : `[${i}] "${maskClipped(m, w.title, 80)}" (${maskClipped(m, w.exe, 60)})`)).filter(Boolean);
-    return renderView(view, others);
+    const text = renderView(view, others);
+    if (!this.picturesOn) return text;
+    // One picture per view; a newer view replaces one not yet sent. The runner made it masked, or said why it did not.
+    if (view.picture) {
+      const { masked, ...picture } = view.picture;
+      this.pending = [picture];
+      return `${text}\nScreenshot: sent with this view (${picture.width}x${picture.height} pixels${masked ? `, ${masked} area${masked === 1 ? '' : 's'} covered black` : ''}).`;
+    }
+    this.pending = undefined;
+    return `${text}\nScreenshot: none this time (${neutralize(view.noPicture ?? 'no reason given')}); use the text view.`;
   }
 
-  /** The first user message: the failed step, the steps around it and the first view. */
-  async first(): Promise<string> {
+  /** The first user message: the failed step, the steps around it and the first view (with its picture). */
+  async first(): Promise<{ text: string; images?: ChatImage[] }> {
     const i = this.failure.index;
-    return desktopRepairFirstMessage({
+    const text = desktopRepairFirstMessage({
       stepNumber: i + 1, intent: this.failure.intent, message: this.failure.message,
       before: this.doc.steps.slice(0, i).map((s) => s.intent), after: this.doc.steps.slice(i + 1).map((s) => s.intent), view: await this.look(),
     }, this.masker);
+    const images = this.takePictures();
+    return { text, ...(images ? { images } : {}) };
+  }
+
+  /** The model's move as the film names it: the tool, the ref and the control's masked name from the view it chose from. */
+  private moveText(call: ToolCall): string {
+    const args = call.args && typeof call.args === 'object' ? call.args : {};
+    const ref = typeof args.ref === 'string' ? args.ref : undefined;
+    const name = ref ? this.names.get(ref) : undefined;
+    const reason = typeof args.reason === 'string' ? `: ${neutralize(this.masker.mask(args.reason)).slice(0, 200)}` : '';
+    const win = typeof args.window === 'number' ? ` window ${args.window}` : '';
+    return `${String(call.name).slice(0, 40)}${ref ? ` ${ref.slice(0, 10)}${name ? ` (${name})` : ''}` : ''}${win}${reason}`;
   }
 
   /** Runs one tool call and counts it for the circle guard. */
-  async run(call: ToolCall): Promise<{ text: string; error: boolean; done?: { outcome: 'repaired' | 'gave_up' | 'failed'; note: string } }> {
+  async run(call: ToolCall): Promise<{ text: string; error: boolean; done?: { outcome: 'repaired' | 'gave_up' | 'failed'; note: string }; images?: ChatImage[] }> {
+    this.film?.move(this.moveText(call), this.seenPicture);
+    const out = await this.runCounted(call);
+    const images = out.done ? undefined : this.takePictures();
+    return { ...out, ...(images ? { images } : {}) };
+  }
+
+  private async runCounted(call: ToolCall): Promise<{ text: string; error: boolean; done?: { outcome: 'repaired' | 'gave_up' | 'failed'; note: string } }> {
     const key = this.actionKey(call);
     this.progress = false;
     const name = String(call.name).slice(0, 40);
@@ -607,8 +667,9 @@ export async function runDesktopRepairSession(h: DesktopRepairHandoff): Promise<
   const session = new DesktopRepairSession(h);
   const loop = await driveAgentLoop<'repaired' | 'gave_up' | 'failed'>({
     model: h.model, tools: session, toolDefs: DESKTOP_AGENT_TOOLS, toolNames: DESKTOP_AGENT_TOOL_NAMES,
-    system: desktopRepairSystemPrompt({ ...(h.goal ? { goal: h.goal } : {}), exe: h.base.app.exe }),
+    system: desktopRepairSystemPrompt({ ...(h.goal ? { goal: h.goal } : {}), exe: h.base.app.exe, pictures: h.pictures === true }),
     first: () => session.first(), unreadable: 'the app could not be read', masker: liveMasker(h.mask), budget: h.budget,
+    pictureCaption: DESKTOP_PICTURE_CAPTION, picturesRefused: () => session.picturesRefused(),
     ...(h.signal ? { signal: h.signal } : {}),
     nudgeText: DESKTOP_CIRCLE_NUDGE_TEXT,
     circlingNote: (n) => `it did the same action on the same screen ${n} times without finding anything new`,

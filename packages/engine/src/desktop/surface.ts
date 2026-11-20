@@ -1,3 +1,4 @@
+import type { ChatImage } from '../agent/model.js';
 import type { Snapshot, SnapshotElement, SnapshotOptions } from '../agent/snapshot.js';
 import { RUNNER_TOO_OLD_FOR_CLIPBOARD } from '../messages.js';
 import { hidesValue } from '../secrets/credential-field.js';
@@ -69,7 +70,14 @@ export interface DesktopViewItem {
  * snapshot()'s `refStart`, so a view ref and a snapshot ref may share a name. snapshot() clears both ref maps; view()
  * clears only its own, so the last snapshot's `refs` survive a view: never look a view ref up in `refs`.
  */
-export interface DesktopView { window: { title: string; exe: string }; truncated: boolean; items: DesktopViewItem[] }
+export interface DesktopView {
+  window: { title: string; exe: string }; truncated: boolean; items: DesktopViewItem[];
+  /** With `picture` asked for: the masked, labelled screenshot (label 12 is ref e12), or why there is none. */
+  picture?: ChatImage & { masked: number };
+  noPicture?: string;
+}
+/** The view's note when the runner has no `look` method. */
+export const RUNNER_TOO_OLD_FOR_PICTURES = 'the desktop runner is too old to send a screenshot; update it';
 /** The raw runner node behind a view ref (unmasked: for the engine only, never for a message). */
 export interface DesktopViewNode { node: RunnerNode; parent?: string; window: { title: string; exe: string }; truncated: boolean }
 
@@ -129,7 +137,7 @@ export interface DesktopSurface extends Surface {
    * credential-like values are never shown. Refs continue a counter of this surface, so they never repeat across views.
    * Does not change the window `address()` names.
    */
-  view(masker: Masker, opts?: { window?: WindowSel; maxNodes?: number }): Promise<DesktopView>;
+  view(masker: Masker, opts?: { window?: WindowSel; maxNodes?: number; picture?: boolean }): Promise<DesktopView>;
   /** The raw node behind a ref of the last view; undefined after a newer view or snapshot. */
   nodeOf(ref: string): DesktopViewNode | undefined;
   /**
@@ -163,6 +171,8 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
   /** The raw nodes of the last view, by ref; cleared on every view and snapshot. */
   const viewNodes = new Map<string, DesktopViewNode>();
   let nextViewRef = 1;
+  /** The runner answered `look` with "method not found": views go back to `snapshot` for the rest of the run. */
+  let noLook = false;
 
   const record = (err: unknown) => {
     const at = current() ?? -1;
@@ -251,9 +261,26 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
         throw err;
       }
     },
-    async view(given: Masker, opts: { window?: WindowSel; maxNodes?: number } = {}): Promise<DesktopView> {
+    async view(given: Masker, opts: { window?: WindowSel; maxNodes?: number; picture?: boolean } = {}): Promise<DesktopView> {
       viewNodes.clear();
-      const snap = await rpc('snapshot', { ...(opts.window ? { window: opts.window } : {}), maxNodes: opts.maxNodes ?? 400 });
+      const params = { ...(opts.window ? { window: opts.window } : {}), maxNodes: opts.maxNodes ?? 400 };
+      // The runner covers the controls showing these texts in the picture (and what the run typed, and password fields).
+      const maskTexts = [...typed, ...clipboard].filter((t) => t.length >= MIN_MASKED_TYPED).slice(-64);
+      let snap: RunnerMethods['look']['result'];
+      let noPicture: string | undefined;
+      if (opts.picture && !noLook) {
+        try {
+          snap = await call('look', { ...params, labelStart: nextViewRef, mask: maskTexts });
+        } catch (err) {
+          if (!(err instanceof RunnerError && err.code === METHOD_NOT_FOUND)) { record(err); throw err; }
+          noLook = true;
+          snap = await rpc('snapshot', params);
+          noPicture = RUNNER_TOO_OLD_FOR_PICTURES;
+        }
+      } else {
+        snap = await rpc('snapshot', params);
+        if (opts.picture) noPicture = RUNNER_TOO_OLD_FOR_PICTURES;
+      }
       // The run's typed variable values and clipboard texts are masked here too, whatever masker the caller built.
       const long = [...typed, ...clipboard].filter((t) => t.length >= MIN_MASKED_TYPED && !given.secrets.includes(t));
       const masker = long.length ? createMasker([...given.secrets, ...long]) : given;
@@ -277,7 +304,16 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
           ...(value ? { value } : {}), ...(hidden && (n.valueHidden || n.value) ? { valueHidden: true as const } : {}),
         };
       });
-      return { window: { title: masker.mask(raw.title).slice(0, 200), exe: masker.mask(raw.exe) }, truncated, items };
+      const pic = snap.picture;
+      const picture = opts.picture && pic && typeof pic.base64 === 'string' && pic.base64.length > 0 && pic.mime === 'image/png'
+        && Number.isInteger(pic.width) && Number.isInteger(pic.height) && pic.width > 0 && pic.height > 0
+        ? { mime: 'image/png' as const, base64: pic.base64, width: pic.width, height: pic.height, masked: Number(pic.masked) || 0 }
+        : undefined;
+      if (opts.picture && !picture) noPicture ??= typeof snap.noPicture === 'string' ? masker.mask(snap.noPicture).slice(0, 200) : 'the runner sent no picture';
+      return {
+        window: { title: masker.mask(raw.title).slice(0, 200), exe: masker.mask(raw.exe) }, truncated, items,
+        ...(picture ? { picture } : {}), ...(noPicture ? { noPicture } : {}),
+      };
     },
     nodeOf: (ref) => viewNodes.get(ref),
     rawItems: () => [...viewNodes].map(([ref, { node, parent }]): DesktopViewItem => ({

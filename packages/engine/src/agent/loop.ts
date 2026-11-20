@@ -2,7 +2,7 @@ import { BLOCKED_STOP } from '../messages.js';
 import { maskClipped, type Masker } from '../secrets/mask.js';
 import type { StepContext } from '../steps/run.js';
 import type { OutputSpec, RunState } from '../types.js';
-import { responseText, type ChatMessage, type ChatModel, type ChatResponse } from './model.js';
+import { imageTokenEstimate, modelMessageText, responseText, toModelMessage, type ChatImage, type ChatMessage, type ChatModel, type ChatResponse, type ModelMessage } from './model.js';
 import { describeCheck } from '../proposal/describe.js';
 import type { DownloadTemplate } from '../steps/file-check.js';
 import { AGENT_TOOLS, FILE_AGENT_TOOLS, AgentTools, MAX_TYPED, neutralize, type AgentAction, type DoneOutcome, type ToolCall, type ToolDef } from './tools.js';
@@ -34,6 +34,22 @@ export function elideOldPages(messages: ChatMessage[]): ChatMessage[] {
   const toolIdx = messages.flatMap((m, i) => (m.role === 'tool' && PAGE_BLOCK.test(m.content) ? [i] : []));
   const old = new Set(toolIdx.slice(0, Math.max(0, toolIdx.length - KEEP_PAGES)));
   return messages.map((m, i) => (old.has(i) && PAGE_BLOCK.test(m.content) ? { ...m, content: m.content.replace(PAGE_BLOCK, OMITTED) } : m));
+}
+
+/** What an earlier screenshot becomes once a newer one was sent: only the latest picture goes to the model. */
+export const PICTURE_OMITTED = '(earlier screenshot omitted)';
+
+/**
+ * The pictures as sent to the model: only the latest message with pictures keeps them (each earlier one says it was
+ * omitted), or none when `on` is false.
+ */
+export function latestPictureOnly(messages: ChatMessage[], on: boolean): ChatMessage[] {
+  const last = on ? messages.findLastIndex((m) => m.images?.length) : -1;
+  return messages.map((m, i) => {
+    if (!m.images?.length || i === last) return m;
+    const { images: _images, ...rest } = m;
+    return { ...rest, content: `${m.content}\n${PICTURE_OMITTED}` };
+  });
 }
 
 export interface AgentBudget {
@@ -159,8 +175,11 @@ const AGENT_TOOL_NAMES = new Set([...AGENT_TOOLS, ...FILE_AGENT_TOOLS].map((t) =
 
 /** What the generic loop drives: a look for the first message, one tool call at a time, and the circle guard's count. */
 export interface LoopTools<O extends string> {
-  /** Runs one tool call; `done` ends the loop with its outcome and note. */
-  run(call: ToolCall): Promise<{ text: string; error: boolean; done?: { outcome: O; note: string } }>;
+  /**
+   * Runs one tool call; `done` ends the loop with its outcome and note. `images`: pictures for the model (desktop
+   * repair's screenshot), sent in a user message right after the tool results with the spec's pictureCaption.
+   */
+  run(call: ToolCall): Promise<{ text: string; error: boolean; done?: { outcome: O; note: string }; images?: ChatImage[] }>;
   /** How often the latest action repeated with nothing new since (the circle guard; 0 after progress). */
   readonly lastRepeat: number;
 }
@@ -173,7 +192,14 @@ export interface LoopSpec<O extends string> {
   toolNames: ReadonlySet<string>;
   system: string;
   /** The first user message (it takes the first look). A throw ends the loop as 'error' with `unreadable`: the reason. */
-  first(): Promise<string>;
+  first(): Promise<string | { text: string; images?: ChatImage[] }>;
+  /** The text of the user message that carries a tool result's pictures. */
+  pictureCaption?: string;
+  /**
+   * Called once when a call with a picture failed and the same call without pictures was tried instead: from then on no
+   * picture is sent (the chat model, or n8n's model wrapper, did not take image content).
+   */
+  picturesRefused?(): void;
   unreadable: string;
   masker: Masker;
   budget: AgentBudget;
@@ -192,8 +218,16 @@ export interface LoopCore<O extends string> {
   tokens: number;
   llmCalls: number;
   note: string;
+  /** Masked text of every message; pictures are never in it. */
   transcript: ChatMessage[];
+  /** Pictures the model got (each screenshot once), and about how many of the reported tokens they took (imageTokenEstimate, every call that sent one). */
+  pictures?: { count: number; tokens: number };
+  /** Set when the chat model did not take a picture and the repair went on with the text view only. */
+  pictureNote?: string;
 }
+
+/** The note when the chat model did not take a picture (V3: the repair goes on with the text view). */
+export const PICTURES_REFUSED_NOTE = 'the chat model did not take the screenshot, so the repair went on with the text view only';
 
 /**
  * The agent loop over any tools: one tool call runs per turn (extra calls are answered "not run"), older page blocks are
@@ -211,20 +245,34 @@ export async function driveAgentLoop<O extends string>(spec: LoopSpec<O>): Promi
   let used = 0;
   let idle = 0;
   let nudged = false;
+  let picturesOn = true;
+  let pictureCount = 0;
+  let pictureTokens = 0;
+  let pictureNote: string | undefined;
   const maskArgs = (args: Record<string, unknown>) => JSON.parse(masker.mask(JSON.stringify(args))) as Record<string, unknown>;
   const finish = (outcome: LoopCore<O>['outcome'], note: string): LoopCore<O> => ({
     outcome, tokens, llmCalls, note: masker.mask(note).slice(0, 500),
-    transcript: messages.map(({ raw: _raw, ...m }) => ({
+    // Pictures never leave in the transcript: only the text of their message does.
+    transcript: messages.map(({ raw: _raw, images: _images, ...m }) => ({
       ...m, content: masker.mask(m.content),
       ...(m.tool_calls ? { tool_calls: m.tool_calls.map((c) => ({ ...c, args: maskArgs(c.args ?? {}) })) } : {}),
     })),
+    ...(pictureCount > 0 ? { pictures: { count: pictureCount, tokens: pictureTokens } } : {}),
+    ...(pictureNote ? { pictureNote } : {}),
   });
+  /** A user message with pictures (only while pictures are on), counted once each. */
+  const userMessage = (content: string, images: ChatImage[] | undefined): ChatMessage => {
+    if (!images?.length || !picturesOn) return { role: 'user', content };
+    pictureCount += images.length;
+    return { role: 'user', content, images };
+  };
   const stop = () => spec.stopped?.();
 
   let halt = stop();
   if (halt) return finish(halt.outcome, halt.note);
   try {
-    messages.push({ role: 'user', content: await spec.first() });
+    const f = await spec.first();
+    messages.push(typeof f === 'string' ? { role: 'user', content: f } : userMessage(f.text, f.images));
   } catch (err) {
     halt = stop();
     if (halt) return finish(halt.outcome, halt.note);
@@ -247,13 +295,31 @@ export async function driveAgentLoop<O extends string>(spec: LoopSpec<O>): Promi
     const aborted = new Promise<never>((_, reject) => ac.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
     aborted.catch(() => undefined);
     let res: ChatResponse;
-    let sent: ChatMessage[] = messages;
-    // Attempts, not successes: a call that throws or times out may still have been billed, and the node's
-    // once-per-execution repair cap reads this count.
-    llmCalls++;
+    let sent: ModelMessage[] = [];
+    let sentImages: ChatImage[] = [];
+    const prepare = () => {
+      const shown = latestPictureOnly(elideOldPages(messages), picturesOn);
+      sentImages = shown.flatMap((m) => m.images ?? []);
+      sent = shown.map(toModelMessage);
+    };
     try {
-      sent = elideOldPages(messages);
-      res = await Promise.race([bound.invoke(sent, { signal: ac.signal }), aborted]);
+      prepare();
+      // Attempts, not successes: a call that throws or times out may still have been billed, and the node's
+      // once-per-execution repair cap reads this count.
+      llmCalls++;
+      try {
+        res = await Promise.race([bound.invoke(sent, { signal: ac.signal }), aborted]);
+      } catch (err) {
+        // A call with a picture that failed: the chat model (or n8n's model wrapper) may not take image content. The
+        // same call goes again without pictures, once; from then on the model gets the text view only (V3).
+        if (ac.signal.aborted || !sentImages.length || !picturesOn) throw err;
+        picturesOn = false;
+        pictureNote = PICTURES_REFUSED_NOTE;
+        spec.picturesRefused?.();
+        prepare();
+        llmCalls++;
+        res = await Promise.race([bound.invoke(sent, { signal: ac.signal }), aborted]);
+      }
     } catch (err) {
       if (ac.signal.aborted) return finish('budget', spec.signal?.aborted ? 'the run was cancelled' : 'the time budget ran out');
       return finish('error', `the model call failed: ${modelErrorText((err as Error)?.message ?? String(err), masker)}`);
@@ -261,13 +327,15 @@ export async function driveAgentLoop<O extends string>(spec: LoopSpec<O>): Promi
       clearTimeout(timer);
       spec.signal?.removeEventListener('abort', relay);
     }
+    const sentPictureTokens = sentImages.reduce((n, i) => n + imageTokenEstimate(i), 0);
+    pictureTokens += sentPictureTokens;
     // Provider counts are untrusted: each one is used only as a finite, non-negative integer, so a negative or
     // fractional report can never lower the total or keep the token budget from running out.
     const inTok = tokenCount(res.usage_metadata?.input_tokens);
     const outTok = tokenCount(res.usage_metadata?.output_tokens);
     tokens += inTok !== undefined || outTok !== undefined
       ? (inTok ?? 0) + (outTok ?? 0)
-      : Math.ceil(sent.reduce((n, m) => n + m.content.length, 0) / 4);
+      : Math.ceil(sent.reduce((n, m) => n + modelMessageText(m).length, 0) / 4) + sentPictureTokens;
     const calls = (res.tool_calls ?? []).map((c, i) => (c.id ? c : { ...c, id: `call_${llmCalls}_${i}` }));
     messages.push({
       role: 'assistant', content: responseText(res.content) || '(no text)',
@@ -292,6 +360,8 @@ export async function driveAgentLoop<O extends string>(spec: LoopSpec<O>): Promi
     // Every call gets its result (providers require the pairing); the extra ones say plainly that they did not run.
     const notRun = `ERROR: not run: only the first tool call of a turn runs (only the ${echoedToolName(first.name, spec.toolNames)} call was run; read its result).`;
     for (const c of extra) messages.push({ role: 'tool', tool_call_id: c.id, content: notRun, status: 'error' });
+    // A tool result's picture comes after every tool result of the turn (providers pair results with calls first).
+    if (out.images?.length && picturesOn && !out.done) messages.push(userMessage(spec.pictureCaption ?? 'Screenshot for the result above.', out.images));
     if (out.done) return finish(out.done.outcome, out.done.note);
     if (tools.lastRepeat >= CIRCLE_STOP) return finish('circling', spec.circlingNote(tools.lastRepeat));
   }

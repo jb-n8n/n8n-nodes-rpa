@@ -69,7 +69,12 @@ describe('AI Repair of desktop steps through the node', () => {
     // No Data item, so what the repair used is on this item: the Data item's names and the cost sentence.
     expect(item.llmCalls).toBe(4);
     expect(item.llmTokens).toBe(4 * 110);
-    expect(item.costLine).toBe('It used 4 chat model calls and 440 tokens.');
+    // Show the Model Screenshots is on by default: the cost sentence says the share of the screenshots (an estimate,
+    // never more than the tokens reported).
+    expect(item.costLine).toBe('It used 4 chat model calls and 440 tokens, about 440 of them for 4 screenshots.');
+    // The pictures went to the model only: never into an output.
+    expect(model.invocations.flat().some((m) => Array.isArray(m.content))).toBe(true);
+    expect(JSON.stringify(out)).not.toContain('iVBORw0KGgo');
     expect(Object.keys(item).slice(-4)).toEqual(['attachmentNames', 'llmCalls', 'llmTokens', 'costLine']);
 
     // Sign Steps: Continue (14) and Save (17) ticked as writes.
@@ -130,6 +135,29 @@ describe('AI Repair of desktop steps through the node', () => {
     (reset.options as IDataObject).repairResetKey = 'tried-again';
     await executeRunSteps(harness({ params: reset, credentials: creds(runner.endpoint), continueOnFail: true, model: third, staticData }), fakeEngine(() => scriptOk()));
     expect(third.invocations).toHaveLength(1);
+  });
+
+  it('Show the Model Screenshots off: the runner is asked for no picture and the model gets text only', async () => {
+    runner = await FakeRunner.start({ app: 'erp', policy: ERP_POLICY, erpUi: 'v2' });
+    const model = fakeModel(V2_TURNS);
+    const params = runParams(signedV1());
+    (params.options as IDataObject).showModelScreenshots = false;
+    const out = await executeRunSteps(harness({ params, credentials: creds(runner.endpoint), continueOnFail: true, model }), fakeEngine(() => scriptOk()));
+    const item = (out[1] as INodeExecutionData[])[0]!.json;
+    expect(item.costLine).toBe('It used 4 chat model calls and 440 tokens.');
+    expect(runner.requests.filter((q) => q.method === 'look')).toEqual([]);
+    expect(model.invocations.flat().some((m) => Array.isArray(m.content))).toBe(false);
+  });
+
+  it('Show the Model Screenshots must be typed: an expression is a configuration error and nothing runs', async () => {
+    runner = await FakeRunner.start({ app: 'erp', policy: ERP_POLICY, erpUi: 'v2' });
+    const model = fakeModel(V2_TURNS);
+    const params = runParams(signedV1());
+    (params.options as IDataObject).showModelScreenshots = '={{ $json.pictures }}';
+    const out = await executeRunSteps(harness({ params, credentials: creds(runner.endpoint), continueOnFail: true, model }), fakeEngine(() => scriptOk()));
+    expect(String(out[0]![0]!.json.message)).toContain('Show the Model Screenshots must be set directly, not with an expression.');
+    expect(model.invocations).toHaveLength(0);
+    expect(runner.requests.filter((q) => q.method === 'run.begin')).toEqual([]);
   });
 
   it('AI Repair on with no chat model: the drift says to connect one, and no repair runs', async () => {

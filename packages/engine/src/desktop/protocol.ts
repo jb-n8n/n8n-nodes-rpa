@@ -51,6 +51,20 @@ export interface RunnerMethods {
     /** `truncated`: maxNodes or maxDepth cut the tree short. */
     result: { window: { title: string; exe: string }; nodes: RunnerNode[]; truncated?: true };
   };
+  /**
+   * AI repair's look: the snapshot (as `snapshot`) and the run's windows as a masked PNG with each node i labelled
+   * `labelStart + i`. The runner covers password and credential-like fields, the controls the run typed into, and every
+   * control showing a `mask` text or a text the run typed; `noPicture` says why there is no picture when it could not
+   * make one with every such control covered. -32601 from an older runner.
+   */
+  look: {
+    params: { runId: string; window?: WindowSel; maxNodes?: number; maxDepth?: number; labelStart: number; mask: string[]; maxEdge?: number };
+    result: {
+      window: { title: string; exe: string }; nodes: RunnerNode[]; truncated?: true;
+      picture?: { mime: 'image/png'; base64: string; width: number; height: number; masked: number; labels: number };
+      noPicture?: string;
+    };
+  };
   isVisible: { params: { runId: string; target: RunnerTarget }; result: { visible: boolean } };
   resolve: { params: { runId: string; target: RunnerTarget; timeoutMs: number }; result: { candidate: number } };
   act: {
