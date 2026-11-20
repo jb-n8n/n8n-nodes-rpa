@@ -56,17 +56,51 @@ public sealed class RunState
     internal int Probes { get; set; }
 
     private readonly HashSet<string> _typedInto = new(StringComparer.Ordinal);
+    private readonly HashSet<(int Pid, string ControlType, string AutomationId)> _typedTargets = [];
+    private readonly List<string> _typedTexts = [];
 
-    /// <summary>Records an element the run typed into (by its runtime id): AI repair's picture covers it (RepairPicture).</summary>
-    internal void NoteTypedInto(string elementId)
+    /// <summary>The most typed texts a run keeps for AI repair's picture (older ones are still covered by their control).</summary>
+    public const int MaxTypedTexts = 64;
+
+    /// <summary>
+    /// Records what the run typed and where, for AI repair's picture (RepairPicture), which covers the control and every
+    /// control showing the text: the element's runtime id, its process, type and automation id (which survive the control
+    /// being created again; runtime ids do not), and the text as typed (export folder included). Kept in memory for the
+    /// run only, never logged or returned.
+    /// </summary>
+    internal void NoteTyped(int pid, string runtimeId, string controlType, string automationId, string text)
     {
-        lock (_gate) _typedInto.Add(elementId);
+        lock (_gate)
+        {
+            _typedInto.Add(runtimeId);
+            if (automationId.Length > 0) _typedTargets.Add((pid, controlType.ToLowerInvariant(), automationId));
+            if (text.Length > 0 && !_typedTexts.Contains(text, StringComparer.Ordinal))
+            {
+                _typedTexts.Add(text);
+                if (_typedTexts.Count > MaxTypedTexts) _typedTexts.RemoveAt(0);
+            }
+        }
     }
 
-    /// <summary>Whether the run typed into the element.</summary>
-    internal bool WasTypedInto(string elementId)
+    /// <summary>Whether the run typed into the element: the same runtime id, or the same process, type and automation id.</summary>
+    internal bool WasTypedInto(IUiNode element)
     {
-        lock (_gate) return _typedInto.Contains(elementId);
+        var id = element.Id;
+        lock (_gate)
+        {
+            if (_typedInto.Contains(id)) return true;
+            if (_typedTargets.Count == 0) return false;
+        }
+        var aid = element.AutomationId;
+        if (aid.Length == 0) return false;
+        var key = (element.ProcessId, element.ControlType.ToLowerInvariant(), aid);
+        lock (_gate) return _typedTargets.Contains(key);
+    }
+
+    /// <summary>The texts the run typed (at most <see cref="MaxTypedTexts"/>, the latest).</summary>
+    internal IReadOnlyList<string> TypedTexts
+    {
+        get { lock (_gate) return _typedTexts.ToArray(); }
     }
 
     /// <summary>The run's most recent act: the clipboard's sequence number right before it, and when it finished (or

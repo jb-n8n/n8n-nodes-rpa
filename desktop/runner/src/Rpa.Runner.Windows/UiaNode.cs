@@ -53,6 +53,37 @@ internal sealed class UiaNode : IUiNode
         catch (Exception e) when (e is COMException or PropertyNotSupportedException or UnauthorizedAccessException) { return null; }
     });
 
+    /// <summary>The longest document text read whole; longer counts as unreadable (the element is covered whole).</summary>
+    private const int MaxDocumentText = 200_000;
+
+    public IReadOnlyList<string>? OtherTexts => Guard(() =>
+    {
+        var list = new List<string>();
+        try
+        {
+            if (Element.Patterns.LegacyIAccessible.IsSupported)
+            {
+                var l = Element.Patterns.LegacyIAccessible.Pattern;
+                list.Add(l.Name.ValueOrDefault ?? "");
+                list.Add(l.Value.ValueOrDefault ?? "");
+            }
+            if (Element.Patterns.Text.IsSupported)
+            {
+                var text = Element.Patterns.Text.Pattern.DocumentRange.GetText(MaxDocumentText + 1) ?? "";
+                if (text.Length > MaxDocumentText) return (IReadOnlyList<string>?)null;
+                list.Add(text);
+            }
+        }
+        catch (Exception e) when (e is COMException or PropertyNotSupportedException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return null;
+        }
+        return list;
+    });
+
+    public IReadOnlyList<IUiNode> RawDescendants() => Guard(() =>
+        (IReadOnlyList<IUiNode>)Element.FindAll(TreeScope.Descendants, TrueCondition.Default).Select(e => (IUiNode)new UiaNode(_automation, e)).ToList());
+
     public IReadOnlyList<IUiNode> GetChildren() => Guard(() =>
     {
         var walker = _automation.TreeWalkerFactory.GetControlViewWalker();
@@ -129,6 +160,8 @@ internal sealed class HwndNode(IntPtr hwnd) : IUiNode
     public PixelRect? Bounds => Native.GetWindowRect(hwnd, out var r) ? new PixelRect(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top) : null;
     public IReadOnlyList<IUiNode> GetChildren() => [];
     public IUiNode? GetParent() => null;
+    public IReadOnlyList<string>? OtherTexts => null;
+    public IReadOnlyList<IUiNode> RawDescendants() => throw new ElementGoneException("the window cannot be read through UI Automation");
     // Its contents cannot be read, so it cannot answer "holds no write control": callers that fail closed on a gone
     // element (WindowHasWriteControl) treat it as holding one.
     public IReadOnlyList<IUiNode> FindDescendants(Cond cond) => throw new ElementGoneException("the window cannot be read through UI Automation");

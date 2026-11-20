@@ -350,7 +350,7 @@ public sealed class RunnerService
             try
             {
                 // Before the text goes out: a field that took even part of it is covered in AI repair's picture.
-                if (action == ActionKind.Type) run.NoteTypedInto(element.Id);
+                if (action == ActionKind.Type) run.NoteTyped(element.ProcessId, element.Id, element.ControlType, element.AutomationId, text!);
                 var outText = _desktop.Perform(new UiOperation(element, res.Window, action, text, chord, Remaining(deadline), Guard));
                 _log.Info($"act {action} candidate={res.Candidate}{(write ? " write" : "")}{(mode == ActMode.Repair ? " repair" : mode == ActMode.Probe ? " probe" : "")}");
                 var o = new JsonObject();
@@ -762,14 +762,11 @@ public sealed class RunnerService
         {
             try
             {
-                var layers = new List<RepairPicture.Layer>();
-                foreach (var w in _scope.RunWindows(run, null).Take(MaxWindows))
-                {
-                    var c = _desktop.CaptureWindow(w);
-                    if (c is not null) layers.Add(new RepairPicture.Layer(w, c));
-                }
-                if (!layers.Any(l => l.Window.Id == shown.Id)) throw new PictureRefusedException("the window shown could not be captured");
-                return RepairPicture.Make(layers, pid => _scope.IsRunProcess(run, pid), run.WasTypedInto, masks, marks, maxEdge);
+                var windows = _scope.RunWindows(run, null).Take(MaxWindows).ToList();
+                // The engine's masked texts and the texts the run typed, each looked for in every control.
+                var texts = masks.Concat(run.TypedTexts).ToList();
+                return RepairPicture.Make(windows, shown, _desktop.CaptureWindow, _desktop.GetWindowRect, pid => _scope.IsRunProcess(run, pid),
+                    run.WasTypedInto, texts, marks, maxEdge);
             }
             catch (ElementGoneException) when (attempt < 3)
             {

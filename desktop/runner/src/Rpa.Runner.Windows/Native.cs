@@ -303,6 +303,35 @@ internal static partial class Native
     }
 
     [DllImport("user32.dll")]
+    public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern int GetAwarenessFromDpiAwarenessContext(IntPtr value);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+    [DllImport("shcore.dll")]
+    public static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
+
+    /// <summary>
+    /// Whether Windows scales the window's drawing for its monitor (DPI virtualization): a window that is not per-monitor
+    /// DPI aware on a monitor whose DPI differs from the window's. Fails closed: anything that cannot be read counts as scaled.
+    /// </summary>
+    public static bool IsDpiScaled(IntPtr hwnd)
+    {
+        var awareness = GetAwarenessFromDpiAwarenessContext(GetWindowDpiAwarenessContext(hwnd));
+        if (awareness == 2) return false; // DPI_AWARENESS_PER_MONITOR_AWARE: drawn at the monitor's DPI.
+        var windowDpi = GetDpiForWindow(hwnd);
+        var monitor = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
+        if (windowDpi == 0 || monitor == IntPtr.Zero || GetDpiForMonitor(monitor, 0, out var monitorDpi, out _) != 0) return true;
+        return windowDpi != monitorDpi;
+    }
+
+    [DllImport("user32.dll")]
     public static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
     /// <summary>The processes of every child window (at any depth) of a window, each once.</summary>

@@ -489,7 +489,14 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
             for (var y = 0; y < height; y++) Marshal.Copy(data.Scan0 + y * data.Stride, bytes, y * width * 4, width * 4);
         }
         finally { bmp.UnlockBits(data); }
-        return new WindowCapture(new PixelRect(r.Left, r.Top, width, height), bytes, Native.ChildWindowProcesses(h));
+        return new WindowCapture(new PixelRect(r.Left, r.Top, width, height), bytes, Native.ChildWindowProcesses(h), Native.IsDpiScaled(h));
+    }
+
+    public PixelRect? GetWindowRect(IUiNode window)
+    {
+        var h = window is UiaNode u ? u.Handle : window is HwndNode hn ? hn.Handle : IntPtr.Zero;
+        if (h == IntPtr.Zero || !Native.GetWindowRect(h, out var r)) return null;
+        return new PixelRect(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
     }
 
     public uint GetClipboardSequenceNumber() => Native.GetClipboardSequenceNumber();

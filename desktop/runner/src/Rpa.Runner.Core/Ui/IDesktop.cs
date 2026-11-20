@@ -30,6 +30,16 @@ public interface IUiNode
     /// cannot be read.</summary>
     PixelRect? Bounds { get; }
 
+    /// <summary>
+    /// Texts the element may show beyond Name and Value: its TextPattern document text and its LegacyIAccessible name and
+    /// value, where it has them. Null when it has such content that cannot be read (or is too long to read whole).
+    /// </summary>
+    IReadOnlyList<string>? OtherTexts { get; }
+
+    /// <summary>Every descendant in UI Automation's raw view (not only control elements), in document order. Throws
+    /// ElementGoneException when the element cannot be read.</summary>
+    IReadOnlyList<IUiNode> RawDescendants();
+
     IReadOnlyList<IUiNode> GetChildren();
 
     IUiNode? GetParent();
@@ -102,6 +112,9 @@ public interface IDesktop
     /// it went away.
     /// </summary>
     WindowCapture? CaptureWindow(IUiNode window);
+
+    /// <summary>A top-level window's rectangle as the capture reads it (GetWindowRect), or null when it cannot be read.</summary>
+    PixelRect? GetWindowRect(IUiNode window);
 
     /// <summary>
     /// The clipboard's sequence number (GetClipboardSequenceNumber): it changes every time the clipboard's content

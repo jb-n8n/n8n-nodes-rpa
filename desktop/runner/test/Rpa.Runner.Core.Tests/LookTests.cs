@@ -266,6 +266,113 @@ public sealed class LookTests : IDisposable
         Assert.Contains("kept changing", Refusal(Look()));
     }
 
+    // Review fix 1: what changes between the check and the capture.
+
+    [Fact]
+    public void A_field_that_gets_a_masked_text_during_the_capture_is_covered()
+    {
+        var w = App();
+        w.Child("Text", "", "lblLate", n => n.Bounds = new PixelRect(300, 60, 150, 20));
+        _h.Desktop.AfterCapture = win => { if (win.Id == w.Id) w.Find("lblLate").Name = "Account JDOE-4471"; };
+        var pic = Png(Look(new { mask = new[] { "JDOE-4471" } }));
+        Assert.Equal((0, 0, 0), pic.At(200 + 70, 10 + 10));
+    }
+
+    [Fact]
+    public void No_picture_when_a_window_moves_or_changes_size_during_the_capture()
+    {
+        var w = App();
+        _h.Desktop.AfterCapture = win => { if (win.Id == w.Id) w.Bounds = new PixelRect(120, 50, 400, 300); };
+        Assert.Contains("moved or changed size", Refusal(Look()));
+        _h.Desktop.AfterCapture = win => { if (win.Id == w.Id) w.Bounds = new PixelRect(120, 50, 420, 300); };
+        Assert.Contains("moved or changed size", Refusal(Look()));
+    }
+
+    [Fact]
+    public void A_control_that_moved_during_the_capture_is_covered_where_it_was_and_where_it_is()
+    {
+        var w = App();
+        _h.Desktop.AfterCapture = win => { if (win.Id == w.Id) w.Find("txtPassword").Bounds = new PixelRect(300, 260, 100, 20); };
+        var pic = Png(Look());
+        Assert.Equal((0, 0, 0), pic.At(10 + 50, 40 + 10));
+        Assert.Equal((0, 0, 0), pic.At(200 + 50, 210 + 10));
+    }
+
+    [Fact]
+    public void No_picture_when_Windows_scales_a_windows_drawing()
+    {
+        var w = App();
+        _h.Desktop.DpiScaled.Add(w.Id);
+        Assert.Contains("DPI", Refusal(Look()));
+    }
+
+    // Review fix 2: text beyond Name and Value, in the raw view.
+
+    [Fact]
+    public void A_document_whose_text_holds_a_masked_text_is_covered()
+    {
+        var w = App();
+        w.Child("Document", "Notes", "docNotes", n => { n.Bounds = new PixelRect(300, 60, 150, 100); n.OtherTexts = ["line one", "card jdoe-4471 on file"]; });
+        var pic = Png(Look(new { mask = new[] { "JDOE-4471" } }));
+        Assert.Equal((0, 0, 0), pic.At(200 + 70, 10 + 50));
+    }
+
+    [Fact]
+    public void An_element_whose_text_cannot_be_read_is_covered_whole_while_there_are_texts_to_look_for()
+    {
+        var w = App();
+        w.Child("Custom", "", "", n => { n.Bounds = new PixelRect(300, 60, 150, 100); n.OtherTexts = null; });
+        Assert.Equal(Grey, Png(Look()).At(200 + 70, 10 + 50));
+        Assert.Equal((0, 0, 0), Png(Look(new { mask = new[] { "JDOE-4471" } })).At(200 + 70, 10 + 50));
+    }
+
+    [Fact]
+    public void An_accessible_name_holding_a_masked_text_is_covered()
+    {
+        var w = App();
+        w.Child("Pane", "", "", n => { n.Bounds = new PixelRect(300, 60, 150, 100); n.OtherTexts = ["JDOE-4471", ""]; });
+        Assert.Equal((0, 0, 0), Png(Look(new { mask = new[] { "jdoe-4471" } })).At(200 + 70, 10 + 50));
+    }
+
+    // Review fix 3: what the run typed, not only where by runtime id.
+
+    [Fact]
+    public void Every_control_showing_a_text_the_run_typed_is_covered_without_the_engine_naming_it()
+    {
+        var w = App();
+        w.Child("Text", "Welcome back, clerk", "lblWelcome", n => n.Bounds = new PixelRect(300, 60, 150, 20));
+        _h.Ok("act", new { runId = Harness.RunId, target = Harness.T(new { automationId = "txtUser" }), action = "type", value = "clerk", timeoutMs = 2000 });
+        var pic = Png(Look());
+        Assert.Equal((0, 0, 0), pic.At(200 + 70, 10 + 10));
+    }
+
+    [Fact]
+    public void A_typed_into_control_made_again_with_a_new_runtime_id_is_still_covered()
+    {
+        var w = App();
+        _h.Ok("act", new { runId = Harness.RunId, target = Harness.T(new { automationId = "txtUser" }), action = "type", value = "abc", timeoutMs = 2000 });
+        // The app creates the field again (a new runtime id) and it now shows something else.
+        var old = w.Find("txtUser");
+        old.AutomationId = "txtUserOld";
+        old.Bounds = new PixelRect(0, 0, 0, 0);
+        old.IsOffscreen = true;
+        w.Child("Edit", "User name", "txtUser", n => { n.Value = "xyz"; n.Bounds = new PixelRect(300, 260, 100, 20); });
+        Assert.NotEqual(old.Id, w.Find("txtUser").Id);
+        var pic = Png(Look());
+        Assert.Equal((0, 0, 0), pic.At(200 + 50, 210 + 10));
+    }
+
+    [Fact]
+    public void A_text_typed_from_segments_is_looked_for_as_typed()
+    {
+        var w = App();
+        _h.Ok("act", new { runId = Harness.RunId, target = Harness.T(new { automationId = "txtUser" }), action = "type",
+            segments = new object[] { new { exportDir = true }, new { text = "\\line-items.csv" } }, timeoutMs = 2000 });
+        w.Child("Text", $"Saved to {_h.ExportDir}\\line-items.csv", "lblSaved", n => n.Bounds = new PixelRect(300, 60, 150, 20));
+        var pic = Png(Look());
+        Assert.Equal((0, 0, 0), pic.At(200 + 70, 10 + 10));
+    }
+
     [Fact]
     public void Mask_texts_are_checked()
     {

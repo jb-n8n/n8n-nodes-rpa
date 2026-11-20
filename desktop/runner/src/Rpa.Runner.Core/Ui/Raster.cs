@@ -36,8 +36,10 @@ public readonly record struct PixelRect(int X, int Y, int Width, int Height)
 /// <summary>
 /// One top-level window's own pixels (PrintWindow: not what overlaps it), 32-bit BGRA rows top to bottom, with the
 /// processes that own its child windows (a child window of another process would be drawn into the capture).
+/// <paramref name="DpiScaled"/>: Windows scales the window's drawing (a DPI-unaware or system-aware window on a monitor of
+/// another DPI), so its pixels may not line up with UI Automation's coordinates.
 /// </summary>
-public sealed record WindowCapture(PixelRect Bounds, byte[] Bgra, IReadOnlyList<int> ChildProcessIds);
+public sealed record WindowCapture(PixelRect Bounds, byte[] Bgra, IReadOnlyList<int> ChildProcessIds, bool DpiScaled = false);
 
 /// <summary>
 /// An RGB picture for the repair's screenshot, platform-neutral so it is tested anywhere: compose windows on black, fill

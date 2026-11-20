@@ -46,6 +46,10 @@ public sealed class FakeNode : IUiNode
     /// <summary>The bounding rectangle; null: it cannot be read. When <see cref="Gone"/>, reading it throws.</summary>
     private PixelRect? _bounds;
     public PixelRect? Bounds { get => Gone ? throw new ElementGoneException("gone") : _bounds; set => _bounds = value; }
+    /// <summary>Document text and accessible name or value; null: content that cannot be read.</summary>
+    public IReadOnlyList<string>? OtherTexts { get; set; } = [];
+
+    public IReadOnlyList<IUiNode> RawDescendants() => Unreadable ? throw new ElementGoneException("unreadable") : TargetResolver.WalkFind(this, Cond.Any);
     public FakeNode? Parent { get; private set; }
 
     public FakeNode Add(FakeNode child)
@@ -170,9 +174,24 @@ public sealed class FakeDesktop : IDesktop
     /// <summary>Child window processes a window reports (another application's embedded window, for the refusal).</summary>
     public Dictionary<string, int[]> ChildProcesses { get; } = [];
 
+    /// <summary>Runs right after a window is captured (a window that moves, or a field that gets text, meanwhile).</summary>
+    public Action<FakeNode>? AfterCapture { get; set; }
+
+    /// <summary>Windows Windows scales for their display (DPI virtualization).</summary>
+    public HashSet<string> DpiScaled { get; } = [];
+
+    /// <summary>GetWindowRect: the window's bounds as they are now.</summary>
+    public PixelRect? GetWindowRect(IUiNode window) => ((FakeNode)window).Bounds;
+
     public WindowCapture? CaptureWindow(IUiNode window)
     {
-        var n = (FakeNode)window;
+        var c = CaptureNow((FakeNode)window);
+        AfterCapture?.Invoke((FakeNode)window);
+        return c;
+    }
+
+    private WindowCapture? CaptureNow(FakeNode n)
+    {
         if (Captures.TryGetValue(n.Id, out var c)) return c;
         if (n.Bounds is not { IsEmpty: false } b) return null;
         var (r, g, bl) = WindowColor.TryGetValue(n.Id, out var col) ? col : ((byte)200, (byte)200, (byte)200);
@@ -184,7 +203,7 @@ public sealed class FakeDesktop : IDesktop
             px[i + 2] = r;
             px[i + 3] = 255;
         }
-        return new WindowCapture(b, px, ChildProcesses.TryGetValue(n.Id, out var pids) ? pids : []);
+        return new WindowCapture(b, px, ChildProcesses.TryGetValue(n.Id, out var pids) ? pids : [], DpiScaled.Contains(n.Id));
     }
 
     /// <summary>The clipboard's Unicode text (null: no text on it). Setting it alone changes neither the owner nor the
