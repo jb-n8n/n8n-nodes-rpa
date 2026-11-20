@@ -32,7 +32,9 @@ public interface IUiNode
 
     /// <summary>
     /// Texts the element may show beyond Name and Value: its TextPattern document text and its LegacyIAccessible name and
-    /// value, where it has them. Null when it has such content that cannot be read (or is too long to read whole).
+    /// value, where it has them. Null when it has such content that cannot be read (or is too long to read whole), its
+    /// Value included: an element whose ValuePattern is supported but whose value cannot be read answers null here
+    /// (Value itself answers null too, which alone would look like no value).
     /// </summary>
     IReadOnlyList<string>? OtherTexts { get; }
 
@@ -115,6 +117,10 @@ public interface IDesktop
 
     /// <summary>A top-level window's rectangle as the capture reads it (GetWindowRect), or null when it cannot be read.</summary>
     PixelRect? GetWindowRect(IUiNode window);
+
+    /// <summary>The rectangle of an element's own native window (GetWindowRect of its NativeWindowHandle), or null when
+    /// it has none: checked against UI Automation's rectangle before a box is trusted.</summary>
+    PixelRect? GetNativeRect(IUiNode element);
 
     /// <summary>
     /// The clipboard's sequence number (GetClipboardSequenceNumber): it changes every time the clipboard's content

@@ -492,6 +492,8 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
         return new WindowCapture(new PixelRect(r.Left, r.Top, width, height), bytes, Native.ChildWindowProcesses(h), Native.IsDpiScaled(h));
     }
 
+    public PixelRect? GetNativeRect(IUiNode element) => element is UiaNode u ? u.NativeRect : element is HwndNode ? GetWindowRect(element) : null;
+
     public PixelRect? GetWindowRect(IUiNode window)
     {
         var h = window is UiaNode u ? u.Handle : window is HwndNode hn ? hn.Handle : IntPtr.Zero;

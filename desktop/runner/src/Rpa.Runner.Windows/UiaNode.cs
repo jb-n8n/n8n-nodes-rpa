@@ -40,6 +40,14 @@ internal sealed class UiaNode : IUiNode
     public int ProcessId => Guard(() => Element.Properties.ProcessId.ValueOrDefault);
     public IntPtr Handle => Guard(() => Element.Properties.NativeWindowHandle.ValueOrDefault);
 
+    /// <summary>The rectangle of the element's own native window (GetWindowRect), or null when it has none.</summary>
+    public PixelRect? NativeRect => Guard(() =>
+    {
+        var h = Element.Properties.NativeWindowHandle.ValueOrDefault;
+        if (h == IntPtr.Zero || !Native.GetWindowRect(h, out var r)) return (PixelRect?)null;
+        return new PixelRect(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
+    });
+
     public PixelRect? Bounds => Guard(() =>
     {
         if (!Element.Properties.BoundingRectangle.TryGetValue(out var r)) return (PixelRect?)null;
@@ -61,6 +69,8 @@ internal sealed class UiaNode : IUiNode
         var list = new List<string>();
         try
         {
+            // A value the element has but that cannot be read (Value answers null then) counts as unreadable content.
+            if (Element.Patterns.Value.IsSupported) _ = Element.Patterns.Value.Pattern.Value.Value;
             if (Element.Patterns.LegacyIAccessible.IsSupported)
             {
                 var l = Element.Patterns.LegacyIAccessible.Pattern;

@@ -52,30 +52,41 @@ public static class RepairPicture
 
     public sealed record Result(byte[] Png, int Width, int Height, int Masked, int Labels, Raster Picture);
 
+    /// <summary>How far UI Automation's rectangle of a control with its own native window may differ from GetWindowRect.</summary>
+    public const int NativeRectTolerance = 3;
+
     /// <param name="windows">The run's windows, front to back (as <c>windows</c> lists them).</param>
     /// <param name="shown">The window the snapshot is of: it must be in the picture.</param>
     /// <param name="capture">A window's own pixels (IDesktop.CaptureWindow); null when it is minimized.</param>
     /// <param name="windowRect">A window's rectangle read again after the capture (IDesktop.GetWindowRect).</param>
+    /// <param name="nativeRect">A control's own native window rectangle (IDesktop.GetNativeRect), or null.</param>
     /// <param name="isRunProcess">Whether a process belongs to the run (WindowScope.IsRunProcess).</param>
     /// <param name="typedInto">Whether the run typed into the element (RunState.WasTypedInto).</param>
     /// <param name="maskTexts">Texts whose controls are covered.</param>
     /// <param name="marks">The view's nodes, each with the number its ref carries (ref e12 is label 12).</param>
+    /// <param name="overdue">True once the picture has taken too long: then it is refused, never partly checked.</param>
     public static Result Make(IReadOnlyList<IUiNode> windows, IUiNode shown, Func<IUiNode, WindowCapture?> capture, Func<IUiNode, PixelRect?> windowRect,
-        Func<int, bool> isRunProcess, Func<IUiNode, bool> typedInto, IReadOnlyList<string> maskTexts, IReadOnlyList<Mark> marks, int maxEdge = MaxEdge)
+        Func<IUiNode, PixelRect?> nativeRect, Func<int, bool> isRunProcess, Func<IUiNode, bool> typedInto, IReadOnlyList<string> maskTexts,
+        IReadOnlyList<Mark> marks, Func<bool> overdue, int maxEdge = MaxEdge)
     {
         var texts = maskTexts.Where(t => t.Length >= MinMaskedText).Distinct(StringComparer.Ordinal).ToArray();
+        void Deadline()
+        {
+            if (overdue()) throw new PictureRefusedException("checking what to cover took too long");
+        }
 
         // What to cover, before the capture and again after it: a field that got text or moved in between is covered
         // where it was and where it is.
-        var boxes = Collect(windows, texts, typedInto);
+        var boxes = Collect(windows, texts, typedInto, nativeRect, Deadline);
         var layers = new List<Layer>();
         foreach (var w in windows)
         {
+            Deadline();
             var c = capture(w);
             if (c is not null) layers.Add(new Layer(w, c));
         }
         if (!layers.Any(l => l.Window.Id == shown.Id)) throw new PictureRefusedException("the window shown could not be captured");
-        boxes.AddRange(Collect(layers.Select(l => l.Window).ToList(), texts, typedInto));
+        boxes.AddRange(Collect(layers.Select(l => l.Window).ToList(), texts, typedInto, nativeRect, Deadline));
 
         var bounds = default(PixelRect);
         foreach (var l in layers)
@@ -92,7 +103,15 @@ public static class RepairPicture
             bounds = bounds.Union(l.Capture.Bounds);
         }
         if ((long)bounds.Width * bounds.Height > MaxComposedPixels) throw new PictureRefusedException("the run's windows cover too large an area");
-        boxes = boxes.Distinct().ToList();
+        // A box must lie inside its own window's captured rectangle: a rectangle UI Automation reports elsewhere would
+        // cover the wrong pixels and leave the control's own in the picture. A window not drawn needs no box.
+        var captured = layers.ToDictionary(l => l.Window.Id, l => l.Capture.Bounds);
+        foreach (var b in boxes)
+        {
+            if (!captured.TryGetValue(b.WindowId, out var wr)) continue;
+            if (!Inside(b.Rect, wr.Inflate(MaskPadding))) throw new PictureRefusedException("a control that must be covered is reported outside its window");
+        }
+        var cover = boxes.Select(b => b.Rect.Inflate(MaskPadding)).Distinct().ToList();
 
         var canvas = new Raster(bounds.Width, bounds.Height);
         for (var i = layers.Count - 1; i >= 0; i--)
@@ -100,9 +119,13 @@ public static class RepairPicture
             var c = layers[i].Capture;
             canvas.Blit(c.Bgra, c.Bounds.Width, c.Bounds.Height, c.Bounds.X - bounds.X, c.Bounds.Y - bounds.Y);
         }
-        foreach (var b in boxes) canvas.Fill(new PixelRect(b.X - bounds.X, b.Y - bounds.Y, b.Width, b.Height), 0, 0, 0);
+        foreach (var b in cover) canvas.Fill(new PixelRect(b.X - bounds.X, b.Y - bounds.Y, b.Width, b.Height), 0, 0, 0);
 
         var shrunk = canvas.ShrinkTo(Math.Clamp(maxEdge, 64, MaxEdge), out var scale);
+
+        // Windows in front of the one shown (not its open menus): a label there would sit on another window's content.
+        var shownAt = layers.FindIndex(l => l.Window.Id == shown.Id);
+        var inFront = layers.Take(shownAt).Where(l => !IsMenu(l.Window)).Select(l => l.Capture.Bounds).ToList();
 
         // Labels go on after shrinking, so they stay readable; they hold digits only.
         var placed = new List<PixelRect>();
@@ -119,6 +142,7 @@ public static class RepairPicture
                 continue;
             }
             if (r is not { IsEmpty: false } er || !er.Overlaps(bounds)) continue;
+            if (inFront.Any(f => f.Overlaps(new PixelRect(er.X, er.Y, 1, 1)))) continue;
             var digits = m.Number.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var (w, h) = Raster.LabelSize(digits);
             var x = (int)Math.Round((er.X - bounds.X) * scale);
@@ -129,16 +153,28 @@ public static class RepairPicture
             shrunk.DrawLabel(digits, spot.X, spot.Y);
             placed.Add(spot);
         }
-        return new Result(shrunk.EncodePng(), shrunk.Width, shrunk.Height, boxes.Count, placed.Count, shrunk);
+        return new Result(shrunk.EncodePng(), shrunk.Width, shrunk.Height, cover.Count, placed.Count, shrunk);
     }
 
-    /// <summary>The boxes to cover in these windows: one pass over each window's whole raw view.</summary>
-    private static List<PixelRect> Collect(IReadOnlyList<IUiNode> windows, string[] texts, Func<IUiNode, bool> typedInto)
+    private static bool Inside(PixelRect r, PixelRect outer) => r.X >= outer.X && r.Y >= outer.Y && r.Right <= outer.Right && r.Bottom <= outer.Bottom;
+
+    /// <summary>An open popup menu of the run (a Menu window or a Win32 popup menu). Fails closed: unreadable is not a menu.</summary>
+    private static bool IsMenu(IUiNode w)
     {
-        var boxes = new List<PixelRect>();
+        try { return string.Equals(w.ControlType, "Menu", StringComparison.OrdinalIgnoreCase) || w.ClassName == "#32768"; }
+        catch (ElementGoneException) { return false; }
+    }
+
+    private readonly record struct Box(string WindowId, PixelRect Rect);
+
+    /// <summary>The boxes to cover in these windows: one pass over each window's whole raw view.</summary>
+    private static List<Box> Collect(IReadOnlyList<IUiNode> windows, string[] texts, Func<IUiNode, bool> typedInto, Func<IUiNode, PixelRect?> nativeRect, Action deadline)
+    {
+        var boxes = new List<Box>();
         var checkedCount = 0;
         foreach (var window in windows)
         {
+            deadline();
             // The window's own title is drawn in its title bar: a masked text there would need the whole window covered.
             if (Holds(window.Name, texts)) throw new PictureRefusedException("a window title shows a value the run masks");
             if (Redaction.HidesValue(window) || typedInto(window)) throw new PictureRefusedException("a whole window would have to be covered");
@@ -155,8 +191,10 @@ public static class RepairPicture
             }
             checkedCount += all.Count;
             if (checkedCount > MaxCheckedElements) throw new PictureRefusedException($"the run's windows hold more than {MaxCheckedElements} elements to check");
+            var wid = window.Id;
             foreach (var n in all)
             {
+                deadline();
                 if (!MustCover(n, texts, typedInto)) continue;
                 var r = n.Bounds ?? throw new PictureRefusedException("the position of a control that must be covered cannot be read");
                 if (r.IsEmpty)
@@ -165,7 +203,12 @@ public static class RepairPicture
                     if (n.IsOffscreen) continue;
                     throw new PictureRefusedException("a control that must be covered reports no size");
                 }
-                boxes.Add(r.Inflate(MaskPadding));
+                // A control with its own native window: UI Automation's rectangle must agree with the window manager's.
+                if (nativeRect(n) is { IsEmpty: false } nr &&
+                    (Math.Abs(nr.X - r.X) > NativeRectTolerance || Math.Abs(nr.Y - r.Y) > NativeRectTolerance ||
+                     Math.Abs(nr.Right - r.Right) > NativeRectTolerance || Math.Abs(nr.Bottom - r.Bottom) > NativeRectTolerance))
+                    throw new PictureRefusedException("a control's position from UI Automation does not match its window");
+                boxes.Add(new Box(wid, r));
             }
         }
         return boxes;

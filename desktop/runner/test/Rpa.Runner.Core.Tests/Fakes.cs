@@ -183,8 +183,16 @@ public sealed class FakeDesktop : IDesktop
     /// <summary>GetWindowRect: the window's bounds as they are now.</summary>
     public PixelRect? GetWindowRect(IUiNode window) => ((FakeNode)window).Bounds;
 
+    /// <summary>Controls with their own native window: GetWindowRect of it (absent: no native window).</summary>
+    public Dictionary<string, PixelRect> NativeRects { get; } = [];
+    public PixelRect? GetNativeRect(IUiNode element) => NativeRects.TryGetValue(element.Id, out var r) ? r : null;
+
+    /// <summary>Runs before each window is captured (a slow app: advance a fake clock).</summary>
+    public Action? BeforeCapture { get; set; }
+
     public WindowCapture? CaptureWindow(IUiNode window)
     {
+        BeforeCapture?.Invoke();
         var c = CaptureNow((FakeNode)window);
         AfterCapture?.Invoke((FakeNode)window);
         return c;

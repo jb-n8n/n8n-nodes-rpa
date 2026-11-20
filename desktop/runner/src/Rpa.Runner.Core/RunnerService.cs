@@ -688,6 +688,9 @@ public sealed class RunnerService
         return new JsonObject { ["base64"] = Convert.ToBase64String(_desktop.CaptureWindowPng(window)) };
     }
 
+    /// <summary>The longest a look spends on its picture (masks, captures, retries); then no picture, the snapshot alone.</summary>
+    public static readonly TimeSpan PictureBudget = TimeSpan.FromSeconds(12);
+
     /// <summary>The most masked texts a look takes, and the longest one.</summary>
     public const int MaxMaskTexts = 64;
     public const int MaxMaskTextLength = 4096;
@@ -758,6 +761,9 @@ public sealed class RunnerService
     /// <summary>The picture, tried up to three times while the UI changes under it; then refused, never partly checked.</summary>
     private RepairPicture.Result Picture(RunState run, IUiNode shown, IReadOnlyList<RepairPicture.Mark> marks, IReadOnlyList<string> masks, int maxEdge, CancellationToken ct)
     {
+        // Every attempt shares one deadline, well inside the engine's wait for the answer: a picture that takes longer is
+        // refused and the look answers with the snapshot alone.
+        var deadline = _time.GetUtcNow() + PictureBudget;
         for (var attempt = 1; ; attempt++)
         {
             try
@@ -765,10 +771,10 @@ public sealed class RunnerService
                 var windows = _scope.RunWindows(run, null).Take(MaxWindows).ToList();
                 // The engine's masked texts and the texts the run typed, each looked for in every control.
                 var texts = masks.Concat(run.TypedTexts).ToList();
-                return RepairPicture.Make(windows, shown, _desktop.CaptureWindow, _desktop.GetWindowRect, pid => _scope.IsRunProcess(run, pid),
-                    run.WasTypedInto, texts, marks, maxEdge);
+                return RepairPicture.Make(windows, shown, _desktop.CaptureWindow, _desktop.GetWindowRect, _desktop.GetNativeRect, pid => _scope.IsRunProcess(run, pid),
+                    run.WasTypedInto, texts, marks, () => _time.GetUtcNow() >= deadline || ct.IsCancellationRequested, maxEdge);
             }
-            catch (ElementGoneException) when (attempt < 3)
+            catch (ElementGoneException) when (attempt < 3 && _time.GetUtcNow() < deadline)
             {
                 ct.ThrowIfCancellationRequested();
                 Thread.Sleep(TargetResolver.PollInterval);

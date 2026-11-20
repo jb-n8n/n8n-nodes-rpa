@@ -373,6 +373,71 @@ public sealed class LookTests : IDisposable
         Assert.Equal((0, 0, 0), pic.At(200 + 70, 10 + 10));
     }
 
+    // Second review: M1, M2, M4, L3.
+
+    [Fact]
+    public void A_field_whose_value_cannot_be_read_is_covered_while_there_are_texts_to_look_for()
+    {
+        var w = App();
+        // ValuePattern supported but unreadable: Value answers null, OtherTexts null (UiaNode).
+        w.Child("Edit", "Account", "txtAccount", n => { n.Bounds = new PixelRect(300, 60, 150, 20); n.Value = null; n.OtherTexts = null; });
+        Assert.Equal(Grey, Png(Look()).At(200 + 70, 10 + 10));
+        Assert.Equal((0, 0, 0), Png(Look(new { mask = new[] { "JDOE-4471" } })).At(200 + 70, 10 + 10));
+    }
+
+    [Fact]
+    public void No_picture_when_a_control_that_must_be_covered_is_reported_outside_its_window()
+    {
+        var w = App();
+        w.Find("txtPassword").Bounds = new PixelRect(480, 90, 100, 20); // reaches past the window's right edge (500)
+        Assert.Contains("outside its window", Refusal(Look()));
+        // Within the padding is fine.
+        w.Find("txtPassword").Bounds = new PixelRect(399, 90, 102, 20);
+        Png(Look());
+    }
+
+    [Fact]
+    public void No_picture_when_UI_Automation_and_the_window_manager_disagree_on_where_a_control_is()
+    {
+        var w = App();
+        var pw = w.Find("txtPassword");
+        _h.Desktop.NativeRects[pw.Id] = new PixelRect(110, 140, 100, 20);
+        Assert.Contains("does not match its window", Refusal(Look()));
+        _h.Desktop.NativeRects[pw.Id] = new PixelRect(111, 92, 98, 19);
+        Png(Look());
+    }
+
+    [Fact]
+    public void A_picture_that_takes_too_long_is_refused_and_the_snapshot_still_comes_back()
+    {
+        using var h = new Harness(realTime: false);
+        var w = h.BeginWithApp();
+        w.Bounds = new PixelRect(0, 0, 200, 100);
+        w.Find("txtPassword").Bounds = new PixelRect(10, 10, 50, 20);
+        w.Find("txtApiKey").Bounds = new PixelRect(10, 40, 50, 20);
+        h.Desktop.BeforeCapture = () => h.Time!.Advance(RunnerService.PictureBudget + TimeSpan.FromSeconds(1));
+        var r = h.Ok("look", new { runId = Harness.RunId, labelStart = 1 });
+        Assert.Null(r["picture"]);
+        Assert.Contains("took too long", r["noPicture"]!.GetValue<string>());
+        Assert.NotEmpty(r["nodes"]!.AsArray());
+    }
+
+    [Fact]
+    public void No_labels_under_a_window_in_front_of_the_one_shown_but_on_its_open_menu()
+    {
+        var w = App();
+        var dialog = new FakeNode("Window", "Sign in again", "dlgAuth", w.ProcessId) { Bounds = new PixelRect(100, 110, 200, 100) };
+        _h.Desktop.Windows.Insert(0, dialog);
+        _h.Desktop.Foreground = dialog;
+        // The main window's view while the dialog covers Sign in (110,120): no label there.
+        var r = Look(new { window = new { title = "ERP Demo - Line items" } });
+        var pic = Png(r);
+        Assert.NotEqual((255, 230, 0), pic.At(10 + 1, 70 + 1));
+        // An open menu in front is part of the view: its items keep their labels.
+        dialog.ControlType = "Menu";
+        Assert.Equal((255, 230, 0), Png(Look(new { window = new { title = "ERP Demo - Line items" } })).At(10 + 1, 70 + 1));
+    }
+
     [Fact]
     public void Mask_texts_are_checked()
     {
