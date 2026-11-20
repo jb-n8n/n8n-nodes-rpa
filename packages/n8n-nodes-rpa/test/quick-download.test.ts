@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import type { IBinaryData, IDataObject, INodeProperties } from 'n8n-workflow';
 import { DEFAULT_MIME, MIME } from 'n8n-rpa-engine';
 import { DEFAULT_FILE_TYPES, downloadProperties, FILE_TYPES } from '../nodes/Playwright/description/download.js';
@@ -9,7 +10,6 @@ import { fakeEngine } from './fake-engine.js';
 import { harness } from './harness.js';
 import { assertRunnable, BROWSER, okResult, optionsFor, PAGE_URL, QUICK_COMMON_OPTIONS, quickParams } from './quick-fixtures.js';
 
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const trigger = { locator: { findBy: 'text', text: 'Export CSV' } };
 const q = (over: IDataObject = {}, options: IDataObject = {}): QuickParams => ({ url: PAGE_URL, waitUntil: 'load', downloadTrigger: trigger, ...over, options }) as QuickParams;

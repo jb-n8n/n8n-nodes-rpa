@@ -45,6 +45,11 @@ describe('desktop step sets: parsing', () => {
     expect(isDesktopDocument({ steps: [] })).toBe(false);
   });
 
+  it("a desktop step's timeoutMs is still capped at 120000", () => {
+    const step = (timeoutMs: number) => desktop([{ intent: 'Wait', waitFor: { target: uia('gridResults', 'DataGrid'), state: 'visible' }, timeoutMs }]);
+    expect(desktopIssues(step(120_000))).toEqual([]);
+    expect(desktopIssues(step(120_001))[0]).toMatch(/timeoutMs must be an integer between 100 and 120000/);
+  });
   it('needs surface "desktop" and an app; refuses startUrl, unknown keys and interrupts', () => {
     expect(desktopIssues({ name: 'x', steps: [] })).toEqual([BROWSER_STEPS_NEED_BROWSER]);
     expect(desktopIssues({ surface: 'mainframe', steps: [] })).toEqual(['surface must be "browser" or "desktop"']);
@@ -53,7 +58,7 @@ describe('desktop step sets: parsing', () => {
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a') }], { app: { exe: '{{var.app}}' } }))[0]).toMatch(/^app\.exe must be/);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a') }], { app: { exe: 'a.exe', args: ['{{var.x}}'] } }))[0]).toMatch(/^app\.args/);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a') }], { startUrl: 'https://example.com/' }))).toEqual([
-      'script has unknown key "startUrl"', 'startUrl is a browser setting, not allowed in a desktop step set: set app instead',
+      'the steps have the unknown key "startUrl"', 'startUrl is a browser setting, not allowed in a desktop step set: set app instead',
     ]);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a') }], { interrupts: [{ target: uia('a'), click: uia('b') }] }))).toEqual(['interrupts are not supported in a desktop step set yet']);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a') }], { interrupts: [] }))).toEqual([]);
@@ -88,7 +93,7 @@ describe('desktop step sets: parsing', () => {
     expect(desktopIssues(desktop([{ intent: 'x', click: { uia: { path: [{ name: 'a' }], window: {} } } }]))).toEqual(['steps[0].click.uia.window needs at least one of exe, title, titlePattern, automationId, className']);
     expect(desktopIssues(desktop([{ intent: 'x', click: { uia: { path: [{ name: 'a' }], window: { titlePattern: '(' } } } }]))).toEqual(['steps[0].click.uia.window.titlePattern is not a valid regex']);
     expect(desktopIssues(desktop([{ intent: 'x', click: { ...uia('a'), fallbacks: [{ ...uia('b'), fallbacks: [] }] } }]))).toEqual(['steps[0].click.fallbacks[0] has nested fallbacks']);
-    expect(desktopIssues(desktop([{ intent: 'x', read: { target: uia('a'), as: 'count' }, write: true }]))).toEqual(['steps[0].write is only allowed on click, fill, select, check and key steps']);
+    expect(desktopIssues(desktop([{ intent: 'x', read: { target: uia('a'), as: 'count' }, write: true }]))).toEqual(['steps[0].write is only allowed on click, doubleClick, fill, select, check and key steps']);
     expect(desktopIssues(desktop([{ intent: 'x', key: { key: 'Ctrl+Alt+Delete+X' } }]))).toEqual(['steps[0].key.key must be a key chord such as Enter, Tab, Ctrl+S or F5 (modifiers in the order Ctrl, Alt, Shift; letters uppercase)']);
     expect(desktopIssues(desktop([{ intent: 'x', read: { target: uia('a'), as: 'not a name' } }]))[0]).toMatch(/^steps\[0\]\.read\.as must be a name/);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a'), extra: 1 }]))).toEqual(['steps[0] has unknown key "extra"']);
@@ -216,7 +221,7 @@ describe('desktop step sets: signing', () => {
 
   it('signing refuses a desktop step set that does not parse', () => {
     expect(() => signScript(desktop([{ intent: 'x', goto: 'https://example.com/' }]), KEY, { approvedBy: WHO })).toThrow(
-      'invalid script: steps[0]: "goto" is a browser step, not allowed in a desktop step set',
+      'invalid steps: steps[0]: "goto" is a browser step, not allowed in a desktop step set',
     );
   });
 

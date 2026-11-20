@@ -1,5 +1,9 @@
 # Security review (October 2026)
 
+Scope: the browser engine, the node and its credentials, the templates and the compose stack with its browser image,
+as they were in October 2026. What 0.2.0 added later is not in this review: the desktop runner, the policy tool, the
+Windows installer (automatic sign-in, firewall rules), the browser host and the certificate fingerprint check.
+
 Three independent reviews, one per boundary: network egress, secrets and step integrity, and the AI agent plus
 infrastructure and supply chain. Each finding was fixed test first: a new test failed on the old code and passes on the
 fix. An automated review then re-checked every fix, and its findings were fixed the same way.

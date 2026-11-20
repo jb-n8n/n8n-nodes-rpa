@@ -13,6 +13,9 @@ public sealed record WindowSel(string? Exe, string? Title, string? TitlePattern,
 /// <summary>UI Automation properties to match; <c>Index</c> picks among siblings that match the rest (0-based).</summary>
 public sealed record Cond(string? ControlType, string? AutomationId, string? Name, string? ClassName, int? Index)
 {
+    /// <summary>Matches every element (a search for all descendants).</summary>
+    public static readonly Cond Any = new(null, null, null, null, null);
+
     public override string ToString() => Describe.Fields(("controlType", ControlType), ("automationId", AutomationId),
         ("name", Name), ("className", ClassName), ("index", Index?.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 }
@@ -30,7 +33,10 @@ public sealed record Target(WindowSel? Window, IReadOnlyList<Cond> Path, IReadOn
 
 public enum ActionKind { Click, DoubleClick, Type, Select, Check, Uncheck, Key, Read, Expand, Focus }
 
-public enum ActMode { Step, Repair }
+/// <summary>How an act is checked. <c>Repair</c>: exploration only (expand, read, Escape while a menu is open, click on
+/// tabs, list items and tree items). <c>Probe</c>: a step the repair added or retargeted, on a control nobody approved
+/// yet (see RunnerService.CheckProbe).</summary>
+public enum ActMode { Step, Repair, Probe }
 
 /// <summary>A piece of a <c>type</c> value: literal text, or the run's export directory.</summary>
 public sealed record Segment(string? Text, bool ExportDir);
@@ -45,7 +51,7 @@ internal static class Describe
         return "{" + string.Join(", ", parts) + "}";
     }
 
-    private static string Quote(string s) => "\"" + (s.Length > 80 ? s[..80] + "..." : s) + "\"";
+    public static string Quote(string s) => "\"" + (s.Length > 80 ? s[..80] + "..." : s) + "\"";
 }
 
 /// <summary>Reads and validates request params. Every failure is -32602 with the offending field named.</summary>
@@ -127,7 +133,8 @@ public sealed class Params
     {
         null or "step" => ActMode.Step,
         "repair" => ActMode.Repair,
-        _ => throw RpcErrors.InvalidParamsError($"{name} must be 'step' or 'repair'"),
+        "probe" => ActMode.Probe,
+        _ => throw RpcErrors.InvalidParamsError($"{name} must be 'step', 'repair' or 'probe'"),
     };
 
     public IReadOnlyList<Segment>? OptSegments(string name)

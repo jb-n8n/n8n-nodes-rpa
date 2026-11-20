@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-rpa",
   "version": "0.2.0",
-  "description": "Robotic process automation for n8n: screenshots, page text, PDFs, tables, forms and downloads, plus signed step lists that repair themselves with AI. Self-hosted only.",
+  "description": "Robotic process automation (RPA) for self-hosted n8n: bots that drive a browser and Windows desktop apps. Record or import them (UiPath, Chrome Recorder), approve and sign their steps, and let browser steps repair themselves with AI.",
   "license": "MIT",
   "homepage": "https://github.com/jb-n8n/n8n-nodes-rpa#readme",
   "repository": {
@@ -32,9 +32,13 @@
   "engines": {
     "node": ">=22.12"
   },
+  "bin": {
+    "n8n-nodes-rpa": "dist/setup.mjs"
+  },
   "files": [
     "dist",
-    "templates"
+    "templates",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "n8n": {
     "n8nNodesApiVersion": 1,
@@ -44,17 +48,20 @@
       "dist/credentials/PlaywrightSiteLoginApi.credentials.js",
       "dist/credentials/PlaywrightScriptSigningApi.credentials.js",
       "dist/credentials/PlaywrightRedisApi.credentials.js",
-      "dist/credentials/RpaDesktopRunnerApi.credentials.js"
+      "dist/credentials/RpaDesktopRunnerApi.credentials.js",
+      "dist/credentials/RpaSecretVariablesApi.credentials.js"
     ],
     "nodes": [
       "dist/nodes/Playwright/Playwright.node.js"
     ]
   },
   "scripts": {
-    "build": "pnpm --filter n8n-rpa-engine build && node scripts/clean.mjs && tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "build": "pnpm --filter n8n-rpa-engine build && node scripts/clean.mjs && tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/build-setup.mjs",
     "typecheck": "tsc -p tsconfig.test.json",
     "lint": "eslint .",
-    "test": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && vitest run"
+    "templates": "node scripts/build-templates.mjs",
+    "test": "pnpm --filter n8n-rpa-engine build && tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/build-setup.mjs && vitest run",
+    "test:unit": "vitest run --exclude \"test/**/*.integration.test.ts\" --exclude test/package.test.ts --exclude test/lazy-engine.test.ts"
   },
   "dependencies": {
     "fflate": "0.8.3",
@@ -75,5 +82,10 @@
   },
   "peerDependencies": {
     "n8n-workflow": "*"
+  },
+  "peerDependenciesMeta": {
+    "n8n-workflow": {
+      "optional": true
+    }
   }
 }

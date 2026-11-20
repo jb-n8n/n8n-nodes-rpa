@@ -2,8 +2,10 @@
 // its own floor (allowed apps and windows, declared write controls, gated keys); a step declared `write: true` by its
 // owner is the only one that carries the write marker.
 
-import { runBinaryTooLarge } from '../messages.js';
-import { renderVars } from '../secrets/render.js';
+import { emptyChoice, runBinaryTooLarge, UNSIGNED_SECRET_VARIABLE } from '../messages.js';
+import { looksDestructive } from '../policy/destructive.js';
+import { renderVars, SECRET_FILL_VALUE } from '../secrets/render.js';
+import { secretFillValues } from '../secrets/secret-fills.js';
 import { FILE_CHECK_FAILED_PREFIX, checkFile } from '../steps/file-check.js';
 import { MAX_TEXT_BYTES, truncateUtf8 } from '../steps/handlers/capture.js';
 import { binaryName, DEFAULT_MAX_BYTES, DEFAULT_MIME, sanitizeFileName, sniffMime } from '../steps/handlers/files.js';
@@ -13,8 +15,8 @@ import { EXPORT_DIR_TOKEN, MAX_EXPECTED_FILE_BYTES } from '../steps/parse.js';
 import { poll } from '../steps/poll.js';
 import type { Handler, StepContext } from '../steps/run.js';
 import type { DesktopLocator, DesktopStep, DesktopStepBase, RunState } from '../types.js';
-import { PolicyRefusedError, type RunnerAction, type Segment } from './protocol.js';
-import { describeDesktopLocator, DesktopDriftError, runnerTarget, type DesktopSurface } from './surface.js';
+import { PolicyRefusedError, RUNNER_ERROR_CODES, type RunnerAction, type Segment } from './protocol.js';
+import { capWait, describeDesktopLocator, DesktopDriftError, runnerTarget, type DesktopSurface } from './surface.js';
 
 type D<K extends string> = Extract<DesktopStep, Record<K, unknown>>;
 const POLL_MS = 250;
@@ -50,13 +52,31 @@ async function actOn(
   extra: { value?: string; segments?: Segment[] } = {},
 ): Promise<{ candidate?: number; text?: string }> {
   const s = desktopOf(ctx);
+  // A step AI repair added or retargeted acts on a control nobody approved yet: a click goes out in probe mode, a read in
+  // repair mode, and nothing else is sent (the repair stops before such a step instead).
+  const mark = s.changedSteps.get(ctx.stepIndex ?? -1);
+  let mode: 'step' | 'probe' | 'repair' | undefined;
+  if (mark === undefined || mark === 'checkOnly') mode = 'step';
+  else if (mark === 'probe') mode = action === 'click' || action === 'doubleClick' ? 'probe' : action === 'read' ? 'repair' : undefined;
+  else if (mark === 'expand' && action === 'click') { mode = 'repair'; action = 'expand'; }
+  else if (mark === 'select' && action === 'click') mode = 'repair';
+  else if (mark === 'escape' && action === 'key' && loc === undefined && extra.value === 'Escape') mode = 'repair';
+  if (mode === undefined || (mark !== undefined && step.write === true)) throw new Error(CHANGED_STEP_NOT_RUN);
   const t0 = Date.now();
   const target = loc ? runnerTarget(loc) : undefined;
-  const candidate = target ? (await s.rpc('resolve', { target, timeoutMs: timeout })).candidate : undefined;
+  // Waiting for the control to appear is capped while AI repair runs steps on (capWait); acting keeps the step's timeout.
+  const candidate = target ? (await s.rpc('resolve', { target, timeoutMs: capWait(s, timeout) })).candidate : undefined;
+  // A recorded menu or selection the repair kept replays in repair mode on an unapproved control: never on one whose
+  // name or id (of the candidate that resolved) reads like it deletes, cancels, rejects or signs out. The runner checks
+  // the element itself too.
+  if ((mark === 'select' || mark === 'expand') && loc && candidate !== undefined) {
+    const own = candidateCondition(loc, candidate);
+    if (!own || looksDestructive(own.name ?? '', own.automationId ?? '')) throw new PolicyRefusedError(RUNNER_ERROR_CODES.policy_refused, `policy_refused: ${CHANGED_STEP_DESTRUCTIVE}`);
+  }
   const timeoutMs = Math.max(MIN_ACT_MS, timeout - (Date.now() - t0));
   const write = step.write === true;
   try {
-    const r = await s.rpc('act', { ...(target ? { target } : {}), action, ...extra, ...(write ? { write: true } : {}), mode: 'step', timeoutMs });
+    const r = await s.rpc('act', { ...(target ? { target } : {}), action, ...extra, ...(write ? { write: true } : {}), mode, timeoutMs });
     if (write) state.submitted = true;
     return { ...(candidate !== undefined ? { candidate } : {}), ...(r.text !== undefined ? { text: r.text } : {}) };
   } catch (err) {
@@ -66,15 +86,33 @@ async function actOn(
   }
 }
 
+/** A kept menu or selection whose control reads destructive: never replayed before approval. */
+export const CHANGED_STEP_DESTRUCTIVE = "a menu or item AI repair kept reads like it deletes, cancels, rejects or signs out, so it is not opened or selected before approval";
+
+/** The own condition (the last of its path) of the locator's candidate `i` (0: the primary, then the fallbacks). */
+function candidateCondition(loc: DesktopLocator, i: number): { name?: string; automationId?: string } | undefined {
+  const t = i === 0 ? loc.uia : loc.fallbacks?.[i - 1]?.uia;
+  return t?.path[t.path.length - 1];
+}
+
+/** A step AI repair changed that would type, choose, check or press a key: it never runs before approval. */
+export const CHANGED_STEP_NOT_RUN = 'a step AI repair added or changed runs before approval only as the click, read, menu, selection or Escape it was';
+
 const VAR_REF = /\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g;
 
 /**
  * A text the run types into a field, rendered ({{var.x}}). The value of every variable it uses is kept for masking
  * (DesktopSurface.typed): such values come from outside the signed steps (a password, an account number) and are masked
- * out of messages, logs and read outputs. Literal text is part of the signed steps and is not.
+ * out of messages, logs and read outputs. Literal text is part of the signed steps and is not. A secret variable (the
+ * run's masker holds it, registerSecretVars) is typed only by signed steps and only as the whole text, exactly one
+ * {{var.name}}; renderVars refuses it anywhere else.
  */
 function typedText(ctx: StepContext, template: string): string {
-  const text = renderVars(template, ctx.vars, ctx.masker);
+  const name = SECRET_FILL_VALUE.exec(template)?.[1];
+  const value = name !== undefined && Object.hasOwn(ctx.vars, name) ? ctx.vars[name] : undefined;
+  const secret = typeof value === 'string' && secretFillValues(ctx.masker).has(value);
+  if (secret && !ctx.signed) throw new Error(UNSIGNED_SECRET_VARIABLE);
+  const text = secret ? value : renderVars(template, ctx.vars, ctx.masker);
   const typed = desktopOf(ctx).typed;
   for (const m of template.matchAll(VAR_REF)) {
     const v = ctx.vars[m[1]];
@@ -103,6 +141,11 @@ const click: Handler = async (ctx, step, state, timeout) => {
   return (await actOn(ctx, s, s.click, 'click', state, timeout)).candidate;
 };
 
+const doubleClick: Handler = async (ctx, step, state, timeout) => {
+  const s = step as unknown as D<'doubleClick'>;
+  return (await actOn(ctx, s, s.doubleClick, 'doubleClick', state, timeout)).candidate;
+};
+
 const fill: Handler = async (ctx, step, state, timeout) => {
   const s = step as unknown as D<'fill'>;
   const segments = fillSegments(ctx, s.fill.value);
@@ -112,7 +155,11 @@ const fill: Handler = async (ctx, step, state, timeout) => {
 const select: Handler = async (ctx, step, state, timeout) => {
   const s = step as unknown as D<'select'>;
   // An option is the name of an item the app lists, not typed text: rendered, not masked.
-  return (await actOn(ctx, s, s.select.field, 'select', state, timeout, { value: renderVars(s.select.option, ctx.vars, ctx.masker) })).candidate;
+  const value = renderVars(s.select.option, ctx.vars, ctx.masker);
+  // Run variables that are empty name no item: said now, instead of after the wait for an item without a name.
+  const names = [...String(s.select.option).matchAll(/\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g)].map((m) => m[1]);
+  if (value.trim() === '' && names.length) throw new Error(emptyChoice([...new Set(names)]));
+  return (await actOn(ctx, s, s.select.field, 'select', state, timeout, { value })).candidate;
 };
 
 const check: Handler = async (ctx, step, state, timeout) => {
@@ -129,8 +176,9 @@ const waitFor: Handler = async (ctx, step, _state, timeout) => {
   const w = (step as unknown as D<'waitFor'>).waitFor;
   const s = desktopOf(ctx);
   const want = (w.state ?? 'visible') === 'visible';
-  const ok = await poll(async () => (await s.isVisible(w.target as never)) === want, timeout, POLL_MS);
-  if (!ok) throw new DesktopDriftError(`waited ${Math.round(timeout / 100) / 10} s for ${describeDesktopLocator(w.target)} to be ${want ? 'visible' : 'hidden'}`);
+  const waitMs = capWait(s, timeout);
+  const ok = await poll(async () => (await s.isVisible(w.target as never)) === want, waitMs, POLL_MS);
+  if (!ok) throw new DesktopDriftError(`waited ${Math.round(waitMs / 100) / 10} s for ${describeDesktopLocator(w.target)} to be ${want ? 'visible' : 'hidden'}`);
 };
 
 const read: Handler = async (ctx, step, state, timeout) => {
@@ -176,6 +224,6 @@ const expectFile: Handler = async (ctx, step, state, timeout) => {
 };
 
 registerHandlers('desktop', {
-  click: recorded(click), fill: recorded(fill), select: recorded(select), check: recorded(check), key: recorded(key),
+  click: recorded(click), doubleClick: recorded(doubleClick), fill: recorded(fill), select: recorded(select), check: recorded(check), key: recorded(key),
   waitFor: recorded(waitFor), read: recorded(read), expectFile: recorded(expectFile),
 });

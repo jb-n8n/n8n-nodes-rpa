@@ -48,6 +48,33 @@ describe('queue mode detection (no Redis credential)', () => {
 
 guardStoreContract('memory', async () => memoryGuardStore(), async () => resetMemoryGuardStoreForTests());
 
+/** The commands the Redis store sends, on a map: its serialisation and compare-and-delete run without a Redis server. */
+function mapRedis(): { client: () => GuardClient; reset: () => void } {
+  const data = new Map<string, { value: string; expiresAt: number }>();
+  const live = (key: string) => {
+    const entry = data.get(key);
+    if (entry && entry.expiresAt <= Date.now()) data.delete(key);
+    return data.get(key);
+  };
+  return {
+    reset: () => data.clear(),
+    client: () => ({
+      get: async (key) => live(key)?.value ?? null,
+      set: async (key, value, options) => {
+        if (options && live(key)) return null;
+        data.set(key, { value, expiresAt: options ? Date.now() + options.expiration.value : Infinity });
+        return 'OK';
+      },
+      eval: async (_script, { keys: [key], arguments: [value] }) => (live(key)?.value === value ? Number(data.delete(key)) : 0),
+      del: async (key) => Number(data.delete(key)),
+      quit: async () => undefined,
+      destroy: () => {},
+    }),
+  };
+}
+const onMap = mapRedis();
+guardStoreContract('redis commands on a map', async () => guardStoreOnClient(onMap.client()), async () => onMap.reset());
+
 describe('Redis connect failures', () => {
   const reply = (message: string) => Object.assign(new Error(message), { name: 'ErrorReply' });
   it.each([
@@ -69,7 +96,7 @@ describe('Redis command timeout (a black-holed connection)', () => {
   const never = () => new Promise<never>(() => {});
   it('every store command rejects after the timeout instead of hanging, and close() gives up and destroys the client', async () => {
     let destroyed = 0;
-    const client: GuardClient = { get: never, set: never, eval: never, quit: never, destroy: () => { destroyed++; } };
+    const client: GuardClient = { get: never, set: never, eval: never, del: never, quit: never, destroy: () => { destroyed++; } };
     const store = guardStoreOnClient(client, { commandTimeoutMs: 20 });
     const rec = { code: 'login_failed' as const, at: 'now', resetKey: '', message: 'm' };
     const calls: Array<[string, () => Promise<unknown>]> = [
@@ -78,6 +105,9 @@ describe('Redis command timeout (a black-holed connection)', () => {
       ['deleteBreaker', () => store.deleteBreaker('k', rec)],
       ['acquireLock', () => store.acquireLock('k', 1000)],
       ['releaseLock', () => store.releaseLock('k', { token: 't', expiresAt: 0 })],
+      ['getRepairStop', () => store.getRepairStop('k')],
+      ['setRepairStop', () => store.setRepairStop('k', { at: 'now', resetKey: '', version: 1, code: 'incomplete', llmCalls: 1, tokens: 10 })],
+      ['deleteRepairStop', () => store.deleteRepairStop('k')],
     ];
     for (const [name, call] of calls) {
       await expect(call(), name).rejects.toThrow('The Redis server did not answer within 20 ms.');

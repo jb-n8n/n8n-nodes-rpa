@@ -22,7 +22,35 @@ make -C deploy check # the Helm chart and the Terraform modules (needs terraform
 The Redis tests of the queue-mode breaker and lock run when `REDIS_URL` points at a test database (for example
 `REDIS_URL=redis://localhost:6379/15`); without it they are skipped.
 
-The README's [Development](README.md#development) section lists what each suite covers and how to run one test file.
+Run one test file with `pnpm --filter n8n-rpa-engine exec vitest run <file>` or
+`pnpm --filter n8n-nodes-rpa exec vitest run test/<file>`.
+
+| Suite | Command | Covers |
+|---|---|---|
+| Engine | `pnpm --filter n8n-rpa-engine test` | Step runner, locators, policy and address checks, masking, signing, traces, the agent loop (with a scripted fake model), compile, prove, imports. Runs against the sandbox and a real Chromium. |
+| Node | `pnpm --filter n8n-nodes-rpa test` | Every operation through an n8n execution harness, the credentials, the templates' JSON, and the doc texts the docs quote (`test/readme.test.ts`). |
+| Eval | `pnpm --filter n8n-rpa-eval test` | The eval's fixtures and leak detectors. `pnpm --filter n8n-rpa-eval start` runs the live heal-rate eval (needs `ANTHROPIC_API_KEY`). |
+| Sandbox and gate | `pnpm --filter n8n-rpa-sandbox test`, `pnpm --filter n8n-rpa-gate test` | The sample site and the browser's token gate. |
+| Deploy script | `node --test "deploy/scripts/test/*.test.mjs"` | `deploy/scripts/configure-n8n.mjs` against a fake n8n API. |
+| Acceptance | `pnpm acceptance` | The acceptance criteria through the templates. `ACCEPTANCE_COMPOSE=1` adds the compose smoke test (start the stack with `docker-compose.dev.yml` first). |
+| Desktop | see [`desktop/README.md`](desktop/README.md#building-and-testing) | The runner, the recorder and the installer (.NET and Pester). |
+
+**Stacks.** `docker compose up --build -d` runs n8n with the node built from the source, the browser, the sandbox and
+Mailpit ([browser bot guide](docs/guides/browser-bot.md)). `docker compose -p n8n-rpa-queue -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.queue.yml up -d --build`
+runs n8n in queue mode with Postgres, Redis and two workers, on its own ports (n8n http://localhost:35678).
+`SANDBOX_SAP=realistic` switches the sandbox's SAP pages to a realistic look-alike
+([runbook](docs/onboarding/sap-lookalike.md)). `docker/n8n.Dockerfile` builds the n8n image with the node baked in.
+Rebuild after changing the engine or the node: `docker compose up --build -d n8n`.
+
+**Secrets in this repo.** `.env` is git-ignored: copy `.env.example`. n8n writes its encryption key into the `n8n_data`
+volume, so treat that volume as secret. Every password, TOTP secret and key in the sandbox, the templates and the tests
+is synthetic.
+
+**Layout.** `packages/engine` (the engine, bundled into the node), `packages/n8n-nodes-rpa` (the node, its credentials
+and templates), `packages/eval` (the heal-rate eval and acceptance tests), `sandbox/portal` (the sample site),
+`images/browser` (the `rpa-browser` image: run-server, token gate, supervisor), `docker/` (the n8n image), `deploy/`
+(Helm chart, Terraform, the configure script), `desktop/` (the Windows runner, recorder, policy tool and installer) and
+`docs/` (guides, reference, install and deploy runbooks).
 
 ## Changes
 
@@ -41,30 +69,50 @@ The README's [Development](README.md#development) section lists what each suite 
 
 ## Releases
 
-Releases are published to npm from GitHub Actions with provenance (`.github/workflows/publish.yml`), never from a
-laptop. The workflow tests in a job without publish rights, packs the tarball with
-`packages/n8n-nodes-rpa/scripts/pack.mjs` (devDependencies and scripts stripped, the manifest checked) and cuts the
-version's section out of `CHANGELOG.md`; a second job with no checkout publishes that tarball to npm; once it has, a
-third job with no checkout attests the same tarball and creates the GitHub Release `v<version>` with the tarball, its
-SHA-256 and that section as the notes. A maintainer bumps the version in `packages/n8n-nodes-rpa/package.json`, adds
-the `## <version> (<date>)` entry to `CHANGELOG.md`, and pushes a `v<version>` tag. The `rpa-browser` image is published the same way by
-`.github/workflows/browser-image.yml`, from a `browser-v<version>` tag on `main`; its Playwright version must equal the
-node's `playwright-core`.
+Releases are published from GitHub Actions, never from a laptop. One version number covers three releases, each from
+its own tag on a commit on `main`, and one `CHANGELOG.md` section, `## <version> (<date>)`, is the notes of all three:
+the workflows cut out the section whose heading starts `## <version>` and do not read the date.
+
+- **The node**, `.github/workflows/publish.yml`, from a `v<version>` tag, where `<version>` is the one in
+  `packages/n8n-nodes-rpa/package.json`. The workflow tests in a job without publish rights, packs the tarball with
+  `packages/n8n-nodes-rpa/scripts/pack.mjs` (devDependencies and scripts stripped, the manifest checked) and cuts the
+  notes; a second job with no checkout publishes that tarball to npm with provenance; once it has, a third job with no
+  checkout attests the same tarball and creates the GitHub Release `v<version>` with the tarball, its SHA-256 and the
+  notes.
+- **The `rpa-browser` image**, `.github/workflows/browser-image.yml`, from a `browser-v<version>` tag. Its Playwright
+  version must equal the node's `playwright-core`.
+- **The Windows package**, `.github/workflows/desktop-release.yml`, from a `desktop-v<version>` tag, where `<version>`
+  is the `<Version>` in `desktop/Directory.Build.props`. It builds, tests and attests both zips and `Get-Rpa.ps1`, and
+  creates the GitHub Release `desktop-v<version>`. A manual run on `main` is a dry run that publishes nothing
+  ([desktop/README.md](desktop/README.md#releasing-the-windows-package)).
+
+A maintainer sets the version in both files, writes the `CHANGELOG.md` section, and pushes the tags in this order: the
+image, the node, then the Windows package, on the same commit. Each release then points only at what is published
+already: the node's guides name the image, and the Windows package needs that node version.
 
 ## The community package scan
 
 The package is unverified on purpose: it drives a browser through `playwright-core`, which n8n's verification rules do
-not allow. `pnpm -r lint` runs the plugin's `recommendedWithoutN8nCloudSupport` set with two rules off (runtime
-dependencies, `usableAsTool`). n8n's scanner (`npx @n8n/scan-community-package n8n-nodes-rpa`) applies the full
-`recommended` set, and these findings are expected there; anything else is a regression:
+not allow. `pnpm -r lint` runs the plugin's `recommendedWithoutN8nCloudSupport` set over the node's TypeScript, with two
+rules off (runtime dependencies, `usableAsTool`). n8n's scanner (`npx @n8n/scan-community-package n8n-nodes-rpa`)
+applies the full `recommended` set to the published package. Run over the packed `dist/` from the code, that set
+reports these, which are expected; anything else is a regression. The scanner's own file set may differ: run it once
+after each release and update this list.
 
 - `no-runtime-dependencies` (package.json): `playwright-core`, `fflate` and `redis`.
 - `node-usable-as-tool` (Playwright.node.ts): left out on purpose; tool conversion would drop the model input and the
   extra outputs.
-- `no-restricted-imports`: `redis` (redis-store.ts, the shared breaker and lock in queue mode) and `node:fs`
-  (guard-store.ts, to read `EXECUTIONS_MODE_FILE`).
-- `no-restricted-globals`: `process` (guard-store.ts, to detect queue mode) and `setTimeout`/`clearTimeout`
-  (redis-store.ts, to bound every Redis command).
+- In the node (`dist/nodes/`): `no-restricted-imports` for `redis` (redis-store.js, the shared breaker and lock in
+  queue mode) and `node:fs` (guard-store.js, to read `EXECUTIONS_MODE_FILE`); `no-restricted-globals` for `process`
+  (guard-store.js, to detect queue mode) and `setTimeout`/`clearTimeout` (redis-store.js, to bound every Redis command).
+- In the bundled engine (`dist/engine/`): `no-restricted-imports` for `playwright-core`, `fflate`, `node:net`,
+  `node:tls`, `node:dns/promises`, `node:fs/promises`, `node:os` and `node:path` (the browser connection, the
+  private-network checks, downloads, the desktop runner's TLS connection); `no-restricted-globals` for `setTimeout`,
+  `clearTimeout`, `setInterval` and `clearInterval` (time limits, and the lease of a desktop run).
+- In the setup command (`dist/setup.mjs`, the package's bin, which n8n never loads): `no-dangerous-functions` for
+  `spawn` (it runs n8n's own command line); `no-restricted-imports` for `node:child_process`, `node:fs`, `node:os`,
+  `node:path`, `node:readline/promises`, `node:util`, `node:buffer`, `module` and `worker_threads` (the last from the
+  bundled fflate); `no-restricted-globals` for `process`, `setTimeout` and `clearTimeout`.
 
 ## Security
 

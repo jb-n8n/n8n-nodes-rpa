@@ -3,8 +3,8 @@ import type { DesktopProposal, DownloadedFile, ErrorCode, Proposal, RequestRecor
 import type { NodeContext } from './context.js';
 import type { Compiled, LaneSuccess } from './operations/quick/shared.js';
 import type { Engine } from './engine.js';
-import { errorJson, type FailureDetails } from './errors.js';
-import { changeList, evidenceLine, fullSafetyFlags, safetyLine } from './format.js';
+import { CONFIG_GUIDANCE, errorJson, guidanceFor, shownMessage, type FailureDetails } from './errors.js';
+import { changeList, DESKTOP_EVIDENCE_LINE, desktopRepairEvidenceLine, desktopRepairProof, evidenceLine, fullSafetyFlags, leftOutList, modelSteps, NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, reviewSteps, safetyLine } from './format.js';
 
 /** A file-name-safe form of a name (lowercase, dashes), 'rpa' when nothing is left. */
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'rpa';
@@ -20,7 +20,12 @@ async function failureBinary(ctx: NodeContext, r: { screenshot?: Buffer; trace?:
 type RunOk = Extract<TaskResult, { ok: true }>;
 type RunFailure = Extract<TaskResult, { ok: false }>;
 /** A JSON copy: log entries and step documents are plain data; n8n items must not share objects with the engine result. */
-const plain = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+export const plain = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+/** The step log as a person reads it: each note without the engine's `detected:` mark (shownMessage), as the message. */
+const shownLog = (log: { note?: string }[]): IDataObject[] =>
+  (plain(log) as unknown as IDataObject[]).map((e) => (typeof e.note === 'string' ? { ...e, note: shownMessage(e.note) } : e));
+/** A failure after a run that finished: its output could not be built (for example the binary store failed). */
+export const OUTPUT_NOT_BUILT = (why: string): string => `the run finished but its output could not be built: ${why}`;
 
 /**
  * Facts a success may carry: the script lane always has them; the agent lane reports the files, blocked writes and the
@@ -35,6 +40,8 @@ interface RunFacts {
   verified?: boolean;
   /** Both lanes always carry it (it also keeps this interface from being a weak type). */
   submitted: boolean;
+  /** The sign-in set a new password (signIn.changePassword). */
+  passwordChanged?: true;
 }
 
 /** Run Steps Data item: page facts, identity, lane, the step log, and rows/files/blocked writes when present. */
@@ -69,13 +76,14 @@ export async function dataItem(
     // The run log columns (template 2): wall time of the whole run, and chat model tokens (script lane: none).
     durationMs: r.durationMs,
     llmTokens: r.lane === 'agent' ? r.tokens : 0,
-    log: plain(r.log) as unknown as IDataObject[],
+    log: shownLog(r.log),
     // Rows only when row checks ran: an extract step on the script lane, always for agent-lane rows (the proof ran).
     ...(r.lane === 'agent' || f.verified ? { rows: r.rows.map((row) => ({ ...row })) } : {}),
     ...(Object.keys(values).length ? { values } : {}),
     ...(files.length ? { files } : {}),
     ...(blocked.length ? { blockedRequests: blocked.map((b) => ({ ...b })) } : {}),
     ...(f.submitted ? { submitted: true } : {}),
+    ...(f.passwordChanged ? { passwordChanged: true } : {}),
   };
   return { json, ...(Object.keys(binary).length ? { binary } : {}) };
 }
@@ -85,7 +93,7 @@ export async function dataItem(
  * steps replayed alone, for the reviewer to step through in a Trace Viewer. `attachmentNames` names only the screenshots.
  * Never uses the word "proposal".
  */
-export async function repairedStepsItem(ctx: NodeContext, engine: Engine, p: Proposal): Promise<INodeExecutionData> {
+export async function repairedStepsItem(ctx: NodeContext, engine: Engine, p: Proposal, o: { byModel?: boolean } = {}): Promise<INodeExecutionData> {
   const binary: IBinaryKeyData = {};
   const names: string[] = [];
   for (const [which, version] of [['before', p.baseVersion ?? 0], ['after', p.version]] as const) {
@@ -95,19 +103,23 @@ export async function repairedStepsItem(ctx: NodeContext, engine: Engine, p: Pro
     names.push(which);
   }
   if (p.trace) binary.trace = await ctx.helpers.prepareBinaryData(p.trace, `${slug(p.name)}-v${p.version}-proof-trace.zip`, 'application/zip');
-  return { json: repairedStepsJson(engine, p, names.join(',')), ...(Object.keys(binary).length ? { binary } : {}) };
+  return { json: repairedStepsJson(engine, p, names.join(','), o), ...(Object.keys(binary).length ? { binary } : {}) };
 }
 
 /**
  * The JSON of a Repaired steps item. The safety flags are the full list (fullSafetyFlags: every host, submission and
  * download, not only the new ones the engine flags), and the digest is computed over that list. Sign Steps recomputes
- * the same list and refuses an item that carries another one.
+ * the same list and refuses an item that carries another one. `notReplayed`: browser steps that go to approval without
+ * a replay (engine notReplayedProposal): no page was read, so there is no count-unverified flag, the flags also name each secret fill and password change,
+ * and the evidence line is NOT_REPLAYED_EVIDENCE_LINE. `reviewSteps`: the steps as the review page and the emails list
+ * them (format.ts reviewSteps; shown only, outside the digest: Sign Steps builds them again). `byModel`: the chat model
+ * built or repaired these steps, so a description on a step it wrote is labelled as the AI's (modelSteps).
  */
-export function repairedStepsJson(engine: Engine, proposal: Proposal, attachmentNames = ''): IDataObject {
-  const safetyFlags = fullSafetyFlags(engine, engine.parseScript(proposal.steps), {
-    unverifiedCount: proposal.safetyFlags.includes(engine.UNVERIFIED_COUNT_FLAG), fieldsDropped: proposal.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED),
-  });
-  const p: Proposal = { ...proposal, safetyFlags };
+export function repairedStepsJson(engine: Engine, proposal: Proposal, attachmentNames = '', o: { notReplayed?: boolean; byModel?: boolean } = {}): IDataObject {
+  const safetyFlags = fullSafetyFlags(engine, engine.parseScript(proposal.steps), o.notReplayed
+    ? { unverifiedCount: false, fieldsDropped: false, notReplayed: true }
+    : { unverifiedCount: proposal.safetyFlags.includes(engine.UNVERIFIED_COUNT_FLAG), fieldsDropped: proposal.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
+  const p: Proposal = withLeftOut({ ...proposal, safetyFlags });
   return {
     name: p.name,
     baseVersion: p.baseVersion,
@@ -118,12 +130,25 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
     evidence: { count: p.evidence.count, total: p.evidence.total, diff: { missing: [...p.evidence.diff.missing], extra: [...p.evidence.diff.extra] },
       ...(p.evidence.readPosts?.length ? { readPosts: [...p.evidence.readPosts] } : {}),
       ...(p.evidence.file ? { file: { ...p.evidence.file, columns: p.evidence.file.columns ? [...p.evidence.file.columns] : null } } : {}),
+      ...(p.evidence.files ? {
+        files: p.evidence.files.map((f) => ({ ...f, columns: f.columns ? [...f.columns] : null })),
+        screenshots: [...(p.evidence.screenshots ?? [])],
+      } : {}),
     },
     changes: p.changes.map((c) => ({ was: c.was, now: c.now })),
     safetyFlags: [...safetyFlags],
-    evidenceLine: evidenceLine(p, engine),
+    evidenceLine: o.notReplayed ? NOT_REPLAYED_EVIDENCE_LINE : evidenceLine(p, engine),
     changeList: changeList(p),
     safetyLine: safetyLine(p),
+    ...leftOutFields(p),
+    // A repair (an entry that names what a step was): the change list as the approval emails show it, each entry from the
+    // step's sentence (format.ts reviewChanges). Shown only, outside the digest: Sign Steps builds it again.
+    ...(p.changes.some((c) => c.was !== null)
+      ? { reviewChanges: reviewChanges(engine, p.steps.steps, p.changes, { shownUrl: engine.shownUrl, startUrl: p.steps.startUrl }) as unknown as IDataObject[] }
+      : {}),
+    reviewSteps: reviewSteps(p.steps.steps, {
+      desktop: false, shownUrl: engine.shownUrl, startUrl: p.steps.startUrl, ...(o.byModel ? { byAi: modelSteps(engine, p.steps.steps, p.changes) } : {}),
+    }) as unknown as IDataObject[],
     attachmentNames,
   };
 }
@@ -131,12 +156,17 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
 /**
  * The JSON of a Repaired steps item for desktop steps from an import (engine desktopProposal): the same fields as a
  * browser item, so the approval template and Sign Steps take it unchanged. Nothing was replayed: the evidence is empty,
- * the evidence line says so, and there are no screenshots. The safety flags are the engine's full list
- * (desktopSafetyFlags), which Sign Steps recomputes; the digest covers them.
+ * the evidence line (one of DESKTOP_EVIDENCE_LINES, by where the steps came from) says so, and there are no
+ * screenshots. The safety flags are the engine's full list (desktopSafetyFlags), which Sign Steps recomputes; the
+ * digest covers them. An AI repair's item (engine DesktopRepairProposal, a base version and evidence.proof) carries the
+ * proof in its evidence, the evidence line built from it (desktopRepairEvidenceLine) and its reviewSteps. `secretVariables`: the names of the steps' secret variables (never a value), for the approval email
+ * to mark them as the review page does; shown only, neither the digest nor the signature covers them.
  */
-export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopProposal): IDataObject {
+export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopProposal, line: string = DESKTOP_EVIDENCE_LINE, secretVariables: readonly string[] = []): IDataObject {
   const safetyFlags = engine.desktopSafetyFlags(engine.parseDesktopScript(proposal.steps));
-  const p: DesktopProposal = { ...proposal, safetyFlags };
+  const p: DesktopProposal = withLeftOut({ ...proposal, safetyFlags });
+  // An AI repair's proof (version N+1 of base N): part of the evidence, so the digest covers it and the line is built from it.
+  const proof = desktopRepairProof(p);
   return {
     name: p.name,
     baseVersion: p.baseVersion,
@@ -144,26 +174,54 @@ export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopPropos
     steps: plain(p.steps) as unknown as IDataObject,
     hash: p.hash,
     digest: engine.proposalDigest(p),
-    evidence: { count: p.evidence.count, total: p.evidence.total, diff: { missing: [...p.evidence.diff.missing], extra: [...p.evidence.diff.extra] } },
+    evidence: {
+      count: p.evidence.count, total: p.evidence.total, diff: { missing: [...p.evidence.diff.missing], extra: [...p.evidence.diff.extra] },
+      ...(proof ? { proof: plain(proof) as unknown as IDataObject } : {}),
+    },
     changes: p.changes.map((c) => ({ was: c.was, now: c.now })),
     safetyFlags: [...safetyFlags],
-    evidenceLine: evidenceLine(p, engine),
+    evidenceLine: proof ? desktopRepairEvidenceLine(p) : line,
     changeList: changeList(p),
     safetyLine: safetyLine(p),
+    ...leftOutFields(p),
+    ...(secretVariables.length ? { secretVariables: [...secretVariables] } : {}),
+    // A repair's steps as the approval email lists them (an import adds its own, with its start values).
+    ...(proof ? { reviewSteps: reviewSteps(p.steps.steps, { desktop: true, secretVariables }) as unknown as IDataObject[] } : {}),
     attachmentNames: '',
   };
 }
 
-/** Error item for a failed or blocked run: `{ error: "<code>: <message>", message, details }` plus screenshot and trace binaries. */
+/** The proposal with `leftOut` only when it has lines: an empty list is no field, so the digest stays as it was. */
+function withLeftOut<P extends { leftOut?: string[] }>(p: P): P {
+  const { leftOut, ...rest } = p;
+  return (leftOut?.length ? { ...rest, leftOut: [...leftOut] } : rest) as P;
+}
+
+/** `leftOut` and the shown `leftOutList` (format.ts), which Sign Steps binds to the digest; nothing when there are none. */
+function leftOutFields(p: { leftOut?: string[] }): IDataObject {
+  return p.leftOut?.length ? { leftOut: [...p.leftOut], leftOutList: leftOutList(p) } : {};
+}
+
+/**
+ * Error item for a failed or blocked run: `{ error: "<code>: <message>", message, details }` plus screenshot and trace
+ * binaries. The message is the one a person reads (shownMessage); the guidance is chosen by the engine's own.
+ */
 export async function failureItem(
-  ctx: NodeContext, f: RunFailure | { code: ErrorCode; message: string },
+  ctx: NodeContext, f: RunFailure | { code: ErrorCode; message: string; passwordChanged?: true },
   details: { name: string | null; version: number | null; hash: string }, paired: IPairedItemData[],
 ): Promise<INodeExecutionData> {
   const full = 'ok' in f ? f : undefined;
-  const binary = full ? await failureBinary(ctx, full, details.name ?? '') : undefined;
+  let binary = full ? await failureBinary(ctx, full, details.name ?? '') : undefined;
+  // The files earlier steps downloaded before the failure, under the binary names a success gives them.
+  const files: IDataObject[] = [];
+  for (const file of full?.files ?? []) {
+    binary = { ...binary, [file.binaryName]: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) };
+    files.push({ fileName: file.fileName, mimeType: file.mimeType, bytes: file.data.length, binaryProperty: file.binaryName });
+  }
+  const message = shownMessage(f.message);
   const d: FailureDetails = {
     code: f.code,
-    message: f.message,
+    message,
     name: details.name,
     version: full?.version ?? details.version,
     hash: full?.hash ?? details.hash,
@@ -172,16 +230,21 @@ export async function failureItem(
     traceRef: binary?.trace ? 'trace' : null,
     durationMs: full?.durationMs ?? 0,
     llmTokens: full?.tokens ?? 0,
-    log: full ? (plain(full.log) as unknown as IDataObject[]) : [],
+    llmCalls: full?.llmCalls ?? 0,
+    log: full ? shownLog(full.log) : [],
     submitted: full?.submitted === true,
+    ...(f.passwordChanged ? { passwordChanged: true as const } : {}),
+    guidance: guidanceFor(f.code, f.message),
+    ...(full?.missingControls?.length ? { missingControls: full.missingControls.map((c) => ({ ...c, offered: [...c.offered] })) } : {}),
+    ...(files.length ? { files } : {}),
   };
-  return { json: errorJson(`${f.code}: ${f.message}`, f.message, d), pairedItem: paired, ...(binary ? { binary } : {}) };
+  return { json: errorJson(`${f.code}: ${message}`, message, d), pairedItem: paired, ...(binary ? { binary } : {}) };
 }
 
 /** Error item for a configuration problem: the message as is, `configError: true`, no code. */
 export function configErrorItem(message: string, name: string | null, paired: IPairedItemData[]): INodeExecutionData {
   return {
-    json: errorJson(message, message, { configError: true, code: null, name, version: null, hash: '', lane: null, log: [], submitted: false }),
+    json: errorJson(message, message, { configError: true, code: null, name, version: null, hash: '', lane: null, log: [], submitted: false, guidance: CONFIG_GUIDANCE }),
     pairedItem: paired,
   };
 }

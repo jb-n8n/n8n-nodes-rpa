@@ -92,7 +92,7 @@ describe('Playwright code', () => {
     const items = r.report.items;
     expect(items).toContainEqual({ at: 'line 21', kind: 'untranslated', what: 'Click #x', reason: expect.stringContaining('.nth()') });
     expect(items).toContainEqual(expect.objectContaining({ at: 'line 23', kind: 'converted', what: 'Click Export' }));
-    expect(items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Clicks into a field before typing (3)' }));
+    expect(items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Clicks into a field before typing (3)', notNeeded: true }));
     expect(items.filter((i) => i.kind === 'secret').map((i) => i.what)).toEqual(['Dealer user ID', 'Password', 'Authentication code']);
     expect(r.report.source).toBe('playwright');
     expect(r.report.steps).toBe(10);
@@ -123,6 +123,46 @@ describe('Playwright code', () => {
     for (const e of events) if (e.kind !== 'fill' && e.kind !== 'select') expect(JSON.stringify(e)).not.toContain('demo-password');
     const r = importSource('playwright', odd, OPTS);
     for (const v of [...typed, 'oops-pass-1']) expect(JSON.stringify(r)).not.toContain(v);
+  });
+
+  it('a password typed into a field that says password in another language, by a short form or by its type is never imported', () => {
+    const fields = [
+      "getByLabel('Kennwort')", "getByRole('textbox', { name: 'Kennwort' })", "getByPlaceholder('Contraseña')", "getByLabel('Mot de passe')",
+      'getByLabel("Parola d\'ordine")', "locator('#senha')", "getByPlaceholder('Wachtwoord')", "getByLabel('Lösenord')", "getByLabel('Adgangskode')",
+      "getByLabel('Passord')", "getByLabel('Hasło')", "getByLabel('Heslo')", "getByLabel('Şifre')", "getByLabel('Пароль')", "getByLabel('パスワード')",
+      "getByLabel('密码')", "getByRole('textbox', { name: '비밀번호' })", "locator('#pwd')", "locator('#pass')", "locator('#passwd')",
+      "locator('input[type=\"password\"]')",
+    ];
+    fields.forEach((field, i) => {
+      const typed = `Geheim-${i}-x7!`;
+      const code = test([
+        "  await page.goto('https://portal.example.com/login');",
+        "  await page.getByLabel('User').fill('ops-user-7');",
+        `  await page.${field}.fill('${typed}');`,
+        "  await page.getByRole('button', { name: 'Sign in' }).click();",
+      ].join('\n'));
+      for (const opts of [OPTS, PLAIN]) {
+        const r = importSource('playwright', code, opts);
+        expect(JSON.stringify(r), field).not.toContain(typed);
+        expect(r.report.items.some((it) => it.kind === 'secret'), field).toBe(true);
+        if (opts.hasSiteLogin) expect(stepsOf(r).some((s) => 'signIn' in s), field).toBe(true);
+      }
+    });
+  });
+
+  it('passenger, passport number, compass, bypass and search fields are no password fields: their values are imported', () => {
+    const values: [string, string][] = [['Passenger', 'Ada Lovelace'], ['Passport number', 'X1234567'], ['Compass', 'NNE'], ['Bypass', 'via north gate'], ['Search', 'quarterly report']];
+    const code = test([
+      "  await page.goto('https://portal.example.com/');",
+      ...values.map(([name, value]) => `  await page.getByLabel('${name}').fill('${value}');`),
+      "  await page.getByRole('button', { name: 'Save' }).click();",
+    ].join('\n'));
+    for (const opts of [OPTS, PLAIN]) {
+      const r = importSource('playwright', code, opts);
+      expect(r.report.items.filter((it) => it.kind === 'secret')).toEqual([]);
+      const fills = stepsOf(r).flatMap((s) => ('fill' in s ? [s.fill.value] : []));
+      expect(fills).toEqual(values.map(([, v]) => v));
+    }
   });
 
   it('exact options carry over', () => {
@@ -312,6 +352,20 @@ describe('Playwright code', () => {
     expect(legacy.items).toEqual([expect.objectContaining({ at: 'line 6', kind: 'untranslated', what: 'Click xpath=//button', reason: expect.stringContaining('XPath') })]);
   });
 
+  it('a drop whose absence changes nothing the bot does is marked notNeeded; a JavaScript wait is not', () => {
+    const { items } = parse(test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      '  await page.setViewportSize({ width: 1280, height: 720 });', // 5
+      "  await page.waitForLoadState('networkidle');", // 6
+      "  await page.waitForFunction('window.ready');", // 7
+    ].join('\n')));
+    const at = (line: number) => items.find((i) => i.at === `line ${line}`);
+    expect(at(5)).toMatchObject({ kind: 'dropped', what: 'Viewport change', notNeeded: true });
+    expect(at(6)).toMatchObject({ kind: 'dropped', notNeeded: true });
+    expect(at(7)).toMatchObject({ kind: 'dropped', reason: expect.stringContaining('JavaScript') });
+    expect(at(7)).not.toHaveProperty('notNeeded');
+  });
+
   it('unsupported statements are reported with their line', () => {
     const { events, items } = parse(test([
       "  await page.goto('https://portal.example.com/');", // 4
@@ -336,21 +390,23 @@ describe('Playwright code', () => {
       '  });',
       "  await page.getByText('Done').click();", // 24
     ].join('\n')));
-    expect(events.map((e) => e.at)).toEqual(['line 4', 'line 24']);
+    // Line 7's hover is a step now (Playwright hover imports as hover), and so is line 15's press of Tab.
+    expect(events.map((e) => e.at)).toEqual(['line 4', 'line 7', 'line 15', 'line 24']);
     const at = (line: number) => items.find((i) => i.at === `line ${line}`);
     expect(at(5)).toMatchObject({ kind: 'untranslated', what: 'Click the element', reason: expect.stringContaining('.first()') });
     expect(at(6)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('.filter()') });
-    expect(at(7)).toMatchObject({ kind: 'untranslated', what: 'Hover the element', reason: expect.stringContaining('hover') });
+    expect(at(7)).toBeUndefined();
     expect(at(8)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('JavaScript') });
     expect(at(9)).toMatchObject({ kind: 'untranslated' });
     expect(at(10)).toMatchObject({ kind: 'untranslated' });
     expect(at(13)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('${') });
     expect(at(14)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('pattern') });
-    expect(at(15)).toMatchObject({ kind: 'untranslated', what: 'Press Tab' });
+    expect(at(15)).toBeUndefined();
     expect(at(16)).toMatchObject({ kind: 'untranslated' });
     expect(at(17)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('pattern') });
     expect(at(18)).toMatchObject({ kind: 'untranslated' });
-    expect(at(19)).toMatchObject({ kind: 'dropped' });
+    // A fixed wait is not needed (each step waits for its element).
+    expect(at(19)).toMatchObject({ kind: 'dropped', notNeeded: true });
     expect(at(20)).toMatchObject({ kind: 'untranslated' });
     expect(at(21)).toMatchObject({ kind: 'untranslated' });
     // A report item never quotes the statement's strings.
@@ -366,6 +422,138 @@ describe('Playwright code', () => {
       expect(() => { r = importSource('playwright', junk, PLAIN); }).not.toThrow();
       expect(r?.drafts).toEqual([]);
     }
+  });
+
+  it('Playwright hover imports as hover', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByRole('menuitem', { name: 'Reports' }).hover();", // 5
+      "  await page.getByRole('link', { name: 'Sales' }).click();", // 6
+      "  await page.hover('#help');", // 7
+      "  await page.getByText('Tools').hover({ position: { x: 4, y: 4 } });", // 8
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([
+      { intent: 'Hover over Reports', hover: { role: 'menuitem', name: 'Reports' } },
+      { intent: 'Click Sales', click: { role: 'link', name: 'Sales' } },
+      { intent: 'Hover over the element', hover: { css: '#help' } },
+    ]);
+    // A hover with options is reported, as a click with options is.
+    expect(r.report.items).toEqual([expect.objectContaining({ at: 'line 8', kind: 'untranslated', what: 'Hover Tools', reason: expect.stringContaining('hover options') })]);
+  });
+
+  it('a Playwright click with Control held imports as a click with modifiers', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByRole('row', { name: 'Beta' }).click({ modifiers: ['Control'] });", // 5
+      "  await page.getByRole('row', { name: 'Gamma' }).click({ modifiers: ['Shift', 'Control'] });", // 6
+      "  await page.getByRole('row', { name: 'Delta' }).click({ button: 'left', modifiers: ['Alt'] });", // 7
+      "  await page.click('#epsilon', { modifiers: ['Control'] });", // 8
+      "  await page.getByRole('button', { name: 'Search' }).click({ button: 'left' });", // 9
+      "  await page.getByRole('row', { name: 'Zeta' }).click({ modifiers: ['Meta'] });", // 10
+      `  await page.getByRole('row', { name: 'Eta' }).click({ modifiers: ['${SECRETS.password}'] });`, // 11
+      `  await page.getByRole('row', { name: 'Theta' }).click({ button: '${SECRETS.password}' });`, // 12
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([
+      { intent: 'Click Beta', click: { role: 'row', name: 'Beta' }, modifiers: ['Ctrl'] },
+      { intent: 'Click Gamma', click: { role: 'row', name: 'Gamma' }, modifiers: ['Ctrl', 'Shift'] },
+      { intent: 'Click Delta', click: { role: 'row', name: 'Delta' }, modifiers: ['Alt'] },
+      { intent: 'Click the element', click: { css: '#epsilon' }, modifiers: ['Ctrl'] },
+      { intent: 'Click Search', click: { role: 'button', name: 'Search' } },
+    ]);
+    expect(r.report.items).toEqual([
+      expect.objectContaining({ at: 'line 10', kind: 'untranslated', what: 'Click Zeta', reason: 'a click with meta held down is not a step: a browser click may hold Ctrl, Shift and Alt' }),
+      // Text from the code that is not a known key or button is never quoted in the report.
+      expect.objectContaining({ at: 'line 11', kind: 'untranslated', reason: 'a click with another key held down is not a step: a browser click may hold Ctrl, Shift and Alt' }),
+      expect.objectContaining({ at: 'line 12', kind: 'untranslated', reason: 'a click with another button is not a step: browser steps click with the left button' }),
+    ]);
+    expect(JSON.stringify(r)).not.toContain(SECRETS.password);
+  });
+
+  it('a Playwright click with ControlOrMeta held imports as a click with Ctrl', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByRole('row', { name: 'Beta' }).click({ modifiers: ['ControlOrMeta'] });", // 5
+      "  await page.getByRole('row', { name: 'Gamma' }).click({ modifiers: ['ControlOrMeta', 'Control'] });", // 6
+      "  const page1Promise = page.waitForEvent('popup');", // 7
+      "  await page.getByRole('link', { name: 'Report' }).click({ modifiers: ['ControlOrMeta'] });", // 8
+      '  const page1 = await page1Promise;', // 9
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([
+      { intent: 'Click Beta', click: { role: 'row', name: 'Beta' }, modifiers: ['Ctrl'] },
+      { intent: 'Click Gamma', click: { role: 'row', name: 'Gamma' }, modifiers: ['Ctrl'] },
+    ]);
+    // A Ctrl+click that opens a new tab is not a popup step: that step clicks without keys, which may not open the tab.
+    expect(r.report.items).toContainEqual(expect.objectContaining({ at: 'line 8', kind: 'untranslated', what: 'Click Report', reason: expect.stringContaining('opens a new tab or starts a download') }));
+  });
+
+  it('a Playwright right-click is reported as untranslated, not imported as a click', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByRole('row', { name: 'Beta' }).click({ button: 'right' });", // 5
+      "  await page.getByRole('row', { name: 'Gamma' }).click({ button: 'middle', modifiers: ['Control'] });", // 6
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 7
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([{ intent: 'Click Search', click: { role: 'button', name: 'Search' } }]);
+    expect(r.report.items.map((i) => [i.at, i.kind, i.reason])).toEqual([
+      ['line 5', 'untranslated', 'a right-button click is not a step: browser steps click with the left button'],
+      ['line 6', 'untranslated', 'a middle-button click is not a step: browser steps click with the left button'],
+    ]);
+  });
+
+  it('a Playwright click with another option is reported as before, with the options note', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByRole('button', { name: 'Save' }).click({ timeout: 5000 });", // 5
+      "  await page.getByRole('row', { name: 'Beta' }).click({ modifiers: ['Control'], timeout: 5000 });", // 6
+      "  await page.getByRole('row', { name: 'Gamma' }).dblclick({ modifiers: ['Control'] });", // 7
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 8
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([{ intent: 'Click Search', click: { role: 'button', name: 'Search' } }]);
+    expect(r.report.items.map((i) => [i.at, i.kind, i.reason])).toEqual([
+      ['line 5', 'untranslated', 'click options are not imported: the steps click, type or choose with defaults'],
+      ['line 6', 'untranslated', 'click options are not imported: the steps click, type or choose with defaults'],
+      ['line 7', 'untranslated', 'dblclick options are not imported: the steps click, type or choose with defaults'],
+    ]);
+  });
+
+  it('a hover inside a sign-in leaves it one signIn step, and no typed value survives', () => {
+    const hover = "  await page.getByText('Help').hover();";
+    const code = (at: 'user' | 'password' | 'submit') => test([
+      "  await page.goto('https://portal.example.com/login');",
+      `  await page.getByLabel('Username').fill('${SECRETS.username}');`,
+      ...(at === 'user' ? [hover] : []),
+      `  await page.getByLabel('Password').fill('${SECRETS.password}');`,
+      ...(at === 'password' ? [hover] : []),
+      "  await page.getByRole('button', { name: 'Sign in' }).click();",
+      ...(at === 'submit' ? [hover] : []),
+      `  await page.getByLabel('Verification code').fill('${TOTP_CODE}');`,
+      "  await page.getByRole('button', { name: 'Verify' }).click();",
+      "  await page.getByRole('link', { name: 'Reports' }).click();",
+    ].join('\n'));
+    const opts: ImportOptions = { name: 'hover-sign-in', hasSiteLogin: true, secrets: SECRETS };
+    const verbs = { user: ['goto', 'hover', 'signIn', 'click'], password: ['goto', 'signIn', 'hover', 'click'], submit: ['goto', 'signIn', 'click'] };
+    for (const at of ['user', 'password', 'submit'] as const) {
+      const r = importSource('playwright', code(at), opts);
+      const steps = stepsOf(r);
+      expect(steps.map(verbOf), at).toEqual(verbs[at]);
+      expect((steps.find((s) => 'signIn' in s) as S<'signIn'>).signIn.totp, at).toBeDefined();
+      for (const v of [SECRETS.username, SECRETS.password, TOTP_CODE]) expect(JSON.stringify(r), at).not.toContain(v);
+    }
+    // Between the submit and the code it is on the page signIn passes in one step: dropped, with a report line.
+    expect(importSource('playwright', code('submit'), opts).report.items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Hover over Help' }));
+    // Identity-first: a hover between Next and the password page is dropped like a wait there, and signIn keeps next.
+    const twoPage = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/login');",
+      `  await page.getByLabel('Username').fill('${SECRETS.username}');`,
+      "  await page.getByRole('button', { name: 'Next' }).click();",
+      hover,
+      `  await page.getByLabel('Password').fill('${SECRETS.password}');`,
+      "  await page.getByRole('button', { name: 'Sign in' }).click();",
+    ].join('\n')), opts);
+    expect(stepsOf(twoPage).map(verbOf)).toEqual(['goto', 'signIn']);
+    expect((stepsOf(twoPage)[1] as S<'signIn'>).signIn.next).toBeDefined();
+    expect(twoPage.report.items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Hover over Help', reason: expect.stringContaining('between the username and the password') }));
+    for (const v of [SECRETS.username, SECRETS.password]) expect(JSON.stringify(twoPage)).not.toContain(v);
   });
 
   it('unterminated literals end the parse with a report item', () => {
@@ -586,5 +774,82 @@ describe('Playwright code', () => {
       expect(js.report.items.filter((i) => i.kind === 'error')).toEqual([]);
       expect(js.events.map((e: ImportEvent) => e.kind)).toEqual(['goto']);
     }
+  });
+
+  it('a selectOption with a list of texts becomes a multi-select step with exactly those options', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByLabel('Status').selectOption(['Open', 'Closed']);", // 5
+      "  await page.getByLabel('Region').selectOption(['North']);", // 6
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 7
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([
+      { intent: 'Choose Open, Closed in Status', select: { field: { label: 'Status' }, value: ['Open', 'Closed'] } },
+      { intent: 'Choose North in Region', select: { field: { label: 'Region' }, value: 'North' } },
+      { intent: 'Click Search', click: { role: 'button', name: 'Search' } },
+    ]);
+    expect(r.report.items).toEqual([]);
+    expect(() => parseScript(r.drafts[0].script)).not.toThrow();
+  });
+
+  it('a selectOption the step cannot carry is reported as not translated, with its reason, never dropped silently', () => {
+    const many = JSON.stringify(Array.from({ length: 51 }, (_, i) => `o${i}`));
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByLabel('Status').selectOption([{ label: 'Open' }, { label: 'Closed' }]);", // 5
+      "  await page.getByLabel('Status').selectOption(['Open', { index: 2 }]);", // 6
+      "  await page.getByLabel('Status').selectOption({ index: 2 });", // 7
+      `  await page.getByLabel('Status').selectOption(${many});`, // 8
+      "  await page.getByLabel('Status').selectOption([]);", // 9
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 10
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([{ intent: 'Click Search', click: { role: 'button', name: 'Search' } }]);
+    const form = 'only options named by their value or label are imported, one option or a list of texts: an { index }, or a list of { value }, { label } or { index } objects, is not';
+    expect(r.report.items).toEqual([
+      { at: 'line 5', kind: 'untranslated', what: 'Choose an option in Status', reason: form },
+      { at: 'line 6', kind: 'untranslated', what: 'Choose an option in Status', reason: form },
+      { at: 'line 7', kind: 'untranslated', what: 'Choose an option in Status', reason: form },
+      { at: 'line 8', kind: 'untranslated', what: 'Choose an option in Status', reason: 'a multi-select is imported with at most 50 options: this one chooses 51' },
+      { at: 'line 9', kind: 'untranslated', what: 'Choose an option in Status', reason: 'choosing no option (an empty list) clears the list, which is not a step' },
+    ]);
+  });
+
+  it('a multi-select with a Site Login value among its options: only that option counts as a secret elsewhere', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      `  await page.getByLabel('Owner').selectOption(['${SECRETS.username}', 'Closed']);`, // 5
+      "  await page.getByLabel('Notes').fill('Closed');", // 6
+      `  await page.getByLabel('Comment').fill('by ${SECRETS.username}');`, // 7
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 8
+    ].join('\n')), { name: 'plain', hasSiteLogin: true, secrets: SECRETS });
+    expect(stepsOf(r).slice(1)).toEqual([
+      { intent: 'Type into Notes', fill: { field: { label: 'Notes' }, value: 'Closed' } },
+      { intent: 'Click Search', click: { role: 'button', name: 'Search' } },
+    ]);
+    expect(r.report.items.filter((i) => i.kind === 'secret').map((i) => i.at)).toEqual(['line 5', 'line 7']);
+  });
+
+  it('a selectOption whose options are variables or expressions says they must be written out as text', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByLabel('Status').selectOption([status, 'Closed']);", // 5
+      "  await page.getByLabel('Status').selectOption(status);", // 6
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 7
+    ].join('\n')), PLAIN);
+    expect(r.report.items.map((i) => [i.at, i.kind, i.reason])).toEqual([
+      ['line 5', 'untranslated', 'the value must be written out as text'],
+      ['line 6', 'untranslated', 'the value must be written out as text'],
+    ]);
+  });
+
+  it('a multi-select that holds a Site Login secret is removed and reported, like a select', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      `  await page.getByLabel('Status').selectOption(['Open', '${SECRETS.password}']);`, // 5
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 6
+    ].join('\n')), { name: 'plain', hasSiteLogin: true, secrets: SECRETS });
+    expect(stepsOf(r).slice(1)).toEqual([{ intent: 'Click Search', click: { role: 'button', name: 'Search' } }]);
+    expect(r.report.items).toContainEqual(expect.objectContaining({ at: 'line 5', kind: 'secret' }));
+    expect(JSON.stringify(r)).not.toContain(SECRETS.password);
   });
 });

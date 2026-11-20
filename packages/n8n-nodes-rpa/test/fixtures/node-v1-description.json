@@ -1,0 +1,3757 @@
+{
+ "note": "The RPA node description at f5aae44 (feat/simplify), before version 2: what a stored version 1 node was made with. Never edit.",
+ "version": 1,
+ "credentials": [
+  {
+   "name": "playwrightBrowserApi",
+   "displayName": "RPA Browser",
+   "required": false,
+   "testedBy": "browserTest",
+   "displayOptions": {
+    "hide": {
+     "operation": [
+      "signSteps"
+     ],
+     "runsOn": [
+      "desktop"
+     ]
+    }
+   }
+  },
+  {
+   "name": "playwrightSiteLoginApi",
+   "displayName": "RPA Site Login",
+   "required": false,
+   "testedBy": "siteLoginTest",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps",
+      "signSteps",
+      "importSteps"
+     ]
+    },
+    "hide": {
+     "runsOn": [
+      "desktop"
+     ]
+    }
+   }
+  },
+  {
+   "name": "playwrightScriptSigningApi",
+   "displayName": "RPA Step Signing",
+   "required": false,
+   "testedBy": "scriptSigningTest",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps",
+      "signSteps"
+     ]
+    }
+   }
+  },
+  {
+   "name": "playwrightRedisApi",
+   "displayName": "RPA Redis",
+   "required": false,
+   "testedBy": "guardRedisTest",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps",
+      "importSteps"
+     ]
+    },
+    "hide": {
+     "runsOn": [
+      "desktop"
+     ]
+    }
+   }
+  },
+  {
+   "name": "rpaDesktopRunnerApi",
+   "displayName": "RPA Desktop Runner",
+   "required": false,
+   "testedBy": "desktopRunnerTest",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ]
+    },
+    "hide": {
+     "runsOn": [
+      "browser"
+     ]
+    }
+   }
+  },
+  {
+   "name": "rpaSecretVariablesApi",
+   "displayName": "RPA Secret Variables",
+   "required": false,
+   "testedBy": "secretVariablesTest",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ]
+    }
+   }
+  },
+  {
+   "name": "playwrightScriptSigningApi",
+   "displayName": "RPA Step Signing (only passed on to the workflow file)",
+   "required": false,
+   "testedBy": "scriptSigningTest",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    }
+   }
+  },
+  {
+   "name": "rpaDesktopRunnerApi",
+   "displayName": "RPA Desktop Runner (only passed on to the workflow file)",
+   "required": false,
+   "testedBy": "desktopRunnerTest",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    },
+    "hide": {
+     "runsOn": [
+      "browser"
+     ]
+    }
+   }
+  }
+ ],
+ "properties": [
+  {
+   "displayName": "Operation",
+   "name": "operation",
+   "type": "options",
+   "noDataExpression": true,
+   "default": "screenshot",
+   "options": [
+    {
+     "name": "Screenshot",
+     "value": "screenshot",
+     "action": "Take a screenshot of a page",
+     "description": "Open a page and capture it as a PNG image"
+    },
+    {
+     "name": "Get Page",
+     "value": "getPage",
+     "action": "Get the text, HTML or title of a page",
+     "description": "Open a page and return its text, HTML or title"
+    },
+    {
+     "name": "Save as PDF",
+     "value": "pdf",
+     "action": "Save a page as PDF",
+     "description": "Open a page and print it to a PDF file"
+    },
+    {
+     "name": "Extract Data",
+     "value": "extract",
+     "action": "Extract a table or list from a page",
+     "description": "Read a table or a repeated list on a page into rows"
+    },
+    {
+     "name": "Fill and Submit Form",
+     "value": "fillForm",
+     "action": "Fill in and submit a form",
+     "description": "Fill in the fields of a form on a page and submit it"
+    },
+    {
+     "name": "Download File",
+     "value": "download",
+     "action": "Download a file from a page",
+     "description": "Click a link or button and return the file it downloads"
+    },
+    {
+     "name": "Run Steps",
+     "value": "runSteps",
+     "action": "Run a list of browser or desktop steps",
+     "description": "Advanced: run a JSON step list, signed or typed here, with optional AI repair when the page changes"
+    },
+    {
+     "name": "Sign Steps",
+     "value": "signSteps",
+     "action": "Sign a repaired step list",
+     "description": "Advanced: sign a Repaired steps item from Run Steps or Import Steps after a person approved it, or record a rejection"
+    },
+    {
+     "name": "Import Steps",
+     "value": "importSteps",
+     "action": "Import steps from a recording, code or a UiPath bot",
+     "description": "Advanced: turn a Chrome Recorder export, Playwright code, a UiPath project, an RPA recording or a step document into steps for approval"
+    }
+   ]
+  },
+  {
+   "displayName": "Runs On",
+   "name": "runsOn",
+   "type": "options",
+   "noDataExpression": true,
+   "default": "browserAndDesktop",
+   "options": [
+    {
+     "name": "Browser and desktop apps",
+     "value": "browserAndDesktop"
+    },
+    {
+     "name": "A browser",
+     "value": "browser"
+    },
+    {
+     "name": "A Windows desktop app",
+     "value": "desktop"
+    }
+   ],
+   "description": "This only chooses which credentials and fields the node asks for, and the steps themselves decide where they run",
+   "hint": "Choosing A browser or A Windows desktop app removes a credential whose slot it hides",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps",
+      "importSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "URL",
+   "name": "url",
+   "type": "string",
+   "default": "",
+   "required": true,
+   "placeholder": "https://example.com/pricing",
+   "hint": "Only this site is visited. Other sites are blocked. Add more under Options → Also Allow These Sites.",
+   "description": "The page to open (http or https)",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "screenshot",
+      "getPage",
+      "pdf",
+      "extract",
+      "fillForm",
+      "download"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Capture",
+   "name": "capture",
+   "type": "options",
+   "default": "fullPage",
+   "options": [
+    {
+     "name": "Full Page",
+     "value": "fullPage",
+     "description": "The whole page, up to 16,384 px tall"
+    },
+    {
+     "name": "Viewport",
+     "value": "viewport",
+     "description": "Only what fits in the browser window (Options → Viewport)"
+    },
+    {
+     "name": "One Element",
+     "value": "element",
+     "description": "One element, found with a locator"
+    }
+   ],
+   "description": "What to capture as a PNG",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "screenshot"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Element",
+   "name": "element",
+   "type": "fixedCollection",
+   "default": {},
+   "placeholder": "Set Element",
+   "description": "The element to capture. It must match exactly one element.",
+   "required": true,
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "screenshot"
+     ],
+     "capture": [
+      "element"
+     ]
+    }
+   },
+   "options": [
+    {
+     "name": "locator",
+     "displayName": "Locator",
+     "values": [
+      {
+       "displayName": "Find By",
+       "name": "findBy",
+       "type": "options",
+       "default": "text",
+       "options": [
+        {
+         "name": "Visible Text",
+         "value": "text",
+         "description": "Text shown on the page. Matches part of the text, ignoring case."
+        },
+        {
+         "name": "Form Label",
+         "value": "label",
+         "description": "The label of a form field. Matches part of the label, ignoring case."
+        },
+        {
+         "name": "Role and Name",
+         "value": "role",
+         "description": "What the element is (button, link, …) and its accessible name"
+        },
+        {
+         "name": "Test ID",
+         "value": "testId",
+         "description": "The data-testid attribute, as written"
+        },
+        {
+         "name": "CSS Selector",
+         "value": "css",
+         "description": "Advanced: a CSS selector, as written. Copy one from your browser's developer tools (Inspect, then Copy selector)."
+        }
+       ],
+       "description": "How to find the element. It must match exactly one element."
+      },
+      {
+       "displayName": "Value",
+       "name": "text",
+       "type": "string",
+       "default": "",
+       "placeholder": "Sign in",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "label",
+       "type": "string",
+       "default": "",
+       "placeholder": "Email address",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "label"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Role",
+       "name": "role",
+       "type": "options",
+       "default": "button",
+       "options": [
+        {
+         "name": "Button",
+         "value": "button"
+        },
+        {
+         "name": "Link",
+         "value": "link"
+        },
+        {
+         "name": "Text Box",
+         "value": "textbox"
+        },
+        {
+         "name": "Checkbox",
+         "value": "checkbox"
+        },
+        {
+         "name": "Radio",
+         "value": "radio"
+        },
+        {
+         "name": "Combo Box",
+         "value": "combobox"
+        },
+        {
+         "name": "Heading",
+         "value": "heading"
+        },
+        {
+         "name": "Row",
+         "value": "row"
+        },
+        {
+         "name": "Cell",
+         "value": "cell"
+        },
+        {
+         "name": "Tab",
+         "value": "tab"
+        },
+        {
+         "name": "Menu Item",
+         "value": "menuitem"
+        }
+       ],
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Name",
+       "name": "roleName",
+       "type": "string",
+       "default": "",
+       "placeholder": "Submit",
+       "description": "The accessible name, such as the button text",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "testId",
+       "type": "string",
+       "default": "",
+       "placeholder": "submit-button",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "testId"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "css",
+       "type": "string",
+       "default": "",
+       "placeholder": "table.results",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "css"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Exact Match",
+       "name": "exact",
+       "type": "boolean",
+       "default": false,
+       "description": "Whether the whole text must match exactly (case-sensitive), instead of part of it ignoring case",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text",
+          "label",
+          "role"
+         ]
+        }
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "displayName": "Return",
+   "name": "pageContent",
+   "type": "options",
+   "default": "text",
+   "options": [
+    {
+     "name": "Text",
+     "value": "text",
+     "description": "The visible text of the page"
+    },
+    {
+     "name": "HTML",
+     "value": "html",
+     "description": "The page HTML after it loaded"
+    },
+    {
+     "name": "Title and URL Only",
+     "value": "titleUrl",
+     "description": "Only the title, the final URL and the HTTP status"
+    }
+   ],
+   "description": "What to return. Text and HTML stop at 5 MB; a longer page comes back cut, with truncated: true.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "getPage"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Paper",
+   "name": "paper",
+   "type": "options",
+   "default": "A4",
+   "options": [
+    {
+     "name": "A4",
+     "value": "A4",
+     "description": "210 × 297 mm"
+    },
+    {
+     "name": "Letter",
+     "value": "Letter",
+     "description": "8.5 × 11 in"
+    }
+   ],
+   "description": "Paper size of the PDF. Saving as PDF needs headless Chromium.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "pdf"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Shape",
+   "name": "shape",
+   "type": "options",
+   "noDataExpression": true,
+   "default": "table",
+   "options": [
+    {
+     "name": "Table",
+     "value": "table",
+     "description": "An HTML table: each body row becomes a row keyed by the column headers"
+    },
+    {
+     "name": "List of Items",
+     "value": "list",
+     "description": "Repeated items such as cards or list entries: each item becomes a row"
+    }
+   ],
+   "description": "What the data looks like on the page",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "extract"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Table",
+   "name": "table",
+   "type": "fixedCollection",
+   "default": {},
+   "placeholder": "Set Table",
+   "description": "The table to read. It must match exactly one table element. Headers come from the header row, else the first row.",
+   "required": true,
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "extract"
+     ],
+     "shape": [
+      "table"
+     ]
+    }
+   },
+   "options": [
+    {
+     "name": "locator",
+     "displayName": "Locator",
+     "values": [
+      {
+       "displayName": "Find By",
+       "name": "findBy",
+       "type": "options",
+       "default": "text",
+       "options": [
+        {
+         "name": "Visible Text",
+         "value": "text",
+         "description": "Text shown on the page. Matches part of the text, ignoring case."
+        },
+        {
+         "name": "Form Label",
+         "value": "label",
+         "description": "The label of a form field. Matches part of the label, ignoring case."
+        },
+        {
+         "name": "Role and Name",
+         "value": "role",
+         "description": "What the element is (button, link, …) and its accessible name"
+        },
+        {
+         "name": "Test ID",
+         "value": "testId",
+         "description": "The data-testid attribute, as written"
+        },
+        {
+         "name": "CSS Selector",
+         "value": "css",
+         "description": "Advanced: a CSS selector, as written. Copy one from your browser's developer tools (Inspect, then Copy selector)."
+        }
+       ],
+       "description": "How to find the element. It must match exactly one element."
+      },
+      {
+       "displayName": "Value",
+       "name": "text",
+       "type": "string",
+       "default": "",
+       "placeholder": "Sign in",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "label",
+       "type": "string",
+       "default": "",
+       "placeholder": "Email address",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "label"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Role",
+       "name": "role",
+       "type": "options",
+       "default": "button",
+       "options": [
+        {
+         "name": "Button",
+         "value": "button"
+        },
+        {
+         "name": "Link",
+         "value": "link"
+        },
+        {
+         "name": "Text Box",
+         "value": "textbox"
+        },
+        {
+         "name": "Checkbox",
+         "value": "checkbox"
+        },
+        {
+         "name": "Radio",
+         "value": "radio"
+        },
+        {
+         "name": "Combo Box",
+         "value": "combobox"
+        },
+        {
+         "name": "Heading",
+         "value": "heading"
+        },
+        {
+         "name": "Row",
+         "value": "row"
+        },
+        {
+         "name": "Cell",
+         "value": "cell"
+        },
+        {
+         "name": "Tab",
+         "value": "tab"
+        },
+        {
+         "name": "Menu Item",
+         "value": "menuitem"
+        }
+       ],
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Name",
+       "name": "roleName",
+       "type": "string",
+       "default": "",
+       "placeholder": "Submit",
+       "description": "The accessible name, such as the button text",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "testId",
+       "type": "string",
+       "default": "",
+       "placeholder": "submit-button",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "testId"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "css",
+       "type": "string",
+       "default": "",
+       "placeholder": "table.results",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "css"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Exact Match",
+       "name": "exact",
+       "type": "boolean",
+       "default": false,
+       "description": "Whether the whole text must match exactly (case-sensitive), instead of part of it ignoring case",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text",
+          "label",
+          "role"
+         ]
+        }
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "displayName": "Item",
+   "name": "item",
+   "type": "fixedCollection",
+   "default": {},
+   "placeholder": "Set Item",
+   "description": "Matches every item in the list. Each match becomes one row.",
+   "required": true,
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "extract"
+     ],
+     "shape": [
+      "list"
+     ]
+    }
+   },
+   "options": [
+    {
+     "name": "locator",
+     "displayName": "Locator",
+     "values": [
+      {
+       "displayName": "Find By",
+       "name": "findBy",
+       "type": "options",
+       "default": "text",
+       "options": [
+        {
+         "name": "Visible Text",
+         "value": "text",
+         "description": "Text shown on the page. Matches part of the text, ignoring case."
+        },
+        {
+         "name": "Form Label",
+         "value": "label",
+         "description": "The label of a form field. Matches part of the label, ignoring case."
+        },
+        {
+         "name": "Role and Name",
+         "value": "role",
+         "description": "What the element is (button, link, …) and its accessible name"
+        },
+        {
+         "name": "Test ID",
+         "value": "testId",
+         "description": "The data-testid attribute, as written"
+        },
+        {
+         "name": "CSS Selector",
+         "value": "css",
+         "description": "Advanced: a CSS selector, as written. Copy one from your browser's developer tools (Inspect, then Copy selector)."
+        }
+       ],
+       "description": "How to find the element. It must match exactly one element."
+      },
+      {
+       "displayName": "Value",
+       "name": "text",
+       "type": "string",
+       "default": "",
+       "placeholder": "Sign in",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "label",
+       "type": "string",
+       "default": "",
+       "placeholder": "Email address",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "label"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Role",
+       "name": "role",
+       "type": "options",
+       "default": "button",
+       "options": [
+        {
+         "name": "Button",
+         "value": "button"
+        },
+        {
+         "name": "Link",
+         "value": "link"
+        },
+        {
+         "name": "Text Box",
+         "value": "textbox"
+        },
+        {
+         "name": "Checkbox",
+         "value": "checkbox"
+        },
+        {
+         "name": "Radio",
+         "value": "radio"
+        },
+        {
+         "name": "Combo Box",
+         "value": "combobox"
+        },
+        {
+         "name": "Heading",
+         "value": "heading"
+        },
+        {
+         "name": "Row",
+         "value": "row"
+        },
+        {
+         "name": "Cell",
+         "value": "cell"
+        },
+        {
+         "name": "Tab",
+         "value": "tab"
+        },
+        {
+         "name": "Menu Item",
+         "value": "menuitem"
+        }
+       ],
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Name",
+       "name": "roleName",
+       "type": "string",
+       "default": "",
+       "placeholder": "Submit",
+       "description": "The accessible name, such as the button text",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "testId",
+       "type": "string",
+       "default": "",
+       "placeholder": "submit-button",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "testId"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "css",
+       "type": "string",
+       "default": "",
+       "placeholder": "table.results",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "css"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Exact Match",
+       "name": "exact",
+       "type": "boolean",
+       "default": false,
+       "description": "Whether the whole text must match exactly (case-sensitive), instead of part of it ignoring case",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text",
+          "label",
+          "role"
+         ]
+        }
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "displayName": "Fields",
+   "name": "fields",
+   "type": "fixedCollection",
+   "typeOptions": {
+    "multipleValues": true
+   },
+   "placeholder": "Add Field",
+   "default": {},
+   "description": "The values to read from each item. Leave empty to get each item's text in a field named text.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "extract"
+     ],
+     "shape": [
+      "list"
+     ]
+    }
+   },
+   "options": [
+    {
+     "name": "field",
+     "displayName": "Field",
+     "values": [
+      {
+       "displayName": "Name",
+       "name": "name",
+       "type": "string",
+       "default": "",
+       "required": true,
+       "placeholder": "price",
+       "description": "The key of this value in each row"
+      },
+      {
+       "displayName": "Find By",
+       "name": "findBy",
+       "type": "options",
+       "default": "text",
+       "options": [
+        {
+         "name": "Visible Text",
+         "value": "text",
+         "description": "Text shown on the page. Matches part of the text, ignoring case."
+        },
+        {
+         "name": "Form Label",
+         "value": "label",
+         "description": "The label of a form field. Matches part of the label, ignoring case."
+        },
+        {
+         "name": "Role and Name",
+         "value": "role",
+         "description": "What the element is (button, link, …) and its accessible name"
+        },
+        {
+         "name": "Test ID",
+         "value": "testId",
+         "description": "The data-testid attribute, as written"
+        },
+        {
+         "name": "CSS Selector",
+         "value": "css",
+         "description": "Advanced: a CSS selector, as written. Copy one from your browser's developer tools (Inspect, then Copy selector)."
+        }
+       ],
+       "description": "Where to find this value inside each item"
+      },
+      {
+       "displayName": "Value",
+       "name": "text",
+       "type": "string",
+       "default": "",
+       "placeholder": "Sign in",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "label",
+       "type": "string",
+       "default": "",
+       "placeholder": "Email address",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "label"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Role",
+       "name": "role",
+       "type": "options",
+       "default": "button",
+       "options": [
+        {
+         "name": "Button",
+         "value": "button"
+        },
+        {
+         "name": "Link",
+         "value": "link"
+        },
+        {
+         "name": "Text Box",
+         "value": "textbox"
+        },
+        {
+         "name": "Checkbox",
+         "value": "checkbox"
+        },
+        {
+         "name": "Radio",
+         "value": "radio"
+        },
+        {
+         "name": "Combo Box",
+         "value": "combobox"
+        },
+        {
+         "name": "Heading",
+         "value": "heading"
+        },
+        {
+         "name": "Row",
+         "value": "row"
+        },
+        {
+         "name": "Cell",
+         "value": "cell"
+        },
+        {
+         "name": "Tab",
+         "value": "tab"
+        },
+        {
+         "name": "Menu Item",
+         "value": "menuitem"
+        }
+       ],
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Name",
+       "name": "roleName",
+       "type": "string",
+       "default": "",
+       "placeholder": "Submit",
+       "description": "The accessible name, such as the button text",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "testId",
+       "type": "string",
+       "default": "",
+       "placeholder": "submit-button",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "testId"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "css",
+       "type": "string",
+       "default": "",
+       "placeholder": "table.results",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "css"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Exact Match",
+       "name": "exact",
+       "type": "boolean",
+       "default": false,
+       "description": "Whether the whole text must match exactly (case-sensitive), instead of part of it ignoring case",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text",
+          "label",
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Attribute",
+       "name": "attribute",
+       "type": "options",
+       "default": "text",
+       "options": [
+        {
+         "name": "Text",
+         "value": "text",
+         "description": "The visible text of the element"
+        },
+        {
+         "name": "Link (Href)",
+         "value": "href",
+         "description": "The link address, as an absolute URL"
+        },
+        {
+         "name": "Source (Src)",
+         "value": "src",
+         "description": "The image or media address, as an absolute URL"
+        },
+        {
+         "name": "Title",
+         "value": "title",
+         "description": "The title attribute (tooltip text)"
+        },
+        {
+         "name": "Alt Text",
+         "value": "alt",
+         "description": "The alt attribute of an image"
+        },
+        {
+         "name": "ARIA Label",
+         "value": "aria-label",
+         "description": "The aria-label attribute"
+        }
+       ],
+       "description": "What to read from the element. Links and image sources come back as absolute URLs."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "displayName": "Submits a form on the URL's site. Posts to other sites are blocked.",
+   "name": "submitScope",
+   "type": "notice",
+   "default": "",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "fillForm"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Do not type passwords here.",
+   "name": "passwordWarning",
+   "type": "notice",
+   "default": "",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "fillForm"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Fields",
+   "name": "formFields",
+   "type": "fixedCollection",
+   "typeOptions": {
+    "multipleValues": true
+   },
+   "placeholder": "Add Field",
+   "default": {},
+   "description": "Text fields to fill in, in order (use Run Steps for selects and checkboxes). Each locator must match exactly one field.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "fillForm"
+     ]
+    }
+   },
+   "options": [
+    {
+     "name": "field",
+     "displayName": "Field",
+     "values": [
+      {
+       "displayName": "Find By",
+       "name": "findBy",
+       "type": "options",
+       "default": "text",
+       "options": [
+        {
+         "name": "Visible Text",
+         "value": "text",
+         "description": "Text shown on the page. Matches part of the text, ignoring case."
+        },
+        {
+         "name": "Form Label",
+         "value": "label",
+         "description": "The label of a form field. Matches part of the label, ignoring case."
+        },
+        {
+         "name": "Role and Name",
+         "value": "role",
+         "description": "What the element is (button, link, …) and its accessible name"
+        },
+        {
+         "name": "Test ID",
+         "value": "testId",
+         "description": "The data-testid attribute, as written"
+        },
+        {
+         "name": "CSS Selector",
+         "value": "css",
+         "description": "Advanced: a CSS selector, as written. Copy one from your browser's developer tools (Inspect, then Copy selector)."
+        }
+       ],
+       "description": "How to find the element. It must match exactly one element."
+      },
+      {
+       "displayName": "Value",
+       "name": "text",
+       "type": "string",
+       "default": "",
+       "placeholder": "Sign in",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "label",
+       "type": "string",
+       "default": "",
+       "placeholder": "Email address",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "label"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Role",
+       "name": "role",
+       "type": "options",
+       "default": "button",
+       "options": [
+        {
+         "name": "Button",
+         "value": "button"
+        },
+        {
+         "name": "Link",
+         "value": "link"
+        },
+        {
+         "name": "Text Box",
+         "value": "textbox"
+        },
+        {
+         "name": "Checkbox",
+         "value": "checkbox"
+        },
+        {
+         "name": "Radio",
+         "value": "radio"
+        },
+        {
+         "name": "Combo Box",
+         "value": "combobox"
+        },
+        {
+         "name": "Heading",
+         "value": "heading"
+        },
+        {
+         "name": "Row",
+         "value": "row"
+        },
+        {
+         "name": "Cell",
+         "value": "cell"
+        },
+        {
+         "name": "Tab",
+         "value": "tab"
+        },
+        {
+         "name": "Menu Item",
+         "value": "menuitem"
+        }
+       ],
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Name",
+       "name": "roleName",
+       "type": "string",
+       "default": "",
+       "placeholder": "Submit",
+       "description": "The accessible name, such as the button text",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "testId",
+       "type": "string",
+       "default": "",
+       "placeholder": "submit-button",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "testId"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "css",
+       "type": "string",
+       "default": "",
+       "placeholder": "table.results",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "css"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Exact Match",
+       "name": "exact",
+       "type": "boolean",
+       "default": false,
+       "description": "Whether the whole text must match exactly (case-sensitive), instead of part of it ignoring case",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text",
+          "label",
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "value",
+       "type": "string",
+       "default": "",
+       "description": "What to type into the field, at most 10,000 characters. It is passed to the page as a value, never written into the steps. The debug trace records typed values."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "displayName": "Submit Button",
+   "name": "submitButton",
+   "type": "fixedCollection",
+   "default": {},
+   "placeholder": "Set Submit Button",
+   "description": "The button that submits the form. Up to 3 posts to the URL's site (or Also Allow These Sites) are allowed while it is clicked.",
+   "required": true,
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "fillForm"
+     ]
+    }
+   },
+   "options": [
+    {
+     "name": "locator",
+     "displayName": "Locator",
+     "values": [
+      {
+       "displayName": "Find By",
+       "name": "findBy",
+       "type": "options",
+       "default": "text",
+       "options": [
+        {
+         "name": "Visible Text",
+         "value": "text",
+         "description": "Text shown on the page. Matches part of the text, ignoring case."
+        },
+        {
+         "name": "Form Label",
+         "value": "label",
+         "description": "The label of a form field. Matches part of the label, ignoring case."
+        },
+        {
+         "name": "Role and Name",
+         "value": "role",
+         "description": "What the element is (button, link, …) and its accessible name"
+        },
+        {
+         "name": "Test ID",
+         "value": "testId",
+         "description": "The data-testid attribute, as written"
+        },
+        {
+         "name": "CSS Selector",
+         "value": "css",
+         "description": "Advanced: a CSS selector, as written. Copy one from your browser's developer tools (Inspect, then Copy selector)."
+        }
+       ],
+       "description": "How to find the element. It must match exactly one element."
+      },
+      {
+       "displayName": "Value",
+       "name": "text",
+       "type": "string",
+       "default": "",
+       "placeholder": "Sign in",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "label",
+       "type": "string",
+       "default": "",
+       "placeholder": "Email address",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "label"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Role",
+       "name": "role",
+       "type": "options",
+       "default": "button",
+       "options": [
+        {
+         "name": "Button",
+         "value": "button"
+        },
+        {
+         "name": "Link",
+         "value": "link"
+        },
+        {
+         "name": "Text Box",
+         "value": "textbox"
+        },
+        {
+         "name": "Checkbox",
+         "value": "checkbox"
+        },
+        {
+         "name": "Radio",
+         "value": "radio"
+        },
+        {
+         "name": "Combo Box",
+         "value": "combobox"
+        },
+        {
+         "name": "Heading",
+         "value": "heading"
+        },
+        {
+         "name": "Row",
+         "value": "row"
+        },
+        {
+         "name": "Cell",
+         "value": "cell"
+        },
+        {
+         "name": "Tab",
+         "value": "tab"
+        },
+        {
+         "name": "Menu Item",
+         "value": "menuitem"
+        }
+       ],
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Name",
+       "name": "roleName",
+       "type": "string",
+       "default": "",
+       "placeholder": "Submit",
+       "description": "The accessible name, such as the button text",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "testId",
+       "type": "string",
+       "default": "",
+       "placeholder": "submit-button",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "testId"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "css",
+       "type": "string",
+       "default": "",
+       "placeholder": "table.results",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "css"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Exact Match",
+       "name": "exact",
+       "type": "boolean",
+       "default": false,
+       "description": "Whether the whole text must match exactly (case-sensitive), instead of part of it ignoring case",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text",
+          "label",
+          "role"
+         ]
+        }
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "displayName": "Download Link or Button",
+   "name": "downloadTrigger",
+   "type": "fixedCollection",
+   "default": {},
+   "placeholder": "Set Download Link or Button",
+   "description": "The link or button that starts the download. Clicking it must start a GET download; a download that needs a form post is a Run Steps job.",
+   "required": true,
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "download"
+     ]
+    }
+   },
+   "options": [
+    {
+     "name": "locator",
+     "displayName": "Locator",
+     "values": [
+      {
+       "displayName": "Find By",
+       "name": "findBy",
+       "type": "options",
+       "default": "text",
+       "options": [
+        {
+         "name": "Visible Text",
+         "value": "text",
+         "description": "Text shown on the page. Matches part of the text, ignoring case."
+        },
+        {
+         "name": "Form Label",
+         "value": "label",
+         "description": "The label of a form field. Matches part of the label, ignoring case."
+        },
+        {
+         "name": "Role and Name",
+         "value": "role",
+         "description": "What the element is (button, link, …) and its accessible name"
+        },
+        {
+         "name": "Test ID",
+         "value": "testId",
+         "description": "The data-testid attribute, as written"
+        },
+        {
+         "name": "CSS Selector",
+         "value": "css",
+         "description": "Advanced: a CSS selector, as written. Copy one from your browser's developer tools (Inspect, then Copy selector)."
+        }
+       ],
+       "description": "How to find the element. It must match exactly one element."
+      },
+      {
+       "displayName": "Value",
+       "name": "text",
+       "type": "string",
+       "default": "",
+       "placeholder": "Sign in",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "label",
+       "type": "string",
+       "default": "",
+       "placeholder": "Email address",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "label"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Role",
+       "name": "role",
+       "type": "options",
+       "default": "button",
+       "options": [
+        {
+         "name": "Button",
+         "value": "button"
+        },
+        {
+         "name": "Link",
+         "value": "link"
+        },
+        {
+         "name": "Text Box",
+         "value": "textbox"
+        },
+        {
+         "name": "Checkbox",
+         "value": "checkbox"
+        },
+        {
+         "name": "Radio",
+         "value": "radio"
+        },
+        {
+         "name": "Combo Box",
+         "value": "combobox"
+        },
+        {
+         "name": "Heading",
+         "value": "heading"
+        },
+        {
+         "name": "Row",
+         "value": "row"
+        },
+        {
+         "name": "Cell",
+         "value": "cell"
+        },
+        {
+         "name": "Tab",
+         "value": "tab"
+        },
+        {
+         "name": "Menu Item",
+         "value": "menuitem"
+        }
+       ],
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Name",
+       "name": "roleName",
+       "type": "string",
+       "default": "",
+       "placeholder": "Submit",
+       "description": "The accessible name, such as the button text",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "role"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "testId",
+       "type": "string",
+       "default": "",
+       "placeholder": "submit-button",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "testId"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Value",
+       "name": "css",
+       "type": "string",
+       "default": "",
+       "placeholder": "table.results",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "css"
+         ]
+        }
+       }
+      },
+      {
+       "displayName": "Exact Match",
+       "name": "exact",
+       "type": "boolean",
+       "default": false,
+       "description": "Whether the whole text must match exactly (case-sensitive), instead of part of it ignoring case",
+       "displayOptions": {
+        "show": {
+         "findBy": [
+          "text",
+          "label",
+          "role"
+         ]
+        }
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "displayName": "Steps (JSON)",
+   "name": "steps",
+   "type": "json",
+   "default": "",
+   "placeholder": "[\n  {\n    \"intent\": \"Open the price list\",\n    \"goto\": \"https://example.com/pricing\"\n  },\n  {\n    \"intent\": \"Read the price table\",\n    \"extractTable\": {\n      \"table\": {\n        \"css\": \"table.results\"\n      }\n    }\n  },\n  {\n    \"intent\": \"Take a screenshot\",\n    \"screenshot\": {\n      \"capture\": \"viewport\"\n    }\n  }\n]",
+   "description": "A step document { name?, version?, startUrl?, steps: [...] } or a bare array of steps, as JSON text or an object. Map it from an item with an expression, for example {{ $json.steps }}. Empty means a first run, which needs AI Repair.",
+   "hint": "Verbs and JSON shape: docs/reference/steps.md in the repository",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Start URL",
+   "name": "startUrl",
+   "type": "string",
+   "default": "",
+   "placeholder": "https://example.com/account",
+   "description": "Browser steps only: where the run starts when the steps do not say, and the site it may visit. Required without a Site Login; with one, it must be one of the credential's Sites the Browser May Open.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ]
+    },
+    "hide": {
+     "runsOn": [
+      "desktop"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Require Signed Steps",
+   "name": "requireSignedSteps",
+   "type": "boolean",
+   "default": true,
+   "noDataExpression": true,
+   "description": "Whether the steps must carry a valid Signature and Approved By from Sign Steps. Must be set directly, not with an expression.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Unsigned steps run as written. Only turn this off for steps you typed here.",
+   "name": "unsignedNotice",
+   "type": "notice",
+   "default": "",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ],
+     "requireSignedSteps": [
+      false
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Signature",
+   "name": "signature",
+   "type": "string",
+   "default": "",
+   "description": "The signature Sign Steps recorded, for example {{ $json.signature }}. A non-empty signature is always checked, even with Require Signed Steps off.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Approved By",
+   "name": "approvedBy",
+   "type": "string",
+   "default": "",
+   "description": "Who approved the steps, as Sign Steps recorded it, for example {{ $json.approvedBy }}",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "AI Repair",
+   "name": "aiRepair",
+   "type": "boolean",
+   "default": false,
+   "description": "Whether a connected chat model repairs the run when the page no longer matches the steps. Repaired steps come out on the Repaired Steps output and never run until Sign Steps signs them.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Goal",
+   "name": "goal",
+   "type": "string",
+   "typeOptions": {
+    "rows": 3
+   },
+   "default": "",
+   "placeholder": "Read every invoice in the list. Invoice IDs look like INV-0417.",
+   "description": "What the data is, in plain words. The chat model uses it when it repairs the steps or builds the first version.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ],
+     "aiRepair": [
+      true
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Expected File (First Version)",
+   "name": "expectedFile",
+   "type": "fixedCollection",
+   "default": {},
+   "description": "Used when AI repair builds the first version of steps that download a file. Steps that already exist carry their own checks on the download step (check).",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "runSteps"
+     ],
+     "aiRepair": [
+      true
+     ]
+    }
+   },
+   "options": [
+    {
+     "displayName": "Expected File",
+     "name": "file",
+     "values": [
+      {
+       "displayName": "File Type",
+       "name": "fileType",
+       "type": "multiOptions",
+       "default": [],
+       "description": "The kinds of file the download may be. Empty means the default list.",
+       "options": [
+        {
+         "name": "CSV",
+         "value": "csv"
+        },
+        {
+         "name": "Excel (XLSX)",
+         "value": "xlsx"
+        },
+        {
+         "name": "PDF",
+         "value": "pdf"
+        },
+        {
+         "name": "Text",
+         "value": "text"
+        },
+        {
+         "name": "JSON",
+         "value": "json"
+        },
+        {
+         "name": "ZIP",
+         "value": "zip"
+        }
+       ]
+      },
+      {
+       "displayName": "File Name Pattern (Regex)",
+       "name": "namePattern",
+       "type": "string",
+       "default": "",
+       "placeholder": "^LINEITEMS_",
+       "description": "A regular expression the downloaded file name must match"
+      },
+      {
+       "displayName": "Minimum Size (Bytes)",
+       "name": "minBytes",
+       "type": "number",
+       "default": 0,
+       "description": "The smallest the file may be. 0 means no minimum."
+      },
+      {
+       "displayName": "Required Columns",
+       "name": "requiredColumns",
+       "type": "string",
+       "default": "",
+       "placeholder": "Document, Amount",
+       "description": "Comma-separated column headings the file must have (CSV and Excel)"
+      },
+      {
+       "displayName": "Minimum Rows",
+       "name": "minRows",
+       "type": "number",
+       "default": 0,
+       "description": "The fewest data rows the file may have. 0 means no minimum."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "displayName": "Signs the incoming item, which must be a Repaired steps item from Run Steps or Import Steps. Nothing else can be signed.",
+   "name": "signInputNotice",
+   "type": "notice",
+   "default": "",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "signSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Approved",
+   "name": "approved",
+   "type": "boolean",
+   "default": false,
+   "hint": "Off records a rejection",
+   "description": "Whether the approver accepted the repaired steps. Map it from the approval answer, for example {{ $json.data.approved }}.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "signSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Approver",
+   "name": "approverFrom",
+   "type": "options",
+   "default": "approvedBy",
+   "options": [
+    {
+     "name": "Approved By",
+     "value": "approvedBy",
+     "description": "The address in Approved By, or the one address on the allowlist when it is empty"
+    },
+    {
+     "name": "Who Signed In to n8n on the Approval Form",
+     "value": "formSignIn",
+     "description": "The n8n user who submitted the form page named in Approval Form Page. Its form must use n8n User Auth."
+    }
+   ],
+   "description": "Where the approver comes from. Either way, the approver must be on the Approver Allowlist.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "signSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Approval Form Page",
+   "name": "approvalFormPage",
+   "type": "string",
+   "default": "Review and approve",
+   "noDataExpression": true,
+   "description": "With Approver set to who signed in to n8n: the name of the form page where the approver decides. The email of the n8n user who submitted that page is recorded as the approver. Must be set directly, not with an expression.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "signSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Approved By",
+   "name": "approverId",
+   "type": "string",
+   "default": "",
+   "placeholder": "ops-lead@example.com",
+   "description": "Who decided: an address on the Approver Allowlist. Leave it empty when the allowlist holds one address: that address is recorded. With more than one, it is required. Not used when Approver is who signed in to n8n.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "signSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Approver Allowlist",
+   "name": "approverAllowlist",
+   "type": "string",
+   "default": "",
+   "required": true,
+   "noDataExpression": true,
+   "placeholder": "ops-lead@example.com, owner@example.com",
+   "description": "Comma-separated approvers who may approve or reject repaired steps. Must be set directly, not with an expression.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "signSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Write Steps",
+   "name": "writeSteps",
+   "type": "string",
+   "default": "",
+   "placeholder": "7, 9",
+   "hint": "Desktop steps only. Leave empty when no step saves, posts or submits.",
+   "description": "Desktop steps only: the numbers of the steps that save, post or submit, as the approver declared them (the change list numbers every step; the safety flags list the candidates). Listed steps are signed as writes, so the desktop runner lets them act on the write controls and gated keys of its policy. The runner refuses a write only on those: leaving a step unlisted does not stop it from saving unless its control is in the runner policy. Map it from the approval answer. Browser steps refuse a value here.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "signSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Check Only",
+   "name": "checkOnly",
+   "type": "boolean",
+   "default": false,
+   "hint": "On signs and records nothing",
+   "description": "Whether to only report what this node signs for: the name of its RPA Site Login, and whether the signature of an approved version on the input item (an active row of the steps table) verifies with this node's RPA Step Signing key and Site Login. RPA: 5 Import a bot does this before its review page.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "signSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Imported steps make no form submissions or writes; Requests That Only Read still pass. Each step list runs once and is replayed in a fresh browser, so allow about twice Options → Max Seconds per step list. On sites with an authenticator code, the import needs either the TOTP Secret in the Site Login or Options → One-Time Code Workflow, and Max Seconds must leave room for up to a 30 s wait. What passes comes out on Repaired Steps for approval and Sign Steps. Desktop steps (from a UiPath project, a step document or an RPA recording) are not replayed: they go to approval as written.",
+   "name": "importNotice",
+   "type": "notice",
+   "default": "",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Source",
+   "name": "source",
+   "type": "options",
+   "default": "chrome",
+   "options": [
+    {
+     "name": "Work It Out From the File",
+     "value": "auto",
+     "description": "By the file name (.rpa-recording.json, .zip, .xaml, .js, .ts), else by what the JSON holds: an RPA recording, a Chrome Recorder export or a step document"
+    },
+    {
+     "name": "Chrome Recorder (JSON)",
+     "value": "chrome",
+     "description": "A recording exported from the Recorder panel of Chrome DevTools as JSON"
+    },
+    {
+     "name": "Playwright Code (JavaScript or TypeScript)",
+     "value": "playwright",
+     "description": "Code from the codegen recorder, for JavaScript or TypeScript"
+    },
+    {
+     "name": "UiPath Project (ZIP or XAML)",
+     "value": "uipath",
+     "description": "A UiPath project folder as a .zip, or one .xaml workflow"
+    },
+    {
+     "name": "Step Document (JSON)",
+     "value": "steps",
+     "description": "Steps you wrote, as Run Steps takes them: a browser step document or a desktop step set. This is how hand-written steps get approved and signed. Browser steps that submit a form, download through a form, type a secret or change a password are not run: they go to approval marked not replayed."
+    },
+    {
+     "name": "RPA Recording",
+     "value": "recording",
+     "description": "A .rpa-recording.json file the RPA recorder saved on the Windows machine. Its desktop steps are not replayed: they go to approval as recorded."
+    }
+   ],
+   "description": "What the file holds",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Input From",
+   "name": "inputFrom",
+   "type": "options",
+   "default": "binary",
+   "options": [
+    {
+     "name": "Binary File",
+     "value": "binary",
+     "description": "A file on the input item, for example from a Form Trigger upload"
+    },
+    {
+     "name": "Text",
+     "value": "text",
+     "description": "The recording, code or step document pasted as text"
+    }
+   ],
+   "description": "Where the recording, code or step document comes from",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    },
+    "hide": {
+     "source": [
+      "uipath",
+      "recording"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Input Binary Field",
+   "name": "binaryPropertyName",
+   "type": "string",
+   "default": "data",
+   "hint": "The name of the input binary field containing the file. At most 20 MiB.",
+   "description": "The binary field of the input item that holds the file",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    },
+    "hide": {
+     "inputFrom": [
+      "text"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Recording or Code",
+   "name": "sourceText",
+   "type": "string",
+   "typeOptions": {
+    "rows": 10
+   },
+   "default": "",
+   "description": "The recording, code or step document as text: Chrome Recorder JSON, JavaScript or TypeScript code, or a step document as JSON",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ],
+     "inputFrom": [
+      "text"
+     ]
+    },
+    "hide": {
+     "source": [
+      "uipath",
+      "recording"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Name",
+   "name": "stepsName",
+   "type": "string",
+   "default": "",
+   "required": true,
+   "placeholder": "line-item-export",
+   "description": "Names the imported steps. A UiPath project gives one step list per sequence, named <name>-1, <name>-2 and so on. Every other source gives one step list, named <name>.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Start URL",
+   "name": "startUrl",
+   "type": "string",
+   "default": "",
+   "placeholder": "https://example.com/account",
+   "description": "The site the imported steps may visit, and where they start. Leave empty to use the first page the recording opens. With a Site Login, it must be one of the credential's Sites the Browser May Open.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    },
+    "hide": {
+     "source": [
+      "recording"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "AI Repair",
+   "name": "aiRepair",
+   "type": "boolean",
+   "default": true,
+   "description": "Whether a connected chat model repairs the imported steps when the page no longer matches the recording. Without a model, or with this off, steps that no longer match fail with the step that drifted.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    },
+    "hide": {
+     "source": [
+      "recording"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Goal",
+   "name": "goal",
+   "type": "string",
+   "typeOptions": {
+    "rows": 3
+   },
+   "default": "",
+   "placeholder": "Download the line items of last month as CSV",
+   "description": "What the steps are for, in plain words. The chat model uses it only when it repairs them. Empty means: do what the imported steps do.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ],
+     "aiRepair": [
+      true
+     ]
+    },
+    "hide": {
+     "source": [
+      "recording"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "ID Pattern (Regex)",
+   "name": "idPattern",
+   "type": "string",
+   "default": "",
+   "placeholder": "INV-\\d{4}",
+   "description": "A regular expression that matches the ID every record has, such as INV-\\d{4} for INV-0417. Required when the imported steps read rows: the replay checks the rows by it. Leave empty for steps that download a file.",
+   "hint": "Not sure? Paste one real ID into regex101.com and describe its shape: digits \\d, letters [A-Z], repeats {4}.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    },
+    "hide": {
+     "source": [
+      "recording"
+     ]
+    }
+   }
+  },
+  {
+   "displayName": "Expected File (First Version)",
+   "name": "expectedFile",
+   "type": "fixedCollection",
+   "default": {},
+   "description": "Set it when the steps download a file: the click that exports becomes a download step with these checks, and the replay must download a file that passes them.",
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "importSteps"
+     ]
+    },
+    "hide": {
+     "source": [
+      "steps",
+      "recording"
+     ]
+    }
+   },
+   "options": [
+    {
+     "displayName": "Expected File",
+     "name": "file",
+     "values": [
+      {
+       "displayName": "File Type",
+       "name": "fileType",
+       "type": "multiOptions",
+       "default": [],
+       "description": "The kinds of file the download may be. Empty means the default list.",
+       "options": [
+        {
+         "name": "CSV",
+         "value": "csv"
+        },
+        {
+         "name": "Excel (XLSX)",
+         "value": "xlsx"
+        },
+        {
+         "name": "PDF",
+         "value": "pdf"
+        },
+        {
+         "name": "Text",
+         "value": "text"
+        },
+        {
+         "name": "JSON",
+         "value": "json"
+        },
+        {
+         "name": "ZIP",
+         "value": "zip"
+        }
+       ]
+      },
+      {
+       "displayName": "File Name Pattern (Regex)",
+       "name": "namePattern",
+       "type": "string",
+       "default": "",
+       "placeholder": "^LINEITEMS_",
+       "description": "A regular expression the downloaded file name must match"
+      },
+      {
+       "displayName": "Minimum Size (Bytes)",
+       "name": "minBytes",
+       "type": "number",
+       "default": 0,
+       "description": "The smallest the file may be. 0 means no minimum."
+      },
+      {
+       "displayName": "Required Columns",
+       "name": "requiredColumns",
+       "type": "string",
+       "default": "",
+       "placeholder": "Document, Amount",
+       "description": "Comma-separated column headings the file must have (CSV and Excel)"
+      },
+      {
+       "displayName": "Minimum Rows",
+       "name": "minRows",
+       "type": "number",
+       "default": 0,
+       "description": "The fewest data rows the file may have. 0 means no minimum."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "displayName": "Options",
+   "name": "options",
+   "type": "collection",
+   "placeholder": "Add Option",
+   "default": {},
+   "options": [
+    {
+     "displayName": "Wait Until",
+     "name": "waitUntil",
+     "type": "options",
+     "default": "load",
+     "options": [
+      {
+       "name": "Load",
+       "value": "load",
+       "description": "The page, its styles and images have loaded"
+      },
+      {
+       "name": "DOM Content Loaded",
+       "value": "domcontentloaded",
+       "description": "The HTML is parsed; images may still be loading"
+      },
+      {
+       "name": "Network Idle",
+       "value": "networkidle",
+       "description": "No network requests for 500 ms. Can hang on pages that poll."
+      }
+     ],
+     "description": "When the page counts as opened",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "screenshot",
+        "getPage",
+        "pdf",
+        "extract",
+        "fillForm",
+        "download"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Wait for Element",
+     "name": "waitFor",
+     "type": "fixedCollection",
+     "default": {},
+     "placeholder": "Set Wait for Element",
+     "description": "An element to wait for (visible) before acting",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "screenshot",
+        "getPage",
+        "pdf",
+        "extract",
+        "fillForm",
+        "download"
+       ]
+      }
+     },
+     "options": [
+      {
+       "name": "locator",
+       "displayName": "Locator",
+       "values": [
+        {
+         "displayName": "Find By",
+         "name": "findBy",
+         "type": "options",
+         "default": "text",
+         "options": [
+          {
+           "name": "Visible Text",
+           "value": "text",
+           "description": "Text shown on the page. Matches part of the text, ignoring case."
+          },
+          {
+           "name": "Form Label",
+           "value": "label",
+           "description": "The label of a form field. Matches part of the label, ignoring case."
+          },
+          {
+           "name": "Role and Name",
+           "value": "role",
+           "description": "What the element is (button, link, …) and its accessible name"
+          },
+          {
+           "name": "Test ID",
+           "value": "testId",
+           "description": "The data-testid attribute, as written"
+          },
+          {
+           "name": "CSS Selector",
+           "value": "css",
+           "description": "Advanced: a CSS selector, as written. Copy one from your browser's developer tools (Inspect, then Copy selector)."
+          }
+         ],
+         "description": "How to find the element. It must match exactly one element."
+        },
+        {
+         "displayName": "Value",
+         "name": "text",
+         "type": "string",
+         "default": "",
+         "placeholder": "Sign in",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "text"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Value",
+         "name": "label",
+         "type": "string",
+         "default": "",
+         "placeholder": "Email address",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "label"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Role",
+         "name": "role",
+         "type": "options",
+         "default": "button",
+         "options": [
+          {
+           "name": "Button",
+           "value": "button"
+          },
+          {
+           "name": "Link",
+           "value": "link"
+          },
+          {
+           "name": "Text Box",
+           "value": "textbox"
+          },
+          {
+           "name": "Checkbox",
+           "value": "checkbox"
+          },
+          {
+           "name": "Radio",
+           "value": "radio"
+          },
+          {
+           "name": "Combo Box",
+           "value": "combobox"
+          },
+          {
+           "name": "Heading",
+           "value": "heading"
+          },
+          {
+           "name": "Row",
+           "value": "row"
+          },
+          {
+           "name": "Cell",
+           "value": "cell"
+          },
+          {
+           "name": "Tab",
+           "value": "tab"
+          },
+          {
+           "name": "Menu Item",
+           "value": "menuitem"
+          }
+         ],
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "role"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Name",
+         "name": "roleName",
+         "type": "string",
+         "default": "",
+         "placeholder": "Submit",
+         "description": "The accessible name, such as the button text",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "role"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Value",
+         "name": "testId",
+         "type": "string",
+         "default": "",
+         "placeholder": "submit-button",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "testId"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Value",
+         "name": "css",
+         "type": "string",
+         "default": "",
+         "placeholder": "table.results",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "css"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Exact Match",
+         "name": "exact",
+         "type": "boolean",
+         "default": false,
+         "description": "Whether the whole text must match exactly (case-sensitive), instead of part of it ignoring case",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "text",
+            "label",
+            "role"
+           ]
+          }
+         }
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "displayName": "Put Output in Field",
+     "name": "screenshotProperty",
+     "type": "string",
+     "default": "screenshot",
+     "description": "Name of the binary field that receives the PNG",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "screenshot"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Print Background",
+     "name": "printBackground",
+     "type": "boolean",
+     "default": false,
+     "description": "Whether to print background colours and images",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "pdf"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Put Output in Field",
+     "name": "pdfProperty",
+     "type": "string",
+     "default": "pdf",
+     "description": "Name of the binary field that receives the PDF",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "pdf"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Output",
+     "name": "outputMode",
+     "type": "options",
+     "default": "rowPerItem",
+     "options": [
+      {
+       "name": "One Item per Row",
+       "value": "rowPerItem",
+       "description": "Each row becomes its own item, with the page facts under _meta"
+      },
+      {
+       "name": "All Rows in One Item",
+       "value": "allInOne",
+       "description": "One item with a rows list, rowCount and confirmed"
+      }
+     ],
+     "description": "How the rows come out of the node",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "extract"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Next Page",
+     "name": "nextPage",
+     "type": "fixedCollection",
+     "default": {},
+     "placeholder": "Set Next Page",
+     "description": "The link or button that opens the next page of results. Leave empty to read the first page only.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "extract"
+       ]
+      }
+     },
+     "options": [
+      {
+       "name": "locator",
+       "displayName": "Locator",
+       "values": [
+        {
+         "displayName": "Find By",
+         "name": "findBy",
+         "type": "options",
+         "default": "text",
+         "options": [
+          {
+           "name": "Visible Text",
+           "value": "text",
+           "description": "Text shown on the page. Matches part of the text, ignoring case."
+          },
+          {
+           "name": "Form Label",
+           "value": "label",
+           "description": "The label of a form field. Matches part of the label, ignoring case."
+          },
+          {
+           "name": "Role and Name",
+           "value": "role",
+           "description": "What the element is (button, link, …) and its accessible name"
+          },
+          {
+           "name": "Test ID",
+           "value": "testId",
+           "description": "The data-testid attribute, as written"
+          },
+          {
+           "name": "CSS Selector",
+           "value": "css",
+           "description": "Advanced: a CSS selector, as written. Copy one from your browser's developer tools (Inspect, then Copy selector)."
+          }
+         ],
+         "description": "How to find the element. It must match exactly one element."
+        },
+        {
+         "displayName": "Value",
+         "name": "text",
+         "type": "string",
+         "default": "",
+         "placeholder": "Sign in",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "text"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Value",
+         "name": "label",
+         "type": "string",
+         "default": "",
+         "placeholder": "Email address",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "label"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Role",
+         "name": "role",
+         "type": "options",
+         "default": "button",
+         "options": [
+          {
+           "name": "Button",
+           "value": "button"
+          },
+          {
+           "name": "Link",
+           "value": "link"
+          },
+          {
+           "name": "Text Box",
+           "value": "textbox"
+          },
+          {
+           "name": "Checkbox",
+           "value": "checkbox"
+          },
+          {
+           "name": "Radio",
+           "value": "radio"
+          },
+          {
+           "name": "Combo Box",
+           "value": "combobox"
+          },
+          {
+           "name": "Heading",
+           "value": "heading"
+          },
+          {
+           "name": "Row",
+           "value": "row"
+          },
+          {
+           "name": "Cell",
+           "value": "cell"
+          },
+          {
+           "name": "Tab",
+           "value": "tab"
+          },
+          {
+           "name": "Menu Item",
+           "value": "menuitem"
+          }
+         ],
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "role"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Name",
+         "name": "roleName",
+         "type": "string",
+         "default": "",
+         "placeholder": "Submit",
+         "description": "The accessible name, such as the button text",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "role"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Value",
+         "name": "testId",
+         "type": "string",
+         "default": "",
+         "placeholder": "submit-button",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "testId"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Value",
+         "name": "css",
+         "type": "string",
+         "default": "",
+         "placeholder": "table.results",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "css"
+           ]
+          }
+         }
+        },
+        {
+         "displayName": "Exact Match",
+         "name": "exact",
+         "type": "boolean",
+         "default": false,
+         "description": "Whether the whole text must match exactly (case-sensitive), instead of part of it ignoring case",
+         "displayOptions": {
+          "show": {
+           "findBy": [
+            "text",
+            "label",
+            "role"
+           ]
+          }
+         }
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "displayName": "Max Pages",
+     "name": "maxPages",
+     "type": "number",
+     "default": 10,
+     "typeOptions": {
+      "minValue": 1,
+      "maxValue": 100
+     },
+     "description": "The most pages to read when Next Page is set. If a next page is still there after this many, the run fails as incomplete.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "extract"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Allowed File Types",
+     "name": "allowedFileTypes",
+     "type": "multiOptions",
+     "default": [
+      "text/csv",
+      "text/plain",
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+     ],
+     "options": [
+      {
+       "name": "CSV",
+       "value": "text/csv"
+      },
+      {
+       "name": "Plain Text",
+       "value": "text/plain"
+      },
+      {
+       "name": "PDF",
+       "value": "application/pdf"
+      },
+      {
+       "name": "XLSX",
+       "value": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      },
+      {
+       "name": "JSON",
+       "value": "application/json"
+      },
+      {
+       "name": "ZIP",
+       "value": "application/zip"
+      },
+      {
+       "name": "PNG",
+       "value": "image/png"
+      },
+      {
+       "name": "JPEG",
+       "value": "image/jpeg"
+      },
+      {
+       "name": "DOCX",
+       "value": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      }
+     ],
+     "description": "The file types the download may be, checked by the file contents. Files are never unpacked: a ZIP stays one file.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "download"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Max File Size",
+     "name": "maxFileSizeMb",
+     "type": "number",
+     "default": 50,
+     "typeOptions": {
+      "minValue": 0.01,
+      "maxValue": 200,
+      "numberPrecision": 2
+     },
+     "description": "In MB (1 MB = 1,048,576 bytes), at most 200. A larger file fails the run as incomplete.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "download"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Put Output in Field",
+     "name": "fileProperty",
+     "type": "string",
+     "default": "file",
+     "description": "Name of the binary field that receives the downloaded file",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "download"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Timeout (Seconds)",
+     "name": "timeout",
+     "type": "number",
+     "default": 30,
+     "typeOptions": {
+      "minValue": 1,
+      "maxValue": 300
+     },
+     "description": "How long each step may wait for its page or element",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "screenshot",
+        "getPage",
+        "pdf",
+        "extract",
+        "fillForm",
+        "download",
+        "runSteps",
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Max Seconds",
+     "name": "maxSeconds",
+     "type": "number",
+     "default": 180,
+     "typeOptions": {
+      "minValue": 10,
+      "maxValue": 600
+     },
+     "description": "One deadline for the whole run, AI repair and proof included",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "screenshot",
+        "getPage",
+        "pdf",
+        "extract",
+        "fillForm",
+        "download",
+        "runSteps",
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Viewport",
+     "name": "viewport",
+     "type": "fixedCollection",
+     "default": {
+      "size": {
+       "width": 1280,
+       "height": 800
+      }
+     },
+     "description": "Browser window size in pixels",
+     "options": [
+      {
+       "name": "size",
+       "displayName": "Size",
+       "values": [
+        {
+         "displayName": "Width",
+         "name": "width",
+         "type": "number",
+         "default": 1280,
+         "typeOptions": {
+          "minValue": 320,
+          "maxValue": 3840
+         }
+        },
+        {
+         "displayName": "Height",
+         "name": "height",
+         "type": "number",
+         "default": 800,
+         "typeOptions": {
+          "minValue": 240,
+          "maxValue": 2160
+         }
+        }
+       ]
+      }
+     ],
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "screenshot",
+        "getPage",
+        "pdf",
+        "extract",
+        "fillForm",
+        "download",
+        "runSteps",
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Also Allow These Sites",
+     "name": "allowedHosts",
+     "type": "string",
+     "default": "",
+     "placeholder": "cdn.example.com, images.example.com",
+     "description": "Extra sites the browser may open or load files from, separated by commas. Exact hosts only, no wildcards. Leave empty when a Site Login is attached: the credential sets the allowed sites.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "screenshot",
+        "getPage",
+        "pdf",
+        "extract",
+        "fillForm",
+        "download",
+        "runSteps",
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Allow Private Network",
+     "name": "allowPrivateNetwork",
+     "type": "boolean",
+     "default": false,
+     "noDataExpression": true,
+     "description": "Whether the allowed sites may be on a private network address, such as 10.x, 192.168.x or localhost. Must be set directly, not with an expression.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "screenshot",
+        "getPage",
+        "pdf",
+        "extract",
+        "fillForm",
+        "download",
+        "runSteps",
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "ID Pattern (Regex)",
+     "name": "idPattern",
+     "type": "string",
+     "default": "",
+     "placeholder": "INV-\\d{4}",
+     "description": "Optional. A regular expression that matches the ID every record has, such as INV-\\d{4} for INV-0417. When set, the node keeps only rows whose ID matches, and removes duplicates by ID. To check the count against a total the page states, set Stated Total Pattern. Leave empty to return everything found. Required for AI repair.",
+     "hint": "Not sure? Paste one real ID into regex101.com and describe its shape: digits \\d, letters [A-Z], repeats {4}.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "extract",
+        "runSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Stated Total Pattern (Regex)",
+     "name": "totalPattern",
+     "type": "string",
+     "default": "",
+     "placeholder": "(\\d+) results",
+     "description": "A regular expression whose first group is the total the page states, such as (\\d+) results. The row count must equal it; confirmed is true only then.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "extract",
+        "runSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Required Fields",
+     "name": "requiredFields",
+     "type": "string",
+     "default": "",
+     "placeholder": "title, date",
+     "description": "Comma-separated row fields that must not be empty. A row missing one fails the run.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "extract",
+        "runSteps"
+       ]
+      },
+      "hide": {
+       "/shape": [
+        "table"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Text That Means No Results (Regex)",
+     "name": "emptyPattern",
+     "type": "string",
+     "default": "",
+     "placeholder": "No results found",
+     "description": "Lets a run with no rows succeed, but only when the page shows text matching this (case-insensitive). Leave empty to treat zero rows as a failure.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "extract",
+        "runSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Variables",
+     "name": "variables",
+     "type": "fixedCollection",
+     "typeOptions": {
+      "multipleValues": true
+     },
+     "default": {},
+     "placeholder": "Add Variable",
+     "description": "Values for {{var.name}} in the steps. In Run Steps, a password or another secret goes in an RPA Secret Variables credential instead: a value here is masked only where a secret fill or a desktop step types it.",
+     "hint": "Not n8n expressions; {{var.name}} is replaced inside steps.",
+     "options": [
+      {
+       "name": "values",
+       "displayName": "Variable",
+       "values": [
+        {
+         "displayName": "Name",
+         "name": "name",
+         "type": "string",
+         "default": "",
+         "placeholder": "from"
+        },
+        {
+         "displayName": "Value",
+         "name": "value",
+         "type": "string",
+         "default": ""
+        }
+       ]
+      }
+     ],
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "runSteps",
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Name",
+     "name": "name",
+     "type": "string",
+     "default": "",
+     "placeholder": "invoices-example",
+     "description": "Names the step list. Required for a first run (empty steps with AI Repair on). With signed steps, it must equal the signed name.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "runSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Expected Version",
+     "name": "expectedVersion",
+     "type": "string",
+     "default": "",
+     "placeholder": "3",
+     "description": "With signed steps, the signed version must equal this whole number. Map it from the newest active row, so an edited version column fails.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "runSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Allow Unsigned Writes",
+     "name": "allowUnsignedWrites",
+     "type": "boolean",
+     "default": false,
+     "noDataExpression": true,
+     "description": "Whether unsigned steps may sign in, submit a form or download through a form. With this on, whoever can set the steps drives the Site Login and, on a login page that copies typed values into the page, can read its password out through step outcomes. Turn it on only when everyone who can set the steps is trusted with that credential. Must be set directly, not with an expression.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "runSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Deliver Unconfirmed Rows",
+     "name": "deliverUnconfirmed",
+     "type": "boolean",
+     "default": false,
+     "noDataExpression": true,
+     "description": "Whether rows read during AI repair go to Data even when the proof in a fresh browser did not pass. Must be set directly, not with an expression.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "runSteps"
+       ],
+       "/aiRepair": [
+        true
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Max Agent Actions",
+     "name": "maxActions",
+     "type": "number",
+     "default": 40,
+     "typeOptions": {
+      "minValue": 1,
+      "maxValue": 200
+     },
+     "description": "Most browser actions the chat model may take while repairing",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "runSteps"
+       ],
+       "/aiRepair": [
+        true
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Max LLM Tokens",
+     "name": "maxTokens",
+     "type": "number",
+     "default": 200000,
+     "typeOptions": {
+      "minValue": 1000,
+      "maxValue": 1000000
+     },
+     "description": "Most chat model tokens one run may use",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "runSteps"
+       ],
+       "/aiRepair": [
+        true
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "One-Time Code Workflow",
+     "name": "codeWorkflowId",
+     "type": "workflowSelector",
+     "default": "",
+     "noDataExpression": true,
+     "description": "The workflow that returns the sign-in's one-time code when the sign-in takes it from a workflow (\"source\": \"workflow\"). It starts with an Execute Workflow Trigger, gets requestedAt and returns one item whose code field holds 6 to 10 digits; publish it first. In Import Steps, a recorded sign-in then takes its code from it (a step document sets \"source\" itself); give Run Steps the same workflow. Must be set directly, not with an expression.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "runSteps",
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Code Timeout (Seconds)",
+     "name": "codeTimeout",
+     "type": "number",
+     "default": 120,
+     "typeOptions": {
+      "minValue": 1,
+      "maxValue": 300
+     },
+     "description": "How long the sign-in waits for the One-Time Code Workflow. Max Seconds still bounds the whole run.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "runSteps",
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Version",
+     "name": "version",
+     "type": "number",
+     "default": 1,
+     "typeOptions": {
+      "minValue": 1,
+      "numberPrecision": 0
+     },
+     "description": "The version the imported steps get. 1 for a new bot. To change an approved bot, give one more than the highest version any row of its name has in the steps table (active, rejected or superseded), so the new steps are a new version under the same name and no two rows share a name and version: the import form does this. A version in a step document is never used.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Approved Before Hand-Over",
+     "name": "approvedBeforeHandOver",
+     "type": "boolean",
+     "default": false,
+     "description": "Whether this workflow approves the imported steps before it hands the workflow file over, as the import form does. When on, the notes in the workflow file do not ask to import and approve the steps.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Import Form Name",
+     "name": "importFormName",
+     "type": "string",
+     "default": "",
+     "description": "The name of the workflow whose form imports and approves these steps. The notes in the workflow file send the reader there to change the steps or sign them again. Empty: RPA: 5 Import a bot. The import form sets it.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Import Form Address",
+     "name": "importFormAddress",
+     "type": "string",
+     "default": "",
+     "description": "The address of that form (http or https), shown beside its name in the workflow file's notes. Empty: no address. The import form sets it.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Login Breaker Reset Key",
+     "name": "breakerResetKey",
+     "type": "string",
+     "default": "",
+     "noDataExpression": true,
+     "description": "With a Site Login, a failed login stops further logins until its username, password or TOTP Secret is changed, which gets one try. If the login was right, or the account is unlocked now, change this value (for example to today's date) to allow the next login. Type it, not an expression: a login that fails stays blocked for the rest of the execution.",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "runSteps",
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Debug Trace",
+     "name": "saveTrace",
+     "type": "options",
+     "default": "onFailure",
+     "options": [
+      {
+       "name": "On Failure",
+       "value": "onFailure"
+      },
+      {
+       "name": "Always",
+       "value": "always"
+      },
+      {
+       "name": "Never",
+       "value": "never"
+      }
+     ],
+     "description": "When to attach a scrubbed browser trace as binary \"trace\"",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "screenshot",
+        "getPage",
+        "pdf",
+        "extract",
+        "fillForm",
+        "download",
+        "runSteps",
+        "importSteps"
+       ]
+      }
+     }
+    },
+    {
+     "displayName": "Max Items",
+     "name": "maxItems",
+     "type": "number",
+     "default": 100,
+     "typeOptions": {
+      "minValue": 1
+     },
+     "description": "More input items than this fail the execution before any run",
+     "displayOptions": {
+      "show": {
+       "/operation": [
+        "screenshot",
+        "getPage",
+        "pdf",
+        "extract",
+        "fillForm",
+        "download",
+        "runSteps",
+        "importSteps",
+        "signSteps"
+       ]
+      }
+     }
+    }
+   ],
+   "displayOptions": {
+    "show": {
+     "operation": [
+      "screenshot",
+      "getPage",
+      "pdf",
+      "extract",
+      "fillForm",
+      "download",
+      "runSteps",
+      "importSteps",
+      "signSteps"
+     ]
+    }
+   }
+  }
+ ]
+}

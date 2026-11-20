@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
+import { NOT_REPAIRED_STEPS } from '../nodes/Playwright/operations/signSteps.js';
+import { STEPS_EMPTY_NEEDS_REPAIR } from '../nodes/Playwright/operations/runSteps.js';
 import type { ICredentialTestFunctions, IExecuteFunctions } from 'n8n-workflow';
 import { CREDENTIALS } from '../nodes/Playwright/config.js';
 import type { NodeContext } from '../nodes/Playwright/context.js';
@@ -19,13 +21,19 @@ const testContext = {} as ICredentialTestFunctions;
 const exec = (ctx: NodeContext) => node.execute.call(ctx as unknown as IExecuteFunctions);
 
 describe('RPA node', () => {
-  it('is the generic RPA node: version 1, RPA icon, self-hosted only, not an AI tool', () => {
-    expect(d).toMatchObject({ displayName: 'RPA', name: 'playwright', version: 1, icon: { light: 'file:rpa.svg', dark: 'file:rpa.svg' } });
+  it('is the generic RPA node: versions 1 and 2, RPA icon, self-hosted only, not an AI tool', () => {
+    expect(d).toMatchObject({ displayName: 'RPA', name: 'playwright', version: [1, 2], icon: { light: 'file:rpa.svg', dark: 'file:rpa.svg' } });
+    // No defaultVersion: a new node gets the last version.
+    expect(d.defaultVersion).toBeUndefined();
     expect(d.description).toMatch(/Self-hosted only\.$/);
     expect(d.usableAsTool).toBeUndefined();
   });
   it('names its credentials with literals equal to CREDENTIALS, each tested by a method the node implements', () => {
-    expect(d.credentials?.map((c) => c.name)).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis, CREDENTIALS.desktopRunner]);
+    expect(d.credentials?.map((c) => c.name)).toEqual([
+      CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis, CREDENTIALS.desktopRunner, CREDENTIALS.secretVariables,
+      // Import Steps' two slots it only passes on to the workflow file: after the entries Run Steps reads through.
+      CREDENTIALS.signing, CREDENTIALS.desktopRunner,
+    ]);
     for (const c of d.credentials ?? []) expect(Object.keys(node.methods.credentialTest)).toContain(c.testedBy);
   });
   it('has no secret parameters', () => {
@@ -43,7 +51,7 @@ describe('RPA node', () => {
     const run = d.properties.filter((p) => p.displayOptions?.show?.operation?.includes('runSteps'));
     expect(run.some((p) => p.name === 'singleProcessNotice')).toBe(false);
     expect(d.credentials?.find((c) => c.name === 'playwrightRedisApi')).toEqual({
-      name: 'playwrightRedisApi', displayName: 'RPA Redis', required: false, testedBy: 'guardRedisTest', displayOptions: { show: { operation: ['runSteps', 'importSteps'] } },
+      name: 'playwrightRedisApi', displayName: 'RPA Redis', required: false, testedBy: 'guardRedisTest', displayOptions: { show: { operation: ['runSteps', 'importSteps'] }, hide: { runsOn: ['desktop'], shareAcrossWorkers: [false] } },
     });
   });
   it('the Redis test reports OK, or an unreachable message without the run wording', async () => {
@@ -73,7 +81,7 @@ describe('RPA node', () => {
     const out = await exec(harness({ params, rawParameters: params, credentials: { playwrightBrowserApi: { mode: 'local', headless: true } }, continueOnFail: true }));
     expect(out).toHaveLength(1);
     expect(out[0]).toHaveLength(1);
-    expect(JSON.stringify(out[0][0].json)).toContain('Steps is empty. Add steps, or turn on AI Repair to build them from the Goal.');
+    expect(JSON.stringify(out[0][0].json)).toContain(STEPS_EMPTY_NEEDS_REPAIR);
     expect(out[0][0].json.details).toMatchObject({ configError: true });
   });
   it('execute dispatches Sign Steps: an item that is not a Repaired steps item is refused', async () => {
@@ -85,7 +93,7 @@ describe('RPA node', () => {
     const out = await exec(ctx);
     expect(out).toHaveLength(1);
     expect(out[0][0].json.error).toBe(
-      'Sign Steps refused: The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.',
+      `Sign Steps refused: ${NOT_REPAIRED_STEPS}`,
     );
   });
   it('execute dispatches Import Steps: an empty Name is a configuration error, before anything is read', async () => {
@@ -110,5 +118,16 @@ describe('RPA node', () => {
   });
   it('loads the engine only when asked', async () => {
     expect(typeof (await loadEngine()).runTask).toBe('function');
+  });
+});
+
+// n8n's NodeCredentials.vue (getCredentialsFieldLabel) uses the description's displayName when set; otherwise a node
+// with several credential types shows the bare "Credential" label for some of them, so users cannot tell the slots apart.
+describe('RPA node credential labels', () => {
+  it('names every credential slot with its credential type name (the "RPA" prefix)', () => {
+    expect(new Playwright().description.credentials?.map((c) => c.displayName)).toEqual([
+      'RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Redis', 'RPA Desktop Runner', 'RPA Secret Variables',
+      'RPA Step Signing (only passed on to the workflow file)', 'RPA Desktop Runner (only passed on to the workflow file)',
+    ]);
   });
 });

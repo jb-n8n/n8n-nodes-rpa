@@ -43,7 +43,7 @@ module "rpa_browser" {
   token_secret_name = "rpa-browser-token"
   image = {
     repository = "ghcr.io/jb-n8n/rpa-browser"
-    tag        = "0.1.0"
+    tag        = "0.2.0"
   }
 
   # Only n8n's workers may open sessions.

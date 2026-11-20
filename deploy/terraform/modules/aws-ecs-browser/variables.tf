@@ -115,7 +115,7 @@ variable "vpc_dns_cidrs" {
 }
 
 variable "image" {
-  description = "The rpa-browser image with a tag and/or a digest, for example ghcr.io/jb-n8n/rpa-browser:0.1.0."
+  description = "The rpa-browser image with a tag and/or a digest, for example ghcr.io/jb-n8n/rpa-browser:0.2.0."
   type        = string
 
   validation {

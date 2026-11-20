@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { readPathMatches, readPathTooBroad, readPostLabel } from 'n8n-rpa-engine';
+import { MIN_MASKED_TYPED } from '../../engine/src/desktop/surface.js';
 import {
-  browserConfig, ConfigError, CREDENTIALS, DEFAULT_ENDPOINT_URL, normalizeHost, parseAllowedSubmits, parseHosts, parseLoginPages, parseReadPosts, signingKey,
+  browserConfig, ConfigError, CREDENTIALS, DEFAULT_ENDPOINT_URL, desktopRunnerConfig, MIN_SECRET_VARIABLE_LENGTH, normalizeHost, parseAllowedSubmits, parseHosts, parseLoginPages, parseReadPosts, signingKey,
   siteLoginConfig, readPathMatchesLocal as nodeMatches, readPathTooBroadLocal as nodeTooBroad, readPostLabelLocal as nodeLabel,
 } from '../nodes/Playwright/config.js';
 
@@ -87,7 +89,7 @@ describe('config errors never echo credentials in an entry', () => {
     } catch (error) {
       message = (error as Error).message;
     }
-    expect(message).toContain('<entry with credentials>');
+    expect(message).toContain('an entry with credentials');
     expect(message).not.toMatch(/secret|user:/);
   });
 });
@@ -116,6 +118,7 @@ describe('v2 credential names', () => {
   it('names the v2 credential types and the Redis credential', () => {
     expect(CREDENTIALS).toEqual({
       browser: 'playwrightBrowserApi', siteLogin: 'playwrightSiteLoginApi', signing: 'playwrightScriptSigningApi', redis: 'playwrightRedisApi', desktopRunner: 'rpaDesktopRunnerApi',
+      secretVariables: 'rpaSecretVariablesApi',
     });
     expect(DEFAULT_ENDPOINT_URL).toBe('ws://browser:3000/');
   });
@@ -215,6 +218,8 @@ describe('siteLoginConfig (RPA Site Login credential)', () => {
     expect(() => siteLoginConfig({ ...base, loginUrl: 'https://u:secret@example.com/' }))
       .toThrow('Login Page URL must not contain a username or password: use the Username and Password fields');
     expect(() => siteLoginConfig({ ...base, password: '' })).toThrow('Username and Password are required');
+    // Sign Steps: no sign-in, so a username and password that are expressions on other items may be empty.
+    expect(siteLoginConfig({ ...base, username: '', password: '' }, { loginOptional: true }).policy.startUrl).toBe(siteLoginConfig(base).policy.startUrl);
     expect(() => siteLoginConfig({ ...base, login: 'sso.example.com/login' })).toThrow('Password page host sso.example.com is not in Sites the Browser May Open');
     expect(() => siteLoginConfig({ ...base, login: 'example.com' })).toThrow('Password page "example.com" must look like example.com/path');
     expect(() => siteLoginConfig({ ...base, allowedSubmits: 'reports.example.com/x' }))
@@ -299,5 +304,128 @@ describe('read-only requests (Requests That Only Read)', () => {
     for (const [pat, path] of cases) expect(nodeMatches(pat, path), `${pat} vs ${path}`).toBe(readPathMatches(pat, path));
     expect(nodeMatches('/a*b*c', '/aXbYc')).toBe(true);
     expect(nodeMatches('/a*b*c', '/aXbY')).toBe(false);
+  });
+});
+
+/** The lines the Windows installer prints (its Pester tests read the same file). */
+interface LineSample { description: string; kind: 'runner' | 'browser'; address: string; port: number; token: string; fingerprint: string; url: string; line: string }
+const FIXTURE = JSON.parse(readFileSync(new URL('./fixtures/connection-lines.json', import.meta.url), 'utf8')) as {
+  hiddenToken: string; samples: LineSample[]; hidden: { kind: 'runner' | 'browser'; line: string }[];
+};
+const SAMPLES = FIXTURE.samples;
+const RUNNERS = SAMPLES.filter((s) => s.kind === 'runner');
+const BROWSERS = SAMPLES.filter((s) => s.kind === 'browser');
+
+describe('Connection Line (RPA Desktop Runner and RPA Browser credentials)', () => {
+  // A machine with both lines: the browser sample paired with the runner sample of the same address.
+  const BROWSER = BROWSERS[0];
+  const RUNNER = RUNNERS.find((r) => r.address === BROWSER.address) as LineSample;
+  /** The message a credential gives for a line, checked never to carry the line's token. */
+  const refusal = (run: () => unknown, token = RUNNER.token): string => {
+    let message = '';
+    try { run(); } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      message = (error as Error).message;
+    }
+    expect(message).not.toBe('');
+    expect(message).not.toContain(token);
+    expect(message).not.toContain(BROWSER.token);
+    return message;
+  };
+  const runnerLine = (connectionLine: string) => () => desktopRunnerConfig({ connectionLine });
+  const browserLine = (connectionLine: string) => () => browserConfig({ connectionLine });
+
+  it('the shared samples have six lines or more: with and without a browser, IPv6 in brackets, a name, a port that is not the default', () => {
+    expect(SAMPLES.length).toBeGreaterThanOrEqual(6);
+    const browserAt = new Set(BROWSERS.map((b) => b.address));
+    expect(RUNNERS.some((r) => !browserAt.has(r.address))).toBe(true);
+    expect(RUNNERS.some((r) => browserAt.has(r.address))).toBe(true);
+    expect(SAMPLES.some((s) => s.line.includes(`://[${s.address}]:`))).toBe(true);
+    expect(SAMPLES.some((s) => /[a-z]/i.test(s.address) && !s.address.includes(':'))).toBe(true);
+    expect(SAMPLES.some((s) => s.port !== (s.kind === 'runner' ? 8765 : 3000))).toBe(true);
+  });
+  it.each(RUNNERS.map((s) => [s.description, s] as const))('runner line, %s: the address, the token and the fingerprint come from it', (_about, s) => {
+    expect(desktopRunnerConfig({ connectionLine: s.line })).toEqual({ url: s.url, token: s.token, fingerprint: s.fingerprint });
+  });
+  it.each(BROWSERS.map((s) => [s.description, s] as const))('browser line, %s: Browser Server mode with its address, token and fingerprint', (_about, s) => {
+    expect(browserConfig({ connectionLine: s.line })).toEqual({ mode: 'playwright', wsUrl: s.url, token: s.token, fingerprint: s.fingerprint });
+  });
+  it('the line and the installer\'s URL line name the same address for the engine', () => {
+    for (const s of SAMPLES) expect(new URL(s.kind === 'runner' ? desktopRunnerConfig({ connectionLine: s.line }).url : browserConfig({ connectionLine: s.line }).wsUrl ?? '').href).toBe(new URL(s.url).href);
+  });
+  it('a filled line wins over the three separate fields; an empty one leaves everything as it was', () => {
+    const fields = { url: 'wss://other.example.net:8765', token: 'field-token', fingerprint: 'AB'.repeat(32) };
+    expect(desktopRunnerConfig({ ...fields, connectionLine: `  ${RUNNER.line} \n` })).toEqual({ url: RUNNER.url, token: RUNNER.token, fingerprint: RUNNER.fingerprint });
+    expect(desktopRunnerConfig({ ...fields, connectionLine: '   ' })).toEqual(fields);
+    expect(browserConfig({ mode: 'playwright', wsUrl: 'ws://browser:3000/', token: 't', fingerprint: 'x', connectionLine: BROWSER.line, privateNetwork: true, slowMo: 250 }))
+      .toEqual({ mode: 'playwright', wsUrl: BROWSER.url, token: BROWSER.token, fingerprint: BROWSER.fingerprint, privateNetwork: true, slowMo: 250 });
+    expect(browserConfig({ wsUrl: 'wss://b.example.net/', token: 't', connectionLine: '' })).toEqual({ mode: 'playwright', wsUrl: 'wss://b.example.net/', token: 't' });
+  });
+  it('the browser line is read in Browser Server mode only, where its field shows', () => {
+    expect(browserConfig({ mode: 'cdp', wsUrl: 'wss://cdp.example.net/', connectionLine: BROWSER.line })).toEqual({ mode: 'cdp', wsUrl: 'wss://cdp.example.net/' });
+    expect(browserConfig({ mode: 'local', connectionLine: BROWSER.line })).toEqual({ mode: 'local', headless: true });
+  });
+  it('a fingerprint written as colon-separated pairs, in lower case, is passed on as written (the engine checks it, as for the separate field)', () => {
+    const pairs = RUNNER.fingerprint.toLowerCase().match(/../g)!.join(':');
+    const line = RUNNER.line.replace(RUNNER.fingerprint, pairs);
+    expect(desktopRunnerConfig({ connectionLine: line }).fingerprint).toBe(pairs);
+  });
+  it('a line of the other kind is refused, naming the credential it belongs to', () => {
+    expect(refusal(runnerLine(BROWSER.line), BROWSER.token)).toBe(
+      'The Connection Line in the RPA Desktop Runner credential is the browser\'s line (rpa-browser://). Paste it into an RPA Browser credential, and here the line that starts with rpa-runner://.',
+    );
+    expect(refusal(browserLine(RUNNER.line))).toBe(
+      'The Connection Line in the RPA Browser credential is the desktop runner\'s line (rpa-runner://). Paste it into an RPA Desktop Runner credential, and here the line that starts with rpa-browser://.',
+    );
+  });
+  it('the installer\'s hidden token is refused with what to run instead', () => {
+    const hidden = RUNNER.line.replace(RUNNER.token, FIXTURE.hiddenToken);
+    expect(refusal(runnerLine(hidden))).toBe(
+      'The Connection Line in the RPA Desktop Runner credential has no token: the installer hides it. On that machine, in an administrator PowerShell, run & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens and paste the line it prints.',
+    );
+    for (const h of FIXTURE.hidden) {
+      expect(refusal(h.kind === 'runner' ? runnerLine(h.line) : browserLine(h.line))).toBe(
+        `The Connection Line in the ${h.kind === 'runner' ? 'RPA Desktop Runner' : 'RPA Browser'} credential has no token: the installer hides it. On that machine, in an administrator PowerShell, run & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens and paste the line it prints.`,
+      );
+    }
+  });
+  it.each([
+    ['not a line at all', 'wss://rpa-bot-01:8765/rpa/v1', 'must be the whole line that starts with rpa-runner://, as the installer prints it'],
+    ['no port', RUNNER.line.replace(`:${RUNNER.port}`, ''), 'has no address and port: it starts rpa-runner:// followed by the address, a colon and the port, then /rpa/v1.'],
+    ['no address', RUNNER.line.replace(RUNNER.address, ''), 'has no address and port: it starts rpa-runner:// followed by the address, a colon and the port, then /rpa/v1.'],
+    ['credentials in the address', RUNNER.line.replace(RUNNER.address, `user:pw@${RUNNER.address}`), 'has no address and port: it starts rpa-runner:// followed by the address, a colon and the port, then /rpa/v1.'],
+    ['port 0', RUNNER.line.replace(`:${RUNNER.port}`, ':0'), 'The port in the Connection Line of the RPA Desktop Runner credential must be a number from 1 to 65535.'],
+    ['port 70000', RUNNER.line.replace(`:${RUNNER.port}`, ':70000'), 'The port in the Connection Line of the RPA Desktop Runner credential must be a number from 1 to 65535.'],
+    ['another path', RUNNER.line.replace('/rpa/v1', '/rpa/v2'), 'must continue with /rpa/v1 after the port'],
+    ['no path', RUNNER.line.replace('/rpa/v1', ''), 'must continue with /rpa/v1 after the port'],
+    ['a query', RUNNER.line.replace('/rpa/v1', '/rpa/v1?x=1'), 'must continue with /rpa/v1 after the port'],
+    ['nothing after #', RUNNER.line.slice(0, RUNNER.line.indexOf('#')), 'has no token (token=…)'],
+    ['an empty token', RUNNER.line.replace(RUNNER.token, ''), 'has no token (token=…)'],
+    ['no fingerprint', RUNNER.line.slice(0, RUNNER.line.indexOf('&')), 'has no fingerprint (fingerprint=…)'],
+    ['63 hex digits', RUNNER.line.replace(RUNNER.fingerprint, RUNNER.fingerprint.slice(1)), 'The fingerprint in the Connection Line of the RPA Desktop Runner credential is not 64 hex digits.'],
+    ['a letter that is not hex', RUNNER.line.replace(RUNNER.fingerprint, `G${RUNNER.fingerprint.slice(1)}`), 'is not 64 hex digits'],
+    ['an unknown part', `${RUNNER.line}&mode=x`, 'may hold only token= and fingerprint=, once each, after the #'],
+    ['a part twice', `${RUNNER.line}&token=again`, 'may hold only token= and fingerprint=, once each, after the #'],
+    ['a part without =', RUNNER.line.replace('token=', 'token'), 'may hold only token= and fingerprint=, once each, after the #'],
+  ])('a runner line with %s is refused, without the line in the message', (_what, line, expected) => {
+    expect(refusal(runnerLine(line))).toContain(expected);
+  });
+  it('browser lines are checked the same way, with the browser\'s path', () => {
+    expect(refusal(browserLine(BROWSER.line.replace(`:${BROWSER.port}/#`, `:${BROWSER.port}/rpa/v1#`)), BROWSER.token)).toBe(
+      'The Connection Line in the RPA Browser credential must continue with / after the port.',
+    );
+    expect(refusal(browserLine(BROWSER.line.replace(`:${BROWSER.port}/#`, `:${BROWSER.port}#`)), BROWSER.token)).toContain('must continue with / after the port');
+    expect(refusal(browserLine(BROWSER.line.replace(BROWSER.fingerprint, 'AB')), BROWSER.token)).toBe(
+      'The fingerprint in the Connection Line of the RPA Browser credential is not 64 hex digits.',
+    );
+    expect(refusal(browserLine('ws://browser:3000/'), BROWSER.token)).toBe(
+      'The Connection Line in the RPA Browser credential must be the whole line that starts with rpa-browser://, as the installer prints it.',
+    );
+  });
+});
+
+describe('RPA Secret Variables', () => {
+  it('takes values from the length the desktop lane masks a typed value from', () => {
+    expect(MIN_SECRET_VARIABLE_LENGTH).toBe(MIN_MASKED_TYPED);
   });
 });

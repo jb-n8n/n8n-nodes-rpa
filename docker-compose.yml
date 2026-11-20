@@ -9,7 +9,7 @@
 name: n8n-rpa
 
 # Shared hardening, merged into services with `<<: *hardened`: no privilege escalation, no Linux capabilities.
-# browser repeats the two keys literally (README.md quotes that service verbatim); keep them in step.
+# browser repeats the two keys literally (docs/reference/operator.md quotes that service verbatim); keep them in step.
 x-hardened: &hardened
   security_opt: [no-new-privileges:true]
   cap_drop: [ALL]
@@ -25,7 +25,10 @@ services:
       N8N_HOST: localhost
       N8N_PORT: "5678"
       N8N_PROTOCOL: http
-      WEBHOOK_URL: http://localhost:5678/
+      # n8n's address for its webhooks and forms. n8n 2.45 warns that WEBHOOK_URL is deprecated; every n8n the guides
+      # support (2.41 and later) reads N8N_WEBHOOK_URL. Its port and the published port below are one setting,
+      # RPA_N8N_PORT in .env (default 5678): forms and approval links always name the port this stack publishes.
+      N8N_WEBHOOK_URL: http://localhost:${RPA_N8N_PORT:-5678}/
       N8N_SECURE_COOKIE: "false"
       GENERIC_TIMEZONE: UTC
       # The key that encrypts credentials comes from .env, not from n8n's own first start. n8n 2.41 still writes it
@@ -40,7 +43,7 @@ services:
       N8N_GRACEFUL_SHUTDOWN_TIMEOUT: "30"
       N8N_DIAGNOSTICS_ENABLED: "false"
     ports:
-      - "127.0.0.1:5678:5678" # n8n editor
+      - "127.0.0.1:${RPA_N8N_PORT:-5678}:5678" # n8n editor (RPA_N8N_PORT, the same as in N8N_WEBHOOK_URL above)
     volumes:
       - n8n_data:/home/node/.n8n
     networks: [browser, mail]
@@ -58,7 +61,7 @@ services:
     # Chromium runs with --no-sandbox as pwuser (Playwright's default), so it needs no capabilities and no setuid
     # helper. The run-server is installed in the image from a lockfile (images/browser/Dockerfile): nothing is
     # downloaded at start.
-    # Same values as x-hardened, spelled out because README.md quotes this service line for line (readme.test.ts).
+    # Same values as x-hardened, spelled out because docs/reference/operator.md quotes this service line for line (readme.test.ts).
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     mem_limit: 2g
@@ -93,6 +96,12 @@ services:
   mailpit:
     image: axllent/mailpit:v1.32.0@sha256:0790692be935ea4420d085694f7985b1f692ca6a8771ab0e0bd8ba75ac180498
     restart: unless-stopped
+    # Mail kept in the mailpit_data volume (Mailpit's --database, MP_DATABASE), so open approval emails outlive an
+    # upgrade or a restart. Without it Mailpit keeps mail in a temporary file that goes with the container.
+    environment:
+      MP_DATABASE: /data/mailpit.db
+    volumes:
+      - mailpit_data:/data
     ports:
       - "127.0.0.1:8025:8025" # inbox UI; n8n sends to mailpit:1025
     networks: [mail]
@@ -105,3 +114,4 @@ networks:
 volumes:
   n8n_data: {}
   sandbox_state: {}
+  mailpit_data: {} # Mailpit's mail: approval emails hold approval links, so treat it like n8n_data

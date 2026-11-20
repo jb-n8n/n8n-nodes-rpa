@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 import { ConfigError, type CredentialData } from './config.js';
-import { isRecord } from './breaker-record.js';
-import type { BreakerRecord, GuardStore, Lock } from './guard-store.js';
+import { readRecord, readRepairStop } from './breaker-record.js';
+import type { BreakerRecord, GuardStore, Lock, RepairStop } from './guard-store.js';
 
 export const REDIS_KEY_PREFIX = 'playwrightGuard:';
 /** The credential test's message: no run is involved. */
@@ -82,25 +82,33 @@ function bounded<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
-/** The serialisation setBreaker writes and deleteBreaker compares: keys in a fixed order. */
-const serialise = (r: BreakerRecord): string => JSON.stringify({ code: r.code, at: r.at, resetKey: r.resetKey, message: r.message });
+/** The serialisation setBreaker writes and deleteBreaker compares: keys in a fixed order, `login` only when present. */
+const serialise = (r: BreakerRecord): string => JSON.stringify({
+  code: r.code, at: r.at, resetKey: r.resetKey, message: r.message, ...(r.login ? { login: { salt: r.login.salt, hash: r.login.hash } } : {}),
+});
 
-function parseBreaker(raw: string | null): BreakerRecord | undefined {
+/** Stored JSON → value, or undefined when it is missing or not JSON. */
+function parsed(raw: string | null): unknown {
   if (raw === null) return undefined;
-  let value: unknown;
   try {
-    value = JSON.parse(raw);
+    return JSON.parse(raw) as unknown;
   } catch {
     return undefined;
   }
-  return isRecord(value) ? { code: value.code, at: value.at, resetKey: value.resetKey, message: value.message } : undefined;
 }
+
+const parseBreaker = (raw: string | null): BreakerRecord | undefined => readRecord(parsed(raw));
+
+/** The serialisation of a failed-repair record: keys in a fixed order. */
+const serialiseStop = (r: RepairStop): string =>
+  JSON.stringify({ at: r.at, resetKey: r.resetKey, version: r.version, code: r.code, llmCalls: r.llmCalls, tokens: r.tokens });
 
 /** The commands the store sends: a connected node-redis client, or a fake in tests. */
 export interface GuardClient {
   get(key: string): Promise<string | null>;
   set(key: string, value: string, options?: { condition: 'NX'; expiration: { type: 'PX'; value: number } }): Promise<string | null>;
   eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
+  del(key: string): Promise<unknown>;
   quit(): Promise<unknown>;
   destroy(): void;
 }
@@ -110,6 +118,7 @@ export function guardStoreOnClient(client: GuardClient, opts: { commandTimeoutMs
   const ms = opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
   const breakerKey = (key: string) => `${REDIS_KEY_PREFIX}breaker:${key}`;
   const lockKey = (key: string) => `${REDIS_KEY_PREFIX}lock:${key}`;
+  const stopKey = (key: string) => `${REDIS_KEY_PREFIX}repair:${key}`;
   const compareAndDelete = (key: string, value: string) => bounded(client.eval(COMPARE_AND_DELETE, { keys: [key], arguments: [value] }), ms);
   return {
     shared: true,
@@ -121,6 +130,15 @@ export function guardStoreOnClient(client: GuardClient, opts: { commandTimeoutMs
     },
     async deleteBreaker(key, expected) {
       await compareAndDelete(breakerKey(key), serialise(expected));
+    },
+    async getRepairStop(key) {
+      return readRepairStop(parsed(await bounded(client.get(stopKey(key)), ms)));
+    },
+    async setRepairStop(key, record) {
+      await bounded(client.set(stopKey(key), serialiseStop(record)), ms);
+    },
+    async deleteRepairStop(key) {
+      await bounded(client.del(stopKey(key)), ms);
     },
     async acquireLock(key, ttlMs) {
       const token = randomUUID();

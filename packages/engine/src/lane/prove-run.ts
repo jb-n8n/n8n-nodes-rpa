@@ -23,7 +23,7 @@ export async function runProve(input: TaskInput, h: Handoff, loop: AgentLoopResu
     ok: false, rows: [], total: null, reasons: [masker.mask(reason)], diff: { missing: [], extra: [] }, policyViolation: false, readPosts: [],
   });
   const remaining = runtime.deadline - Date.now();
-  if (remaining < MIN_PROVE_MS) return skip('there was no time left to prove the script');
+  if (remaining < MIN_PROVE_MS) return skip('there was no time left to prove the steps');
   const common: ProveInput = {
     script: compiled.script, policy: noWritePolicy(input.policy), secrets: input.secrets, ...codeSettings(input), ...(input.vars ? { vars: input.vars } : {}), output: input.output ?? {},
     endpoint: input.endpoint, masker, ...(input.defaultStepTimeoutMs ? { defaultStepTimeoutMs: input.defaultStepTimeoutMs } : {}),

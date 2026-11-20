@@ -17,7 +17,7 @@ const lockAt = (key: string, ttlMs: number, now: number) => {
   return store.acquireLock(key, ttlMs);
 };
 
-const KEY = siteLoginKey('cred-1');
+const KEY = siteLoginKey('cred-1', 'jo.smith');
 const AT = new Date('2026-10-05T10:00:00Z');
 const trip = (s: IDataObject, resetKey = '') => tripBreaker(store, s, KEY, { code: 'login_failed', resetKey, message: 'login_failed: the site rejected the sign-in' }, AT);
 
@@ -74,7 +74,7 @@ describe('login breaker', () => {
   });
   it('keeps other Site Logins untouched on reset', async () => {
     const s: IDataObject = {};
-    const other = siteLoginKey('cred-2');
+    const other = siteLoginKey('cred-2', 'jo.smith');
     await trip(s);
     await tripBreaker(store, s, other, { code: 'account_locked', resetKey: '', message: 'account_locked' }, AT);
     await resetBreaker(store, s, KEY);
@@ -108,6 +108,15 @@ describe('login breaker', () => {
     const persistedAlready = ObservableObject.create(JSON.parse(JSON.stringify(cleared)) as IDataObject);
     await openBreaker(store, persistedAlready, KEY, 'r1');
     expect(persistedAlready.__dataChanged).toBe(false);
+  });
+  it('a record whose login field is malformed keeps blocking without the field: only a new reset key opens it', async () => {
+    const base = { code: 'login_failed', at: AT.toISOString(), resetKey: '', message: 'm' };
+    for (const login of ['text', { salt: 'AAAA', hash: 'AAAA' }, { salt: Buffer.alloc(16).toString('base64') }]) {
+      resetGuardsForTests();
+      const s: IDataObject = { [BREAKER_KEY]: { [KEY]: { ...base, login } } };
+      expect(await openBreaker(store, s, KEY, '')).toEqual(base);
+      expect(await openBreaker(store, s, KEY, 'new')).toBeNull();
+    }
   });
   it('ignores malformed static data', async () => {
     expect(await openBreaker(store, { [BREAKER_KEY]: { [KEY]: 'garbage' } }, KEY, '')).toBeNull();
@@ -154,7 +163,9 @@ describe('per-Site Login lock', () => {
     const first = await lockAt(KEY, 60_000, 1000);
     expect(first).not.toBeNull();
     expect(await lockAt(KEY, 60_000, 2000)).toBeNull();
-    expect(await lockAt(siteLoginKey('cred-2'), 60_000, 2000)).not.toBeNull();
+    expect(await lockAt(siteLoginKey('cred-2', 'jo.smith'), 60_000, 2000)).not.toBeNull();
+    // Another account of the same Site Login (a username set by an expression) has its own lock.
+    expect(await lockAt(siteLoginKey('cred-1', 'al.jones'), 60_000, 2000)).not.toBeNull();
     await store.releaseLock(KEY, first!);
     expect(await lockAt(KEY, 60_000, 3000)).not.toBeNull();
   });

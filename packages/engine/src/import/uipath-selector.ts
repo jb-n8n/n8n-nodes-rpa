@@ -110,11 +110,6 @@ export function readSelector(selector: string, tagHint?: string): SelectorRead {
   return out;
 }
 
-/** The candidates alone (see readSelector). */
-export function selectorToCandidates(selector: string, tagHint?: string): Candidate[] {
-  return readSelector(selector, tagHint).candidates;
-}
-
 /** An attribute value usable as is: not a variable (reported), not regex-matched (reported). Wildcards are kept. */
 function plain(el: XmlNode, key: string, out: SelectorRead): string | undefined {
   const v = el.attrs[key];

@@ -6,7 +6,7 @@ import { extractProperties } from './extract.js';
 import { fillFormProperties } from './fillForm.js';
 import { optionsProperty, QUICK_OPERATIONS } from './options.js';
 import { pdfProperties } from './pdf.js';
-import { runStepsProperties } from './runSteps.js';
+import { RUNS_ON_PROPERTY, RUNS_ON_PROPERTY_V2, runStepsProperties, SHARE_ACROSS_WORKERS_PROPERTY, SHARE_ACROSS_WORKERS_V1_PROPERTY } from './runSteps.js';
 import { screenshotProperties } from './screenshot.js';
 import { signStepsProperties } from './signSteps.js';
 
@@ -48,7 +48,7 @@ export const QUICK_PROPERTIES: INodeProperties[] = [
 /**
  * Operations in menu order: the quick operations first (QUICK_OPERATION_OPTIONS), then the expert operations, Import
  * Steps last.
- * The order is logical on purpose. @n8n/eslint-plugin-community-nodes 0.35.0 has no option-sorting rule, so there is
+ * The order is logical on purpose. @n8n/eslint-plugin-community-nodes 0.37.0 has no option-sorting rule, so there is
  * nothing to disable here.
  */
 export const OPERATION_OPTIONS: INodePropertyOptions[] = [
@@ -56,20 +56,20 @@ export const OPERATION_OPTIONS: INodePropertyOptions[] = [
   {
     name: 'Run Steps',
     value: 'runSteps',
-    action: 'Run a list of browser steps',
+    action: 'Run a list of browser or desktop steps',
     description: 'Advanced: run a JSON step list, signed or typed here, with optional AI repair when the page changes',
   },
   {
     name: 'Sign Steps',
     value: 'signSteps',
     action: 'Sign a repaired step list',
-    description: 'Advanced: sign a Repaired steps item from Run Steps after a person approved it, or record a rejection',
+    description: 'Advanced: sign a Repaired steps item from Run Steps or Import Steps after a person approved it, or record a rejection',
   },
   {
     name: 'Import Steps',
     value: 'importSteps',
     action: 'Import steps from a recording, code or a UiPath bot',
-    description: 'Advanced: turn a Chrome Recorder export, Playwright code or a UiPath project into steps for approval',
+    description: 'Advanced: turn a Chrome Recorder export, Playwright code, a UiPath project, an RPA recording or a step document into steps for approval',
   },
 ];
 
@@ -85,4 +85,7 @@ export const OPERATIONS: INodeProperties = {
 const SUBTITLE_NAMES = Object.fromEntries(OPERATION_OPTIONS.map((o) => [String(o.value), o.name]));
 export const SUBTITLE = `={{ (${JSON.stringify(SUBTITLE_NAMES)})[$parameter["operation"]] }}`;
 
-export const properties: INodeProperties[] = [OPERATIONS, URL_PROPERTY, ...QUICK_PROPERTIES, ...runStepsProperties, ...signStepsProperties, ...importStepsProperties, optionsProperty];
+export const properties: INodeProperties[] = [
+  OPERATIONS, RUNS_ON_PROPERTY, RUNS_ON_PROPERTY_V2, URL_PROPERTY, ...QUICK_PROPERTIES, ...runStepsProperties, ...signStepsProperties, ...importStepsProperties,
+  SHARE_ACROSS_WORKERS_V1_PROPERTY, SHARE_ACROSS_WORKERS_PROPERTY, optionsProperty,
+];

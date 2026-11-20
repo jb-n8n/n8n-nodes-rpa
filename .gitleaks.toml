@@ -16,4 +16,11 @@ regexes = [
   '''^n8n-api-key-0123456789-abcdefghij$''',
   '''^env\.N8N_API_KEY$''',
   '''^cz1TSUQ6QU5PTjp2aGNhbGxzX0RFVl8wMDo$''',
+  '''^sample_(runner|browser)-token-not-a-secret-0+[1-5]$''',
+  '''^Vault-pw-8c2e$''',
+  '''^n8n-api-key-0123456789-abcdefghij-KLMNOP$''',
+  '''^wrong-key-0123456789-0123456789$''',
+  '''^KRSXG5CTMVRXEZLU$''',
+  # A keyboard chord in a press or key step (`key: 'Ctrl+Shift+End'`): the word "key" makes it look like one.
+  '''^(Ctrl|Control|Alt|Shift|Meta|Win)(\+(Ctrl|Control|Alt|Shift|Meta|Win))*\+[A-Za-z0-9]{1,12}$''',
 ]

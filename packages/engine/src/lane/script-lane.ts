@@ -8,25 +8,28 @@ import { loginDetectIndex } from '../policy/login-block.js';
 import { loginBlockEnd, validateScript } from '../policy/validate.js';
 import { createMasker, maskRequests, maskViolations, type Masker } from '../secrets/mask.js';
 import { MAX_RENDERED } from '../secrets/render.js';
+import { registerSecretVars, secretFillValues } from '../secrets/secret-fills.js';
+import { secretTypingLimit, type SecretTargets } from '../secrets/secret-targets.js';
 import { scriptHash } from '../sign.js';
 import { MAX_SCREENSHOT_HEIGHT } from '../steps/handlers/capture.js';
 import { runBinaryProblem } from '../steps/limits.js';
 import { screenshotMasks } from '../steps/masks.js';
 import { shownMessage } from '../steps/urls.js';
 import { installInterrupts } from '../steps/interrupts.js';
+import { lookAtPage, withPageLook } from '../steps/page-offers.js';
 import { parseScript } from '../steps/parse.js';
 import { newRunState, runSteps, type StepContext } from '../steps/run.js';
 import { stopTrace, wantTrace, type SaveTrace } from '../trace/trace.js';
 import type {
-  BrowserEndpoint, CodeProvider, DownloadedFile, ErrorCode, OutputSpec, PageInfo, PortalPolicy, PortalSecrets, RequestRecord, Row, RunState, Script,
-  StepFailure, StepLogEntry, StepOutput, Violation,
+  BrowserEndpoint, CodeProvider, DownloadedFile, ErrorCode, MissingControl, OutputSpec, PageInfo, PortalPolicy, PortalSecrets, RequestRecord, Row, RunState,
+  Script, StepFailure, StepLogEntry, StepOutput, Violation,
 } from '../types.js';
 import { verifyRows } from '../verify/verify.js';
 import { maskedPageText, openStartPage, pageInfo, START_TIMEOUT_MS, startPageFailure, startPlan, startProceeds } from './start-page.js';
 import { checkTrust, type TrustInput } from './trust.js';
 
 export const DEFAULT_BUDGET_MS = 180_000;
-export const MAX_BUDGET_MS = 300_000;
+export const MAX_BUDGET_MS = 600_000;
 export const CANCELLED = 'run cancelled';
 const LIMIT_PREFIX = 'limit: ';
 
@@ -45,6 +48,13 @@ export interface ScriptLaneInput {
   /** Browser viewport; Playwright's default when absent. */
   viewport?: { width: number; height: number };
   vars?: Record<string, string>;
+  /** The names in `vars` whose values are secrets (registerSecretVars): masked from the run start, typed only by a secret fill. */
+  secretVars?: string[];
+  /**
+   * Where the secret variables' values may be typed (in n8n, the RPA Secret Variables credential's May Be Typed Into):
+   * a step that would type one on a page or frame whose host is not listed is a fatal policy violation. Absent: no limit.
+   */
+  secretTargets?: SecretTargets;
   /** Row checks, run only after an extract step. Absent: rows are returned unchecked (none are required). */
   output?: OutputSpec;
   /** How the start page's status is read: 'classify' (default, v1) or 'report' (quick operations). */
@@ -56,6 +66,12 @@ export interface ScriptLaneInput {
   signal?: AbortSignal;
   /** Keep a scrubbed Playwright trace: on failure (default), always, or never. */
   saveTrace?: SaveTrace;
+  /**
+   * Report Every Missing Control: when a step's control is not found, the later steps that act on the same page are
+   * checked too, without acting, and each one whose control is not there is named (steps/page-offers.ts). The import's
+   * replay sets it (lane/draft.ts). Off by default: only the failed step's control is reported.
+   */
+  reportEveryMissing?: boolean;
 }
 
 export type LaneSuccess = {
@@ -75,6 +91,8 @@ export type LaneSuccess = {
   writes: RequestRecord[];
   /** True once a write left the browser: any non-safe request the session let through, except declared login POSTs. */
   submitted: boolean;
+  /** True when signIn.changePassword set a new password in this run (the site took it); absent otherwise. */
+  passwordChanged?: true;
   durationMs: number; trace?: Buffer;
 };
 export type LaneFailure = {
@@ -85,6 +103,18 @@ export type LaneFailure = {
   lastCheckpoint?: number; credentialsSubmitted?: boolean; trace?: Buffer;
   /** True once a write left the browser (any non-safe request the session let through, except declared login POSTs); absent otherwise. */
   submitted?: boolean;
+  /** True when signIn.changePassword set a new password before the run failed; absent otherwise. */
+  passwordChanged?: true;
+  /**
+   * The files earlier steps downloaded before a step failed, each one past its own step's checks, with the binary names
+   * a success gives them: a run that fails late does not lose them. Absent when there were none.
+   */
+  files?: DownloadedFile[];
+  /**
+   * drift_detected because a browser step's control was not found: that control and what the page showed instead, then
+   * (Report Every Missing Control) each later step on the same page whose control was not there either. Masked.
+   */
+  missingControls?: MissingControl[];
 };
 /**
  * Result of a script-lane run. On success: extracted rows or downloaded files, the masked step log and the
@@ -117,15 +147,22 @@ export function codeSettings(input: { codeProvider?: CodeProvider; codeTimeoutMs
   };
 }
 
-/** The run masker: every Site Login secret (when attached), the endpoint token and the signing key. */
-export function laneMasker(input: { secrets?: PortalSecrets; endpoint: BrowserEndpoint; signingKey?: string }): Masker {
-  return createMasker([input.secrets?.username, input.secrets?.password, input.secrets?.totpSecret, input.endpoint.token, input.signingKey]);
+/** The run masker: every Site Login secret (when attached), the endpoint token, the signing key and the secret variables' values. */
+export function laneMasker(input: {
+  secrets?: PortalSecrets; endpoint: BrowserEndpoint; signingKey?: string; vars?: Record<string, string>; secretVars?: readonly string[];
+}): Masker {
+  const masker = createMasker([input.secrets?.username, input.secrets?.password, input.secrets?.totpSecret, input.endpoint.token, input.signingKey]);
+  registerSecretVars(input.secretVars, input.vars ?? {}, masker);
+  return masker;
 }
 
 export function clampBudget(budgetMs?: number): number {
   const requested = typeof budgetMs === 'number' && Number.isFinite(budgetMs) ? budgetMs : DEFAULT_BUDGET_MS;
   return Math.min(Math.max(requested, 1000), MAX_BUDGET_MS);
 }
+
+/** `passwordChanged: true` for a result when signIn.changePassword set a new password in the run, else nothing. */
+const changed = (s: RunState): { passwordChanged?: true } => (s.passwordChanged ? { passwordChanged: true } : {});
 
 export function laneFailure(t0: number, masker: Masker, code: ErrorCode, message: string, extra: Partial<LaneFailure> = {}): LaneFailure {
   const { violations = [], blockedRequests = [], ...rest } = extra;
@@ -217,9 +254,9 @@ export interface ScriptRun {
 }
 
 /** A masked failure screenshot: full page unless the page is taller than a screenshot may be (then the viewport). */
-async function failureScreenshot(page: Page, secrets?: PortalSecrets): Promise<Buffer | undefined> {
+async function failureScreenshot(page: Page, secrets: PortalSecrets | undefined, masker: Masker): Promise<Buffer | undefined> {
   const height = await page.evaluate(() => document.documentElement?.scrollHeight ?? 0).catch(() => 0);
-  return page.screenshot({ fullPage: height <= MAX_SCREENSHOT_HEIGHT, mask: screenshotMasks(page, secrets) }).catch(() => undefined);
+  return page.screenshot({ fullPage: height <= MAX_SCREENSHOT_HEIGHT, mask: screenshotMasks(page, secrets, secretFillValues(masker)) }).catch(() => undefined);
 }
 
 async function executeScript(
@@ -256,6 +293,7 @@ async function executeScript(
 
   const ctx: StepContext = {
     page: session.page, script, policy: input.policy, secrets: input.secrets, vars: input.vars ?? {}, signed,
+    ...(input.secretTargets ? { secretTyping: secretTypingLimit(input.secretTargets, input.secretVars, input.vars ?? {}) } : {}),
     masker, defaultTimeoutMs, violations: session.violations, interrupts, stepHooks: session.stepHooks, ...codeSettings(input),
     ...(input.output?.emptyPattern ? { emptyPattern: input.output.emptyPattern } : {}),
     ...(session.writeWindow ? { writeWindow: session.writeWindow } : {}),
@@ -285,30 +323,43 @@ async function executeScript(
   await session.idle();
   const keep = { ctx, state: res.state, script, ...seen };
   if (!res.ok) {
-    const screenshot = await failureScreenshot(ctx.page, input.secrets);
+    const screenshot = await failureScreenshot(ctx.page, input.secrets, masker);
     const failure = { ...res.failure, intent: masker.mask(res.failure.intent), message: masker.mask(res.failure.message) };
     const base = {
       failure, violations: session.violations, log: maskLog(res.state.log, masker), screenshot,
       lastCheckpoint: res.state.lastCheckpoint, credentialsSubmitted: res.state.credentialsSubmitted,
-      ...(wrote(res.state) ? { submitted: true } : {}),
+      ...(wrote(res.state) ? { submitted: true } : {}), ...changed(res.state),
     };
     const o = runtime.override(res.failure.intent, res.failure.message.startsWith(DETECTED_PREFIX));
     if (o) {
+      const kept = filesOnFailure(o.code, res.state, session.violations);
       // A step that only says it was stopped gets the violation's own message (off-list site, private address). So does
       // any step when the run ended on a private address: the step's own error is only a consequence of it.
       const firstFatal = session.violations.find((v) => v.fatal);
       const detail = res.failure.message === BLOCKED_STOP || firstFatal?.kind === 'private' ? o.message : res.failure.message;
-      return { result: fail(o.code, o.code === 'policy_violation' ? masker.mask(`${res.failure.intent}: ${detail}`) : o.message, base), ...keep };
+      return { result: fail(o.code, o.code === 'policy_violation' ? masker.mask(`${res.failure.intent}: ${detail}`) : o.message, { ...base, ...kept }), ...keep };
     }
     const pageText = await maskedPageText(ctx.page, masker);
     const loginConfirmed = Object.values(res.state.detected).includes('logged_in');
     const cls = classifyFailure({ violations: session.violations, failure: res.failure, pageText, loginConfirmed });
-    return { result: fail(toErrorCode(cls), masker.mask(shownFailure(res.failure.intent, res.failure.message)), base), ...keep };
+    const code = toErrorCode(cls);
+    const shown = shownFailure(res.failure.intent, res.failure.message, res.failure.index);
+    // A control that is not there: one look at what the page shows instead, after the step's own wait (no second wait).
+    // Only the lane's message and missingControls carry it: the step's own failure (what self-repair reads) stays as it was.
+    const look = code === 'drift_detected' && res.missing
+      ? await lookAtPage({
+        page: ctx.page, policy: input.policy, masker, vars: ctx.vars, steps: script.steps, failed: res.failure.index, missing: res.missing,
+        every: input.reportEveryMissing === true,
+      })
+      : undefined;
+    const message = masker.mask(look ? withPageLook(shown, look) : shown);
+    const kept = filesOnFailure(code, res.state, session.violations);
+    return { result: fail(code, message, { ...base, ...(look ? { missingControls: look.controls } : {}), ...kept }), ...keep };
   }
   const tail = {
     violations: session.violations, log: maskLog(res.state.log, masker),
     lastCheckpoint: res.state.lastCheckpoint, credentialsSubmitted: res.state.credentialsSubmitted,
-    ...(wrote(res.state) ? { submitted: true } : {}),
+    ...(wrote(res.state) ? { submitted: true } : {}), ...changed(res.state),
   };
   const o = runtime.override();
   if (o) return { result: fail(o.code, o.message, tail), ...keep };
@@ -336,11 +387,35 @@ async function executeScript(
       blockedRequests: maskRequests(session.blockedRequests, masker),
       page, verified, confirmed,
       writes: (session.writeWindow?.posts ?? []).map((p) => ({ method: p.method, host: masker.mask(p.host), path: masker.mask(p.path) })),
-      submitted: wrote(res.state),
+      submitted: wrote(res.state), ...changed(res.state),
       durationMs: Date.now() - t0,
     },
     ...keep,
   };
+}
+
+/**
+ * The failures that may hand back the files earlier steps downloaded: ordinary site failures that are not about
+ * protection. drift_detected (a control or page changed), not_found (the page says there is nothing), site_down (the
+ * site did not answer) and incomplete (the run ran out of time, was cancelled, or a check on what it read failed).
+ * Never policy_violation, script_untrusted, a login, code or breaker code (login_failed, account_locked, auth_blocked,
+ * locked_out, busy, password_change_failed), browser_unavailable or runner_unavailable: an allow-list, so a new code
+ * returns no file until it is added here on purpose.
+ */
+export const FILES_ON_FAILURE: ReadonlySet<ErrorCode> = new Set<ErrorCode>(['drift_detected', 'not_found', 'site_down', 'incomplete']);
+
+/**
+ * `{ files }` for a failed run: only for a code in FILES_ON_FAILURE, only when the session recorded no fatal violation
+ * (a stopped request, an off-list site, a refused secret: the stop is the protection, so nothing fetched before it is
+ * handed over), and only the files a success would have returned at that point: each download already passed its own
+ * step's type and checks before the run kept it, and the run's binary cap is applied as a success applies it (with the
+ * run's captures counted), a file that would go over it is dropped. `{}` when no file is left.
+ */
+export function filesOnFailure(code: ErrorCode, state: Pick<RunState, 'outputs' | 'downloads'>, violations: Violation[]): { files?: DownloadedFile[] } {
+  if (!FILES_ON_FAILURE.has(code) || violations.some((v) => v.fatal) || state.downloads.length === 0) return {};
+  const files: DownloadedFile[] = [];
+  for (const file of state.downloads) if (!runBinaryProblem({ outputs: state.outputs, downloads: [...files, file] })) files.push(file);
+  return files.length ? { files } : {};
 }
 
 /**
@@ -353,7 +428,7 @@ export async function startScriptLane(
 ): Promise<{ run: ScriptRun; runtime?: LaneRuntime }> {
   const t0 = opts.t0 ?? Date.now();
   // Built first: the gate's messages carry names and hosts, and every result string is masked.
-  const masker = laneMasker({ secrets: input.secrets, endpoint: input.endpoint, signingKey: input.trust.key });
+  const masker = laneMasker({ secrets: input.secrets, endpoint: input.endpoint, signingKey: input.trust.key, vars: input.vars, secretVars: input.secretVars });
   // The trust gate runs before the steps are parsed for the run and before any browser opens.
   const gate = checkTrust(input.script, input.trust, { policy: input.policy, firstRun: false });
   if (!gate.ok) return { run: { result: laneFailure(t0, masker, gate.code, masker.mask(gate.message)) } };
@@ -411,7 +486,7 @@ export async function startScriptLane(
     const wrote = !!live.state?.submitted || runtime.session.writesSent > 0;
     const extra = {
       violations: runtime.session.violations, blockedRequests: runtime.session.blockedRequests, version, hash,
-      ...(wrote ? { submitted: true } : {}),
+      ...(wrote ? { submitted: true } : {}), ...(live.state ? changed(live.state) : {}),
     };
     run = { result: o ? laneFailure(t0, masker, o.code, o.code === 'policy_violation' ? message : o.message, extra) : laneFailure(t0, masker, 'incomplete', message, extra) };
   }

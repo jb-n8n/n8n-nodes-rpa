@@ -72,7 +72,7 @@ describe('the step runner on a non-browser surface', () => {
 
 describe('handler tables', () => {
   it('browser table is complete', () => {
-    expect(Object.keys(HANDLERS.browser).sort()).toEqual(['check', 'click', 'clickAll', 'detect', 'download', 'extract', 'extractTable', 'fill', 'goto', 'paginate', 'pdf', 'popup', 'read', 'screenshot', 'select', 'signIn', 'submit', 'waitFor']);
+    expect(Object.keys(HANDLERS.browser).sort()).toEqual(['check', 'click', 'clickAll', 'detect', 'download', 'extract', 'extractTable', 'fill', 'goto', 'hover', 'paginate', 'pdf', 'popup', 'press', 'read', 'screenshot', 'select', 'signIn', 'submit', 'waitFor']);
   });
 
   it('a copied context follows its own page', () => {

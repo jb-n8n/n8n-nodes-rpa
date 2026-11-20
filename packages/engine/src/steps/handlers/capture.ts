@@ -8,6 +8,7 @@ import { PolicyError } from '../errors.js';
 import { assertRowTextRoom, assertRunBinaryRoom, regexSubject } from '../limits.js';
 import { resolveUnique } from '../locator.js';
 import { screenshotMasks } from '../masks.js';
+import { secretFillValues } from '../../secrets/secret-fills.js';
 import { outputUrl, shownUrl } from '../urls.js';
 import type { Handler, StepContext } from '../run.js';
 import { binaryName, MIME, withTimeout } from './files.js';
@@ -105,12 +106,15 @@ async function pageShows(page: Page, timeoutMs: number): Promise<string[]> {
   return shown;
 }
 
+/** Whether the run holds secrets a capture must not show: a Site Login, or values a secret fill may type (secret variables). */
+const holdsSecrets = (ctx: StepContext): boolean => ctx.secrets !== undefined || secretFillValues(ctx.masker).size > 0;
+
 /**
- * With a Site Login, a capture of a page that shows a secret (visible text, a form value, or either inside a frame) is
- * refused.
+ * With a Site Login or a secret variable, a capture of a page that shows a secret (visible text, a form value, or either
+ * inside a frame) is refused.
  */
 async function refuseIfSecretShown(ctx: StepContext, timeoutMs: number): Promise<void> {
-  if (!ctx.secrets) return;
+  if (!holdsSecrets(ctx)) return;
   const shown = await pageShows(ctx.page, timeoutMs);
   if (!shown.some((s) => ctx.masker.containsSecret(s))) return;
   // The violation's URL is shown in messages: origin + path only.
@@ -151,7 +155,7 @@ const screenshot: Handler = async (ctx, step, state, timeout) => {
   const s = (step as S<'screenshot'>).screenshot;
   const index = ctx.stepIndex ?? 0;
   await refuseIfSecretShown(ctx, timeout);
-  const mask = ctx.secrets ? screenshotMasks(ctx.page, ctx.secrets) : [];
+  const mask = holdsSecrets(ctx) ? screenshotMasks(ctx.page, ctx.secrets, secretFillValues(ctx.masker)) : [];
   let data: Buffer;
   let candidate: number | undefined;
   if (s.capture === 'element') {

@@ -1,0 +1,166 @@
+{
+  "about": "Shared by the engine's denylist test and the desktop runner's parity test (DestructiveWords): the runner must normalize exactly as normalizeForDenylist does. writeWords: hasWriteWord and the runner's WriteWords.Has (the recorder's word list, folded the same way).",
+  "normalized": [
+    [
+      "D\u0435lete",
+      "delete"
+    ],
+    [
+      "Del\u200bete",
+      "delete"
+    ],
+    [
+      "Can\u00adcel",
+      "cancel"
+    ],
+    [
+      "Re\u200cje\u200dct",
+      "reject"
+    ],
+    [
+      "Ar\u2060chive\ufeff",
+      "archive"
+    ],
+    [
+      "deleteAll",
+      "delete all"
+    ],
+    [
+      "DeleteAll",
+      "delete all"
+    ],
+    [
+      "HTMLCancel",
+      "html cancel"
+    ],
+    [
+      "delete_all",
+      "delete all"
+    ],
+    [
+      "Sign-out",
+      "sign out"
+    ],
+    [
+      "Sign\u2014out",
+      "sign out"
+    ],
+    [
+      "Log\u2011off",
+      "log off"
+    ],
+    [
+      "\uff23\uff21\uff2e\uff23\uff25\uff2c",
+      "cancel"
+    ],
+    [
+      "Canc\u00e9l",
+      "cancel"
+    ],
+    [
+      "Rej\u00e9cted",
+      "rejected"
+    ],
+    [
+      "\u0421ancel",
+      "cancel"
+    ],
+    [
+      "\u0391RCHIVE",
+      "archive"
+    ],
+    [
+      "\u13a0elete",
+      "\uab70elete"
+    ],
+    [
+      "Pay\u00a0all",
+      "pay all"
+    ],
+    [
+      "  Next \t page  ",
+      " next page "
+    ],
+    [
+      "\ufb01nd",
+      "find"
+    ],
+    [
+      "\u2163",
+      "iv"
+    ]
+  ],
+  "destructive": [
+    "D\u0435lete",
+    "Del\u200bete",
+    "Can\u200bcel",
+    "Can\u00adcel",
+    "\u0421ancel",
+    "\u0391RCHIVE",
+    "\uff23\uff21\uff2e\uff23\uff25\uff2c",
+    "Canc\u00e9l",
+    "deleteAll",
+    "delete_all",
+    "Sign-out",
+    "Sign\u2014out",
+    "Log off",
+    "ackall",
+    "cancelorder",
+    "btnReject",
+    "cmdRevokeAll",
+    "Re\u200cje\u200dct",
+    "Ar\u2060chive",
+    "Pay\u00a0all",
+    "doDelete"
+  ],
+  "notDestructive": [
+    "Next",
+    "Back",
+    "Continue",
+    "Find",
+    "Export line items...",
+    "btnFind",
+    "Payments overview",
+    "Cancelled orders",
+    "Confirmed",
+    "Sender",
+    "Payroll",
+    "Reports",
+    "Sign in",
+    "Rej\u00e9cted",
+    "\u13a0elete",
+    "Removed notices"
+  ],
+  "discard": [
+    "Discard",
+    "Discard changes",
+    "Dis\u200bcard all",
+    "D\u0456scard"
+  ],
+  "writeWords": {
+    "writes": [
+      "S\u0430ve",
+      "Po\u200bst",
+      "\uff33\uff35\uff22\uff2d\uff29\uff34",
+      "btnPost",
+      "save_as",
+      "C\u00f3nfirm",
+      "Ok\u00ad",
+      "APPLY",
+      "btnConfirmExport",
+      "D\u00e9lete row"
+    ],
+    "notWrites": [
+      "Find",
+      "Reports",
+      "Saved searches",
+      "Export line items...",
+      "Continue",
+      "Sign in",
+      "Okta",
+      "Bookmarks",
+      "Updates feed",
+      "btnFind"
+    ]
+  }
+}

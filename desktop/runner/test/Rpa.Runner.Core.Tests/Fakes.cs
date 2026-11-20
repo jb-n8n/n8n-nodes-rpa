@@ -42,6 +42,14 @@ public sealed class FakeNode : IUiNode
     public bool IsPassword { get; set; }
     public int ProcessId { get; set; }
     public string? Value { get; set; }
+
+    /// <summary>The bounding rectangle; null: it cannot be read. When <see cref="Gone"/>, reading it throws.</summary>
+    private PixelRect? _bounds;
+    public PixelRect? Bounds { get => Gone ? throw new ElementGoneException("gone") : _bounds; set => _bounds = value; }
+    /// <summary>Document text and accessible name or value; null: content that cannot be read.</summary>
+    public IReadOnlyList<string>? OtherTexts { get; set; } = [];
+
+    public IReadOnlyList<IUiNode> RawDescendants() => Unreadable ? throw new ElementGoneException("unreadable") : TargetResolver.WalkFind(this, Cond.Any);
     public FakeNode? Parent { get; private set; }
 
     public FakeNode Add(FakeNode child)
@@ -101,8 +109,16 @@ public sealed class FakeDesktop : IDesktop
 
     public IUiNode? GetOwnerWindow(IUiNode window) => ((FakeNode)window).Owner;
 
+    /// <summary>Runs at every look at the top-level windows (each attempt of the resolver looks once per candidate).</summary>
+    public Action? OnLook { get; set; }
+
     public SessionState GetSessionState() => Session;
-    public IReadOnlyList<IUiNode> GetTopLevelWindows() => Windows;
+
+    public IReadOnlyList<IUiNode> GetTopLevelWindows()
+    {
+        OnLook?.Invoke();
+        return Windows;
+    }
     public IUiNode? GetForegroundWindow() => Foreground;
     public IUiNode? GetFocusedElement() => Focused;
 
@@ -125,6 +141,8 @@ public sealed class FakeDesktop : IDesktop
     public string? Perform(UiOperation op)
     {
         BeforeInput?.Invoke(op);
+        // As the Windows driver: a disabled element takes no input, only a read or a focus.
+        if (op.Action is not (ActionKind.Read or ActionKind.Focus) && !op.Element.IsEnabled) throw RetryableActionException.Disabled();
         if (op.Action is ActionKind.Type or ActionKind.Key)
         {
             // As the Windows driver does right before keyboard input: first the window manager's focus window (a bare
@@ -142,6 +160,59 @@ public sealed class FakeDesktop : IDesktop
     }
 
     public byte[] CaptureWindowPng(IUiNode window) => [0x89, 0x50, 0x4E, 0x47];
+
+    /// <summary>
+    /// Window captures for AI repair's picture. Without an entry, a window with <see cref="FakeNode.Bounds"/> is drawn in
+    /// <see cref="WindowColor"/> (one solid color per window, so a test can tell whose pixels a spot shows), and a window
+    /// without bounds is not drawn (as a minimized one).
+    /// </summary>
+    public Dictionary<string, WindowCapture> Captures { get; } = [];
+
+    /// <summary>The color a window is drawn in when it has no entry in <see cref="Captures"/>.</summary>
+    public Dictionary<string, (byte R, byte G, byte B)> WindowColor { get; } = [];
+
+    /// <summary>Child window processes a window reports (another application's embedded window, for the refusal).</summary>
+    public Dictionary<string, int[]> ChildProcesses { get; } = [];
+
+    /// <summary>Runs right after a window is captured (a window that moves, or a field that gets text, meanwhile).</summary>
+    public Action<FakeNode>? AfterCapture { get; set; }
+
+    /// <summary>Windows Windows scales for their display (DPI virtualization).</summary>
+    public HashSet<string> DpiScaled { get; } = [];
+
+    /// <summary>GetWindowRect: the window's bounds as they are now.</summary>
+    public PixelRect? GetWindowRect(IUiNode window) => ((FakeNode)window).Bounds;
+
+    /// <summary>Controls with their own native window: GetWindowRect of it (absent: no native window).</summary>
+    public Dictionary<string, PixelRect> NativeRects { get; } = [];
+    public PixelRect? GetNativeRect(IUiNode element) => NativeRects.TryGetValue(element.Id, out var r) ? r : null;
+
+    /// <summary>Runs before each window is captured (a slow app: advance a fake clock).</summary>
+    public Action? BeforeCapture { get; set; }
+
+    public WindowCapture? CaptureWindow(IUiNode window)
+    {
+        BeforeCapture?.Invoke();
+        var c = CaptureNow((FakeNode)window);
+        AfterCapture?.Invoke((FakeNode)window);
+        return c;
+    }
+
+    private WindowCapture? CaptureNow(FakeNode n)
+    {
+        if (Captures.TryGetValue(n.Id, out var c)) return c;
+        if (n.Bounds is not { IsEmpty: false } b) return null;
+        var (r, g, bl) = WindowColor.TryGetValue(n.Id, out var col) ? col : ((byte)200, (byte)200, (byte)200);
+        var px = new byte[b.Width * b.Height * 4];
+        for (var i = 0; i < px.Length; i += 4)
+        {
+            px[i] = bl;
+            px[i + 1] = g;
+            px[i + 2] = r;
+            px[i + 3] = 255;
+        }
+        return new WindowCapture(b, px, ChildProcesses.TryGetValue(n.Id, out var pids) ? pids : [], DpiScaled.Contains(n.Id));
+    }
 
     /// <summary>The clipboard's Unicode text (null: no text on it). Setting it alone changes neither the owner nor the
     /// sequence number; <see cref="Copy"/> does what an application's copy does.</summary>
@@ -227,7 +298,36 @@ public sealed class FakeProcessHost : IProcessHost
         }
         return false;
     }
-    public void KillTree(int pid) => Killed.Add(pid);
+
+    /// <summary>Everything done to processes, in order: "close:pid", "kill:pid" (only for a process still running).</summary>
+    public List<string> Events { get; } = [];
+    public List<int> CloseRequested { get; } = [];
+    /// <summary>Processes that have ended (an app that closed, or ended before the run did).</summary>
+    public HashSet<int> Exited { get; } = [];
+    /// <summary>Processes that end when asked to close; any other ignores the request (as at "Save changes?").</summary>
+    public HashSet<int> ClosesOnRequest { get; } = [];
+    /// <summary>Runs when a process is stopped by force or released (for example to look at the export folder).</summary>
+    public Action<int>? OnKill { get; set; }
+
+    public bool HasExited(int pid) => Exited.Contains(pid);
+
+    public void RequestClose(int pid)
+    {
+        Events.Add($"close:{pid}");
+        CloseRequested.Add(pid);
+        if (ClosesOnRequest.Contains(pid)) Exited.Add(pid);
+    }
+
+    /// <summary>Like the real host: only a process still running counts as stopped by force.</summary>
+    public void KillTree(int pid)
+    {
+        OnKill?.Invoke(pid);
+        if (Exited.Add(pid))
+        {
+            Killed.Add(pid);
+            Events.Add($"kill:{pid}");
+        }
+    }
 }
 
 /// <summary>Records private directories; the writable answer is set by the test.</summary>

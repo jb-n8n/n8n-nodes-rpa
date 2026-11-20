@@ -1,3 +1,4 @@
+import { VALUE_NOT_TAKEN } from '../messages.js';
 import type { ErrorCode, StepFailure, Violation } from '../types.js';
 
 /** Prefix of a step failure message that reports a named detect outcome (e.g. `detected:login_failed`). */
@@ -25,10 +26,15 @@ export function stripShownPrefix(message: string): string {
   const p = SHOWN_PREFIXES.find((x) => message.startsWith(x));
   return p ? message.slice(p.length) : message;
 }
-/** The lane message for a failed step: `<intent>: <message>`, or the bare text of a limit or capture failure. */
-export function shownFailure(intent: string, message: string): string {
+/**
+ * The lane message for a failed step: `<intent>: <message>`, or the bare text of a limit or capture failure. A value
+ * the field did not take names the step by its number first (`index`, from 0): its intent may still name an old value.
+ */
+export function shownFailure(intent: string, message: string, index?: number): string {
   const stripped = stripShownPrefix(message);
-  return stripped !== message ? stripped : `${intent}: ${message}`;
+  if (stripped !== message) return stripped;
+  if (index !== undefined && message.startsWith('the field ') && message.includes(VALUE_NOT_TAKEN)) return `Step ${index + 1} (${intent}): ${message}`;
+  return `${intent}: ${message}`;
 }
 
 /** Maps a failure class to its public error code ('drift' becomes 'drift_detected'). */
@@ -40,18 +46,24 @@ export function toErrorCode(c: FailureClass): ErrorCode {
  * Classifies a failed run. Order: fatal violation, start-page failure (404/410 = drift: the page moved; any other
  * 4xx/5xx or a network error = site_down, e.g. a WAF block or rate limit), detect outcomes, lockout text
  * (only before login is confirmed), runaway pagination or rejected downloads (incomplete), network errors;
- * anything else is drift (the page no longer matches the script).
+ * anything else is drift (the page no longer matches the script). A rejected sign-in (`detected:login_failed`) on a
+ * page with lockout text, before login is confirmed, is account_locked: the account needs unlocking, not a new password.
+ * A new password the site did not take (`detected:password_change_failed`) is password_change_failed, whatever the page says.
  */
 export function classifyFailure(f: FailureFacts): FailureClass {
   if (f.violations.some((v) => v.fatal)) return 'policy_violation';
   if (f.startStatus === 404 || f.startStatus === 410) return f.startStatusMode === 'report' ? 'not_found' : 'drift';
   if (f.startError || (f.startStatus ?? 0) >= 400) return 'site_down';
   const msg = f.failure?.message ?? '';
-  if (msg.startsWith(`${DETECTED_PREFIX}login_failed`)) return 'login_failed';
+  const lockedText = !f.loginConfirmed && !!f.pageText && LOCKED_TEXT.test(f.pageText);
+  if (msg.startsWith(`${DETECTED_PREFIX}login_failed`)) return lockedText ? 'account_locked' : 'login_failed';
   if (msg.startsWith(`${DETECTED_PREFIX}account_locked`)) return 'account_locked';
   if (msg.startsWith(`${DETECTED_PREFIX}mfa_`)) return 'auth_blocked';
-  if (!f.loginConfirmed && f.pageText && LOCKED_TEXT.test(f.pageText)) return 'account_locked';
+  if (msg.startsWith(`${DETECTED_PREFIX}password_change_failed`)) return 'password_change_failed';
+  if (lockedText) return 'account_locked';
   if (INCOMPLETE_PREFIXES.some((p) => msg.startsWith(p))) return 'incomplete';
+  // A value the field's type refuses (handlers/basic.ts fill): the step does not fit the page, the page did not drift.
+  if (msg.startsWith('the field ') && msg.includes(VALUE_NOT_TAKEN)) return 'policy_violation';
   if (NETWORK.test(msg)) return 'site_down';
   return 'drift';
 }

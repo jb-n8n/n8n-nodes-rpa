@@ -226,9 +226,9 @@ test('fingerprint runs Show-RpaConnection.ps1', () => {
     assert.ok(send.includes('AWS-RunPowerShellScript') && send.includes(INSTANCE));
     const params = JSON.parse(send[send.indexOf('--parameters') + 1]);
     assert.deepEqual(params.commands, ["& 'C:\\Program Files\\RPA Runner\\scripts\\Show-RpaConnection.ps1'"], 'never with -ShowTokens');
-    r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: `Runner fingerprint: ${FINGERPRINT}\r\nBrowser fingerprint: not known yet\r\nBrowser: not listening: see C:\\ProgramData\\RPA Runner\\logs\\browser.err.log` });
+    r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: `Runner fingerprint: ${FINGERPRINT}\r\nBrowser fingerprint: not known yet (the program has not started)\r\nBrowser: not listening yet. It starts within a minute of the bot user's sign-in: run this again. If it stays like this, read C:\\ProgramData\\RPA Runner\\logs\\browser.err.log` });
     assert.equal(r.code, 1);
-    assert.equal(r.stdout, `Runner fingerprint: ${FINGERPRINT}\nBrowser fingerprint: not known yet\n`);
+    assert.equal(r.stdout, `Runner fingerprint: ${FINGERPRINT}\nBrowser fingerprint: not known yet (the program has not started)\n`);
     assert.match(r.stderr, /a fingerprint is not known yet/);
     r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: 'RPA is not installed here: C:\\Program Files\\RPA Runner\\install.json is missing. Run Install-Rpa.ps1 from the unpacked package.' });
     assert.equal(r.code, 1);
@@ -329,5 +329,30 @@ test('an unknown command prints the usage and exits 2', () => {
     assert.equal(r.code, 2);
     assert.match(r.stderr, /unknown command: launch/);
     assert.match(r.stderr, /up \[apply args\]/);
+  } finally { t.done(); }
+});
+
+test('demo-ui sends demo-ui.ps1 over SSM with the build in front, and refuses anything but v1 and v2', () => {
+  const t = setup();
+  try {
+    t.brought();
+    let r = t.run(['demo-ui', 'v2'], { FAKE_SSM_OUTPUT: 'done: the runner allows ErpDemo.exe v2' });
+    assert.equal(r.code, 0, r.out);
+    const send = t.calls().find((c) => c.includes('send-command'));
+    const params = JSON.parse(send[send.indexOf('--parameters') + 1]);
+    const script = readFileSync(fileURLToPath(new URL('../demo-ui.ps1', import.meta.url)), 'utf8');
+    assert.equal(params.commands.length, 1);
+    const m = /^\$Ui = 'v2'; & \(\[scriptblock\]::Create\(\[Text\.Encoding\]::UTF8\.GetString\(\[Convert\]::FromBase64String\('([A-Za-z0-9+/=]+)'\)\)\)\)$/.exec(params.commands[0]);
+    assert.ok(m, params.commands[0].slice(0, 200));
+    assert.equal(Buffer.from(m[1], 'base64').toString('utf8'), script);
+    assert.ok(send.includes('RPA demo-ui v2'));
+    const sent = t.calls().length;
+    for (const args of [['demo-ui'], ['demo-ui', 'v3'], ['demo-ui', "v2'; calc; '"], ['demo-ui', 'V2']]) {
+      r = t.run(args);
+      assert.equal(r.code, 1, args.join(' '));
+      assert.match(r.stderr, /demo-ui takes v1 or v2/);
+    }
+    assert.equal(t.calls().filter((c) => c.includes('send-command')).length, 1, 'nothing more was sent');
+    assert.ok(t.calls().length >= sent);
   } finally { t.done(); }
 });

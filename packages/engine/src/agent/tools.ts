@@ -27,7 +27,6 @@ export interface ToolCall {
   name: string;
   args: Record<string, unknown>;
 }
-export type AgentToolName = 'look' | 'click' | 'fill' | 'select' | 'sign_in' | 'enter_code' | 'dismiss' | 'expand_all' | 'next_page' | 'extract' | 'download' | 'back' | 'done';
 export type DoneOutcome = 'found' | 'not_found' | 'blocked';
 
 /** One tool call as it was executed. Compile uses only `ok` actions. */
@@ -189,6 +188,13 @@ export class AgentTools {
   /** How often each page state was seen in this run, and the count for the latest snapshot (loop feedback). */
   private visits = new Map<string, number>();
   private lastVisit = 0;
+  /**
+   * The circle guard: how often each action (the page it started on, the tool, the controls and values it was given)
+   * ran since the last action that brought something new: a page not seen before in this run, new rows or a file.
+   */
+  private repeats = new Map<string, number>();
+  /** That count for the latest action; 0 when it brought something new. */
+  lastRepeat = 0;
   /** A two-page sign_in after phase 1: the username page's locators and where its (stepless) action sits in `actions`. */
   private pendingSignIn?: { username: Locator; next: Locator; at: number };
   /**
@@ -246,7 +252,39 @@ export class AgentTools {
     return `${content ? `\n${note}${wrap(content)}` : ''}${body ? '' : '\n(the page could not be read; call look)'}`;
   }
 
+  /** Runs one tool call and counts it for the circle guard (lastRepeat). */
   async run(call: ToolCall): Promise<ToolOutcome> {
+    const key = this.actionKey(call);
+    const { rows, downloads } = this.init.state;
+    const before = [this.visits.size, rows.length, downloads.length];
+    const out = await this.runTool(call);
+    const { rows: rowsNow, downloads: downloadsNow } = this.init.state;
+    const progress = this.visits.size > before[0] || rowsNow.length > before[1] || downloadsNow.length > before[2];
+    if (progress) {
+      this.repeats.clear();
+      this.lastRepeat = 0;
+    } else {
+      this.lastRepeat = (this.repeats.get(key) ?? 0) + 1;
+      this.repeats.set(key, this.lastRepeat);
+    }
+    return out;
+  }
+
+  /**
+   * What makes two actions the same for the circle guard: the page state they started on, the tool, and each argument,
+   * a ref read as the control it names on that page (refs change after every action). A hash: it keeps no page text.
+   */
+  private actionKey(call: ToolCall): string {
+    const args = call.args && typeof call.args === 'object' ? call.args : {};
+    const parts = Object.keys(args).sort().map((k) => {
+      const v = args[k];
+      const el = typeof v === 'string' ? this.current.get(v) : undefined;
+      return [k, el ? [el.role, el.fullName, el.tag, el.type ?? '', el.href ?? ''] : v];
+    });
+    return createHash('sha256').update(JSON.stringify([this.seenState ?? '', String(call.name), parts])).digest('hex').slice(0, 32);
+  }
+
+  private async runTool(call: ToolCall): Promise<ToolOutcome> {
     const url = this.here();
     this.startState = this.seenState;
     const args = call.args && typeof call.args === 'object' ? call.args : {};
@@ -438,7 +476,7 @@ export class AgentTools {
     } catch (err) {
       const message = (err as Error).message;
       this.logSignIn(started, false, message);
-      if (message === `${DETECTED_PREFIX}login_failed`) {
+      if (message.startsWith(`${DETECTED_PREFIX}login_failed`)) {
         this.signInStage = 'username_rejected';
         return this.refuse('sign_in', url, 'the site rejected the username');
       }

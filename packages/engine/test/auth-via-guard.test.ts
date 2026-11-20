@@ -54,8 +54,8 @@ const loginPage = (error = '') => page(
       document.getElementById('later').hidden = false;
     }, 200));</script>` : ''),
 );
-const resendForm = () => (mode.resend === 'with-password'
-  ? `<form method="post" action="/send"><label for="pin">PIN</label><input id="pin" name="pin" type="password"><button type="submit">Send me the code</button></form>`
+const resendForm = () => (mode.resend === 'with-password' || mode.resend === 'with-password-elements'
+  ? `<form method="post" action="/send"><label for="pin">PIN</label><input id="pin" name="pin" type="password">${mode.resend === 'with-password-elements' ? '<input type="hidden" name="elements">' : ''}<button type="submit">Send me the code</button></form>`
   : mode.resend ? sendForm(mode.resend) : '');
 const codePage = () => page(`<form method="post" action="/mfa"><label for="code">Code</label><input id="code" name="otc"><button type="submit">Verify</button></form>${resendForm()}`);
 
@@ -162,7 +162,7 @@ describe('signIn totp.via buttons are gated', () => {
     try {
       const r = await runSteps(ctx, [signIn(true)]);
       if (r.ok) throw new Error('expected failure');
-      expect(r.failure.message).toBe('signIn refused: the via button does not post to a declared login page');
+      expect(r.failure.message).toBe(`signIn refused: the via button posts to ${host}/elsewhere/send, which is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(ctx.violations).toContainEqual({ kind: 'signin', url: `${origin}/elsewhere/send`, fatal: true });
       expect(clicks.map((c) => c.text)).toEqual(['Sign in']);
       expect(paths()).toEqual(['/login']);
@@ -182,11 +182,12 @@ describe('signIn totp.via buttons are gated', () => {
     } finally { await session.close(); }
   });
 
-  it('a via button on the page that rejected the password is not clicked', async () => {
+  it('a via button on the page that rejected the password is not clicked, and the sign-in fails as detected:login_failed', async () => {
     const { ctx, clicks } = await at({ ...SECRETS, password: 'wrong-password' });
     try {
       const r = await runSteps(ctx, [signIn(true, 'seed', 10_000)]);
-      expect(r.ok).toBe(true);
+      if (r.ok) throw new Error('expected failure');
+      expect(r.failure.message).toBe('detected:login_failed: the site sent the sign-in page back');
       expect(await ctx.page.getByRole('button', { name: 'Send me the code' }).isVisible()).toBe(true);
       expect(clicks.map((c) => c.text)).toEqual(['Sign in']);
       expect(paths()).toEqual(['/login']);
@@ -209,10 +210,12 @@ describe('signIn totp.via buttons are gated', () => {
 describe('the retry after a rejected workflow code clicks the send button again only through the via gate', () => {
   const NO_SEED: PortalSecrets = { username: SECRETS.username, password: SECRETS.password };
   for (const [resend, message] of [
-    ['/elsewhere/send', 'signIn refused: the via button does not post to a declared login page'],
-    ['with-password', 'signIn refused: the via button is in a form with a password field'],
+    ['/elsewhere/send', () => `signIn refused: the via button posts to ${host}/elsewhere/send, which is not listed in the Site Login under Pages Where the Password May Be Typed`],
+    ['with-password', () => 'signIn refused: the via button is in a form with a password field'],
+    // A field named "elements" must not hide the form's fields from the check.
+    ['with-password-elements', () => 'signIn refused: the via button is in a form with a password field'],
   ] as const) {
-    it(`a send button on the code page ${resend === 'with-password' ? 'in a form with a password field' : 'that posts off the login pages'} is refused, not clicked`, async () => {
+    it(`a send button on the code page ${resend === '/elsewhere/send' ? 'that posts off the login pages' : `in a form with a password field (${resend})`} is refused, not clicked`, async () => {
       mode.resend = resend;
       const { ctx, clicks } = await at(NO_SEED);
       const asked: CodeRequest[] = [];
@@ -220,7 +223,7 @@ describe('the retry after a rejected workflow code clicks the send button again 
       try {
         const r = await runSteps(ctx, [signIn(true, 'workflow')]);
         if (r.ok) throw new Error('expected failure');
-        expect(r.failure.message).toBe(message);
+        expect(r.failure.message).toBe(message());
         expect(ctx.violations.some((v) => v.kind === 'signin' && v.fatal)).toBe(true);
         expect(asked).toHaveLength(1);
         expect(clicks.map((c) => c.text)).toEqual(['Sign in', 'Send me the code', 'Verify']);

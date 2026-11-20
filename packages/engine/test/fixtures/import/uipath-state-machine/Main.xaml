@@ -1,0 +1,118 @@
+<Activity mc:Ignorable="sap sap2010" x:Class="Main" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:s="clr-namespace:System;assembly=mscorlib" xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation" xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <StateMachine DisplayName="General Business Process" InitialState="{x:Reference __ReferenceID3}" sap2010:WorkflowViewState.IdRef="StateMachine_1">
+    <State x:Name="__ReferenceID0" DisplayName="Get Transaction Data" sap2010:WorkflowViewState.IdRef="State_2">
+      <State.Entry>
+        <Sequence DisplayName="Get transaction data actions" sap2010:WorkflowViewState.IdRef="Sequence_2">
+          <ui:InvokeWorkflowFile DisplayName="Invoke GetTransactionData workflow" WorkflowFileName="Framework\GetTransactionData.xaml" sap2010:WorkflowViewState.IdRef="InvokeWorkflowFile_2" />
+        </Sequence>
+      </State.Entry>
+      <State.Transitions>
+        <Transition DisplayName="New Transaction" sap2010:WorkflowViewState.IdRef="Transition_3">
+          <Transition.To>
+            <State x:Name="__ReferenceID2" DisplayName="Process Transaction" sap2010:WorkflowViewState.IdRef="State_3">
+              <State.Entry>
+                <TryCatch DisplayName="Try Catch (process the transaction)" sap2010:WorkflowViewState.IdRef="TryCatch_1">
+                  <TryCatch.Try>
+                    <ui:InvokeWorkflowFile DisplayName="Invoke Process workflow" WorkflowFileName="Process.xaml" sap2010:WorkflowViewState.IdRef="InvokeWorkflowFile_3" />
+                  </TryCatch.Try>
+                  <TryCatch.Catches>
+                    <Catch x:TypeArguments="ui:BusinessRuleException" sap2010:WorkflowViewState.IdRef="Catch`1_1">
+                      <ActivityAction x:TypeArguments="ui:BusinessRuleException">
+                        <ActivityAction.Argument>
+                          <DelegateInArgument x:TypeArguments="ui:BusinessRuleException" Name="exception" />
+                        </ActivityAction.Argument>
+                        <Assign DisplayName="Keep the business exception" sap2010:WorkflowViewState.IdRef="Assign_1" />
+                      </ActivityAction>
+                    </Catch>
+                    <Catch x:TypeArguments="s:Exception" sap2010:WorkflowViewState.IdRef="Catch`1_2">
+                      <ActivityAction x:TypeArguments="s:Exception">
+                        <ActivityAction.Argument>
+                          <DelegateInArgument x:TypeArguments="s:Exception" Name="exception" />
+                        </ActivityAction.Argument>
+                        <Assign DisplayName="Keep the system exception" sap2010:WorkflowViewState.IdRef="Assign_2" />
+                      </ActivityAction>
+                    </Catch>
+                  </TryCatch.Catches>
+                </TryCatch>
+              </State.Entry>
+              <State.Transitions>
+                <Transition DisplayName="System Exception" sap2010:WorkflowViewState.IdRef="Transition_7">
+                  <Transition.To>
+                    <State x:Name="__ReferenceID3" DisplayName="Initialization" sap2010:WorkflowViewState.IdRef="State_1">
+                      <State.Entry>
+                        <Sequence DisplayName="Initialization actions" sap2010:WorkflowViewState.IdRef="Sequence_1">
+                          <ui:LogMessage DisplayName="Log Message (Initialization)" Level="Info" Message="[&quot;Starting&quot;]" sap2010:WorkflowViewState.IdRef="LogMessage_1" />
+                          <ui:InvokeWorkflowFile DisplayName="Invoke InitAllApplications workflow" WorkflowFileName="Framework\InitAllApplications.xaml" sap2010:WorkflowViewState.IdRef="InvokeWorkflowFile_1" />
+                        </Sequence>
+                      </State.Entry>
+                      <State.Transitions>
+                        <Transition DisplayName="System Exception (failed initialization)" sap2010:WorkflowViewState.IdRef="Transition_2">
+                          <Transition.To>
+                            <State x:Name="__ReferenceID1" DisplayName="End Process" IsFinal="True" sap2010:WorkflowViewState.IdRef="State_4">
+                              <State.Entry>
+                                <Sequence DisplayName="End process actions" sap2010:WorkflowViewState.IdRef="Sequence_3">
+                                  <ui:InvokeWorkflowFile DisplayName="Invoke CloseAllApplications workflow" WorkflowFileName="Framework\CloseAllApplications.xaml" sap2010:WorkflowViewState.IdRef="InvokeWorkflowFile_4" />
+                                </Sequence>
+                              </State.Entry>
+                            </State>
+                          </Transition.To>
+                          <Transition.Action>
+                            <ui:LogMessage DisplayName="Log Message (initialization failure)" Level="Error" Message="[&quot;Failed&quot;]" sap2010:WorkflowViewState.IdRef="LogMessage_2" />
+                          </Transition.Action>
+                          <Transition.Condition>[SystemException IsNot Nothing]</Transition.Condition>
+                        </Transition>
+                        <Transition DisplayName="Successful" sap2010:WorkflowViewState.IdRef="Transition_1">
+                          <Transition.To>
+                            <x:Reference>__ReferenceID0</x:Reference>
+                          </Transition.To>
+                          <Transition.Action>
+                            <ui:Comment DisplayName="Comment (default transition)" Text="Default transition" sap2010:WorkflowViewState.IdRef="Comment_1" />
+                          </Transition.Action>
+                          <Transition.Condition>[SystemException Is Nothing]</Transition.Condition>
+                        </Transition>
+                      </State.Transitions>
+                    </State>
+                  </Transition.To>
+                  <Transition.Condition>[SystemException IsNot Nothing]</Transition.Condition>
+                </Transition>
+                <Transition DisplayName="Business Exception" sap2010:WorkflowViewState.IdRef="Transition_6">
+                  <Transition.To>
+                    <x:Reference>__ReferenceID0</x:Reference>
+                  </Transition.To>
+                  <Transition.Condition>[BusinessException IsNot Nothing]</Transition.Condition>
+                </Transition>
+                <Transition DisplayName="Success" sap2010:WorkflowViewState.IdRef="Transition_5">
+                  <Transition.To>
+                    <x:Reference>__ReferenceID0</x:Reference>
+                  </Transition.To>
+                  <Transition.Condition>[SystemException Is Nothing AndAlso BusinessException Is Nothing]</Transition.Condition>
+                </Transition>
+              </State.Transitions>
+            </State>
+          </Transition.To>
+          <Transition.Condition>[TransactionItem IsNot Nothing]</Transition.Condition>
+        </Transition>
+        <Transition DisplayName="No Data" sap2010:WorkflowViewState.IdRef="Transition_4">
+          <Transition.To>
+            <x:Reference>__ReferenceID1</x:Reference>
+          </Transition.To>
+          <Transition.Action>
+            <Sequence DisplayName="Before ending" sap2010:WorkflowViewState.IdRef="Sequence_4">
+              <ui:LogMessage DisplayName="Log Message (no data)" Level="Info" Message="[&quot;No data&quot;]" sap2010:WorkflowViewState.IdRef="LogMessage_3" />
+              <Assign DisplayName="Keep the stop reason" sap2010:WorkflowViewState.IdRef="Assign_3" />
+            </Sequence>
+          </Transition.Action>
+          <Transition.Condition>[TransactionItem Is Nothing]</Transition.Condition>
+        </Transition>
+      </State.Transitions>
+    </State>
+    <x:Reference>__ReferenceID2</x:Reference>
+    <x:Reference>__ReferenceID1</x:Reference>
+    <x:Reference>__ReferenceID3</x:Reference>
+    <StateMachine.Variables>
+      <Variable x:TypeArguments="ui:QueueItem" Name="TransactionItem" />
+      <Variable x:TypeArguments="s:Exception" Name="SystemException" />
+      <Variable x:TypeArguments="ui:BusinessRuleException" Name="BusinessException" />
+    </StateMachine.Variables>
+  </StateMachine>
+</Activity>

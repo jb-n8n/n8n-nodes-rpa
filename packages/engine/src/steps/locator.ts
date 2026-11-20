@@ -1,6 +1,7 @@
 import type { FrameLocator, Locator as PwLocator, Page } from 'playwright-core';
 import type { Locator } from '../types.js';
 import { describeForUser, locatorNotFound, locatorNotUnique } from '../messages.js';
+import { ControlNotFound } from './errors.js';
 import { poll } from './poll.js';
 import { shownUrl } from './urls.js';
 
@@ -46,7 +47,8 @@ export function describeLocator(loc: Locator): string {
 
 /**
  * Exactly one visible match of the primary candidate or, failing that, of a fallback, polled until the timeout.
- * The failure names the primary: "matches N elements" when its last poll saw more than one, else "No element found".
+ * The failure names the primary: "matches N elements" when its last poll saw more than one, else "No element found"
+ * (a ControlNotFound, which carries the locator).
  */
 export async function resolveUnique(root: Root, loc: Locator, timeoutMs: number): Promise<{ locator: PwLocator; candidate: number }> {
   const cands = candidatesOf(loc);
@@ -69,7 +71,7 @@ export async function resolveUnique(root: Root, loc: Locator, timeoutMs: number)
   if (hit) return hit;
   const desc = describeForUser(cands[0]);
   if (primaryCount > 1) throw new Error(locatorNotUnique(desc, primaryCount));
-  throw new Error(locatorNotFound(desc, shownUrl(pageOf(root).url()), Math.max(1, Math.round(timeoutMs / 1000))));
+  throw new ControlNotFound(locatorNotFound(desc, shownUrl(pageOf(root).url()), Math.max(1, Math.round(timeoutMs / 1000))), loc);
 }
 
 export async function firstPresent(root: Root, loc: Locator, timeoutMs: number): Promise<{ locator: PwLocator; candidate: number } | null> {

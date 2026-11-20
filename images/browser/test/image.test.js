@@ -78,7 +78,7 @@ test('the compose stack builds the image, runs it hardened and publishes no brow
 test('the image installs the run-server at build time from an integrity-checked lockfile, never at start', () => {
   assert.doesNotMatch(service, /^\s+[^#\s][^\n]*\bnpx\b/m);
   assert.doesNotMatch(entrypoint, /^[^#\n]*\bnpx\b/m);
-  // The image, the lockfile and the engine's playwright-core move together (README: Version matching).
+  // The image, the lockfile and the engine's playwright-core move together (docs/reference/operator.md: Version matching).
   const engine = JSON.parse(read('packages/engine/package.json')).dependencies['playwright-core'];
   assert.match(dockerfile, new RegExp(`^FROM mcr\\.microsoft\\.com/playwright:v${engine.replace(/\./g, '\\.')}@sha256:[0-9a-f]{64}$`, 'm'));
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);

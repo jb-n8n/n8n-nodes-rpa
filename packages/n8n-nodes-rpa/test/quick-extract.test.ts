@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import type { IDataObject, INodeProperties, INodePropertyCollection, INodePropertyOptions } from 'n8n-workflow';
 import { OPERATIONS, properties } from '../nodes/Playwright/description/index.js';
 import { ATTRIBUTE_OPTIONS, extractProperties, FIELD_LOCATION } from '../nodes/Playwright/description/extract.js';
@@ -10,7 +11,6 @@ import { fakeEngine } from './fake-engine.js';
 import { harness } from './harness.js';
 import { assertRunnable, BROWSER, okResult, optionsFor, PAGE_URL, QUICK_COMMON_OPTIONS, quickParams } from './quick-fixtures.js';
 
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 const css = (selector: string) => ({ locator: { findBy: 'css', css: selector } });
 const q = (over: IDataObject = {}, options: IDataObject = {}): QuickParams =>
   ({ url: PAGE_URL, waitUntil: 'load', shape: 'table', table: css('table.results'), item: null, fields: null, ...over, options }) as QuickParams;

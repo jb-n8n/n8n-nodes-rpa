@@ -29,7 +29,7 @@ n8n's workers connect to the service through the RPA Browser credential in Brows
   - CloudWatch Logs
 
   On Fargate the task does all three through its own network interface, so its security group must allow them too: see `platform_egress_cidrs`.
-- The image: `ghcr.io/jb-n8n/rpa-browser:<version>` from `images/browser/`. Its run-server version must match the engine's playwright-core (repository README, "Version matching").
+- The image: `ghcr.io/jb-n8n/rpa-browser:<version>` from `images/browser/`. Its run-server version must match the engine's playwright-core (docs/reference/operator.md, "Version matching").
 
 ## The token
 
@@ -66,7 +66,7 @@ module "rpa_browser" {
   vpc_id      = "vpc-0123456789abcdef0"
   subnet_ids  = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0aaaaaaaaaaaaaaa2"]
   cluster_arn = "arn:aws:ecs:eu-west-1:123456789012:cluster/n8n"
-  image       = "ghcr.io/jb-n8n/rpa-browser:0.1.0"
+  image       = "ghcr.io/jb-n8n/rpa-browser:0.2.0"
 
   # Only n8n's workers may open sessions.
   n8n_security_group_ids = ["sg-0123456789abcdef0"]

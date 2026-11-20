@@ -44,10 +44,17 @@ describe('classifyFailure', () => {
     expect(classifyFailure({ violations: [], failure: fail('detected:account_locked') })).toBe('account_locked');
     expect(classifyFailure({ violations: [], failure: fail('detected:mfa_sms') })).toBe('auth_blocked');
     expect(classifyFailure({ violations: [], failure: fail('detected:mfa_totp') })).toBe('auth_blocked');
+    expect(classifyFailure({ violations: [], failure: fail('detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret') })).toBe('auth_blocked');
   });
   it('recognises lockout text on the page', () => {
     expect(classifyFailure({ violations: [], failure: fail('x'), pageText: 'Your account has been locked.' })).toBe('account_locked');
     expect(classifyFailure({ violations: [], failure: fail('x'), pageText: 'Too many failed sign-in attempts' })).toBe('account_locked');
+  });
+  it('lockout text wins over a rejected sign-in until login was confirmed', () => {
+    const locked = 'Your account has been locked after too many failed sign-in attempts.';
+    expect(classifyFailure({ violations: [], failure: fail('detected:login_failed'), pageText: locked })).toBe('account_locked');
+    expect(classifyFailure({ violations: [], failure: fail('detected:login_failed'), pageText: locked, loginConfirmed: true })).toBe('login_failed');
+    expect(classifyFailure({ violations: [], failure: fail('detected:login_failed'), pageText: 'Invalid username or password.' })).toBe('login_failed');
   });
   it('ignores lockout text once login was confirmed', () => {
     expect(classifyFailure({ violations: [], failure: fail('x'), pageText: 'Your account has been locked.', loginConfirmed: true })).toBe('drift');

@@ -4,7 +4,7 @@
 # npm ci checks every package against the lockfile's integrity hashes, so the container downloads nothing at start.
 # Build context: this directory (images/browser). Compose, ECS and Kubernetes all run this same image.
 # Base image pinned by digest (the tag is kept for readability); Dependabot proposes digest updates. The image tag, the
-# lockfile and the engine's playwright-core move together (README: Version matching).
+# lockfile and the engine's playwright-core move together (docs/reference/operator.md: Version matching).
 
 FROM mcr.microsoft.com/playwright:v1.63.0@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
 

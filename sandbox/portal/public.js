@@ -142,6 +142,24 @@ const item = (it) => `<li class="item"><a class="title" href="/public/items/${it
 const FORM_FIELDS = '<label>Name <input name="name"></label> <label>Message <textarea name="message"></textarea></label> '
   + '<label>Password <input type="password" name="password"></label> <button type="submit">Send</button>';
 const form = (attrs, button = '') => `<h1>Contact</h1><form id="contact"${attrs}>${button ? FORM_FIELDS.replace('<button type="submit">Send</button>', button) : FORM_FIELDS}</form>`;
+/** A menu whose items show only while the mouse is over it. */
+const HOVER_MENU = '<style>#reports-items { display: none; } #reports:hover #reports-items { display: block; }</style><h1>Hover menu</h1>'
+  + '<nav id="reports"><button type="button">Reports</button><ul id="reports-items"><li><a href="/public/echo?text=Monthly">Monthly</a></li></ul></nav>';
+/** A list where a click picks one item and a Ctrl+click (or Cmd+click) adds one; #picked names the picked items. */
+const PICK_LIST = '<h1>Pick list</h1><ul id="picks" role="listbox" aria-multiselectable="true">'
+  + ['Alpha', 'Beta', 'Gamma'].map((n) => `<li role="option" aria-selected="false">${n}</li>`).join('') + '</ul><p id="picked"></p>';
+// mousedown, not click: on macOS a Ctrl+click is a context click and fires no click event.
+const PICK_LIST_SCRIPT = "document.addEventListener('contextmenu', (e) => e.preventDefault()); "
+  + "document.getElementById('picks').addEventListener('mousedown', (e) => { const li = e.target.closest('li'); if (!li) return; "
+  + "if (!(e.ctrlKey || e.metaKey)) document.querySelectorAll('#picks li').forEach((x) => x.setAttribute('aria-selected', 'false')); "
+  + "li.setAttribute('aria-selected', 'true'); "
+  + "document.getElementById('picked').textContent = [...document.querySelectorAll('#picks li[aria-selected=true]')].map((x) => x.textContent).join(', '); });";
+/** A search form Enter submits by GET, and a note form Enter would POST. Every keydown is kept in window.keysSeen. */
+const KEYS_FORMS = '<h1>Keys</h1><form id="search" method="get" action="/public/echo"><label>Search <input name="text"></label> <button type="submit">Search</button></form>'
+  + '<form id="note" method="post" action="/public/keys/note"><label>Note <input name="note"></label> <label>PIN <input type="password" name="pin"></label> '
+  + '<button type="submit">Save</button></form><p id="focused"></p>';
+const KEYS_SCRIPT = "window.keysSeen = []; document.addEventListener('keydown', (e) => { window.keysSeen.push(e.key); }, true); "
+  + "document.addEventListener('focusin', (e) => { document.getElementById('focused').textContent = e.target.name || e.target.textContent; });";
 const STATUS = {
   '/public/missing': [404, 'Missing page'],
   '/public/gone': [410, 'Gone page'],
@@ -187,6 +205,14 @@ export async function publicRoute(req, res, url) {
     return send(res, 200, publicPage('Hidden field', hidden));
   }
   if (p === '/public/list-empty') return send(res, 200, publicPage('No items', '<p>No results found</p><ul class="items"></ul>'));
+  if (p === '/public/hover-menu') return send(res, 200, publicPage('Hover menu', HOVER_MENU));
+  if (p === '/public/pick-list') return send(res, 200, publicPage('Pick list', PICK_LIST, PICK_LIST_SCRIPT));
+  if (p === '/public/keys') return send(res, 200, publicPage('Keys', KEYS_FORMS, KEYS_SCRIPT));
+  if (p === '/public/keys/note' && req.method === 'POST') {
+    const note = (await readForm(req)).get('note') ?? '';
+    publicCounters.posts.push({ path: p, name: note });
+    return send(res, 200, publicPage('Keys', `${KEYS_FORMS}<p id="saved">Saved</p>`, KEYS_SCRIPT));
+  }
   if (/^\/public\/img\/[^/]+\.png$/.test(p)) return send(res, 200, PNG_1X1, { 'Content-Type': 'image/png' });
 
   if (p === '/public/form') return send(res, 200, publicPage('Contact', form(' method="post" action="/public/form/submit"')));

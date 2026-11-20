@@ -1,0 +1,22 @@
+<Activity mc:Ignorable="sap sap2010" x:Class="Process" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:s="clr-namespace:System;assembly=mscorlib" xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation" xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:uix="http://schemas.uipath.com/workflow/activities/uix" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="in_InvoiceNumber" Type="InArgument(x:String)" />
+  </x:Members>
+  <uix:NApplicationCard DisplayName="Use Browser Chrome: Approve an invoice" sap2010:WorkflowViewState.IdRef="NApplicationCard_1">
+    <uix:NApplicationCard.Body>
+      <ActivityAction x:TypeArguments="x:Object">
+        <Sequence DisplayName="Do" sap2010:WorkflowViewState.IdRef="Sequence_1">
+          <uix:NTypeInto DisplayName="Type Into 'Invoice number'" Text="[in_InvoiceNumber]" sap2010:WorkflowViewState.IdRef="NTypeInto_1">
+            <uix:NTypeInto.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='INPUT' aaname='Invoice number' /&gt;" /></uix:NTypeInto.Target>
+          </uix:NTypeInto>
+          <uix:NClick DisplayName="Click 'Open'" sap2010:WorkflowViewState.IdRef="NClick_1">
+            <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Open' /&gt;" /></uix:NClick.Target>
+          </uix:NClick>
+        </Sequence>
+      </ActivityAction>
+    </uix:NApplicationCard.Body>
+    <uix:NApplicationCard.TargetApp>
+      <uix:TargetApp BrowserType="Chrome" Url="https://invoices.example.com/invoices" />
+    </uix:NApplicationCard.TargetApp>
+  </uix:NApplicationCard>
+</Activity>

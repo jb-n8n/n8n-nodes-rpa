@@ -2,14 +2,28 @@ import { BLOCKED_STOP } from '../messages.js';
 import { maskClipped, type Masker } from '../secrets/mask.js';
 import type { StepContext } from '../steps/run.js';
 import type { OutputSpec, RunState } from '../types.js';
-import { responseText, type ChatMessage, type ChatModel, type ChatResponse } from './model.js';
+import { imageTokenEstimate, modelMessageText, responseText, toModelMessage, type ChatImage, type ChatMessage, type ChatModel, type ChatResponse, type ModelMessage } from './model.js';
 import { describeCheck } from '../proposal/describe.js';
 import type { DownloadTemplate } from '../steps/file-check.js';
-import { AGENT_TOOLS, FILE_AGENT_TOOLS, AgentTools, MAX_TYPED, neutralize, type AgentAction, type DoneOutcome } from './tools.js';
+import { AGENT_TOOLS, FILE_AGENT_TOOLS, AgentTools, MAX_TYPED, neutralize, type AgentAction, type DoneOutcome, type ToolCall, type ToolDef } from './tools.js';
 
 export const DEFAULT_MAX_ACTIONS = 40;
 export const DEFAULT_MAX_TOKENS = 200_000;
 const MAX_IDLE_TURNS = 3;
+/**
+ * The circle guard (AgentTools.lastRepeat): the same action on the same page, with nothing new since (no page not seen
+ * before, no new rows, no file). The third time the model is told once; the fourth time the run stops.
+ */
+const CIRCLE_NUDGE = 3;
+const CIRCLE_STOP = 4;
+export const CIRCLE_NUDGE_TEXT =
+  `You have now done this same action on this same page ${CIRCLE_NUDGE} times, and nothing new came of it: you are going in circles. `
+  + 'The run stops if you keep repeating. Open a link, tab or section you have not tried yet, or call done with not_found.';
+/** The engine's note before the first page block of a tool result (or at its end when there is none). */
+function withNote(text: string, note: string): string {
+  const at = text.indexOf('<page_content>');
+  return at < 0 ? `${text}\n${note}` : `${text.slice(0, at)}${note}\n${text.slice(at)}`;
+}
 /** Tool results keep their page snapshot only for this many latest results; older ones are elided. */
 const KEEP_PAGES = 2;
 const PAGE_BLOCK = /<page_content>[\s\S]*<\/page_content>/;
@@ -20,6 +34,24 @@ export function elideOldPages(messages: ChatMessage[]): ChatMessage[] {
   const toolIdx = messages.flatMap((m, i) => (m.role === 'tool' && PAGE_BLOCK.test(m.content) ? [i] : []));
   const old = new Set(toolIdx.slice(0, Math.max(0, toolIdx.length - KEEP_PAGES)));
   return messages.map((m, i) => (old.has(i) && PAGE_BLOCK.test(m.content) ? { ...m, content: m.content.replace(PAGE_BLOCK, OMITTED) } : m));
+}
+
+/** What an earlier screenshot becomes once a newer one was sent: only the latest picture goes to the model. */
+export const PICTURE_OMITTED = '(earlier screenshot omitted)';
+
+/**
+ * The pictures as sent to the model: only the latest message with pictures keeps them (each earlier one says it was
+ * omitted), or none when `on` is false, or when that message comes before `staleBefore` (a newer view came without a
+ * picture, so the last one no longer shows the app as it is).
+ */
+export function latestPictureOnly(messages: ChatMessage[], on: boolean, staleBefore = 0): ChatMessage[] {
+  const found = on ? messages.findLastIndex((m) => m.images?.length) : -1;
+  const last = found >= staleBefore ? found : -1;
+  return messages.map((m, i) => {
+    if (!m.images?.length || i === last) return m;
+    const { images: _images, ...rest } = m;
+    return { ...rest, content: `${m.content}\n${PICTURE_OMITTED}` };
+  });
 }
 
 export interface AgentBudget {
@@ -44,8 +76,11 @@ export interface AgentLoopInput {
   signal?: AbortSignal;
 }
 export interface AgentLoopResult {
-  /** 'budget': a cap or the deadline/cancellation stopped the run. 'error': infrastructure failed (model call failed, model silent, page unreadable); this says nothing about the site. */
-  outcome: DoneOutcome | 'budget' | 'error';
+  /**
+   * 'budget': a cap or the deadline/cancellation stopped the run. 'circling': the circle guard stopped it. 'error':
+   * infrastructure failed (model call failed, model silent, page unreadable); this says nothing about the site.
+   */
+  outcome: DoneOutcome | 'budget' | 'circling' | 'error';
   actions: AgentAction[];
   tokens: number;
   llmCalls: number;
@@ -135,47 +170,137 @@ export function firstUserMessage(failure: { intent: string; message: string } | 
 }
 
 /** A tool name the model sent, as engine text may echo it: a known tool's name, else "another tool". */
-function echoedToolName(name: string): string {
-  return AGENT_TOOL_NAMES.has(name) ? name : 'another tool';
+function echoedToolName(name: string, known: ReadonlySet<string>): string {
+  return known.has(name) ? name : 'another tool';
 }
 const AGENT_TOOL_NAMES = new Set([...AGENT_TOOLS, ...FILE_AGENT_TOOLS].map((t) => t.function.name));
 
-/** Drives the model through the agent tools on the live page until it finishes or a budget runs out. Never throws for model errors. */
-export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResult> {
-  const { ctx, state, output } = input;
-  const masker = ctx.masker;
-  const maxActions = input.budget.maxActions ?? DEFAULT_MAX_ACTIONS;
-  const maxTokens = input.budget.maxTokens ?? DEFAULT_MAX_TOKENS;
-  const tools = new AgentTools({ ctx, state, output, ...(input.download ? { download: input.download } : {}) });
-  const bound = input.model.bindTools(input.download ? FILE_AGENT_TOOLS : AGENT_TOOLS);
-  const messages: ChatMessage[] = [{ role: 'system', content: agentSystemPrompt(input.goal, output, { ...(input.download ? { download: input.download } : {}), vars: promptVars(ctx.vars, masker) }) }];
+/** What the generic loop drives: a look for the first message, one tool call at a time, and the circle guard's count. */
+export interface LoopTools<O extends string> {
+  /**
+   * Runs one tool call; `done` ends the loop with its outcome and note. `images`: pictures for the model (desktop
+   * repair's screenshot), sent in a user message right after the tool results with the spec's pictureCaption; an empty
+   * list says the tool took a new view without a picture (earlier pictures stop going to the model).
+   */
+  run(call: ToolCall): Promise<{ text: string; error: boolean; done?: { outcome: O; note: string }; images?: ChatImage[] }>;
+  /** How often the latest action repeated with nothing new since (the circle guard; 0 after progress). */
+  readonly lastRepeat: number;
+}
+/** One agent conversation: its tools, its prompt and the texts that differ between the browser and the desktop agent. */
+export interface LoopSpec<O extends string> {
+  model: ChatModel;
+  tools: LoopTools<O>;
+  toolDefs: ToolDef[];
+  /** Tool names the "not run" answer may echo; anything else is "another tool". */
+  toolNames: ReadonlySet<string>;
+  system: string;
+  /** The first user message (it takes the first look). A throw ends the loop as 'error' with `unreadable`: the reason. */
+  first(): Promise<string | { text: string; images?: ChatImage[] }>;
+  /** The text of the user message that carries a tool result's pictures. */
+  pictureCaption?: string;
+  /**
+   * Called once when a call with a picture failed and the same call without pictures was tried instead: from then on no
+   * picture is sent (the chat model, or n8n's model wrapper, did not take image content).
+   */
+  picturesRefused?(): void;
+  unreadable: string;
+  masker: Masker;
+  budget: AgentBudget;
+  signal?: AbortSignal;
+  /** Checked before the first look, after a failed one, at the top of every turn and before a tool runs. */
+  stopped?(): { outcome: O; note: string } | undefined;
+  /** Told once, on the CIRCLE_NUDGE-th repeat. */
+  nudgeText: string;
+  /** The note when the circle guard stops the loop, given the repeat count. */
+  circlingNote(repeats: number): string;
+  /** Sent after a turn without a tool call. */
+  idleText: string;
+}
+export interface LoopCore<O extends string> {
+  outcome: O | 'budget' | 'circling' | 'error';
+  tokens: number;
+  llmCalls: number;
+  note: string;
+  /** Masked text of every message; pictures are never in it. */
+  transcript: ChatMessage[];
+  /** Pictures the model got (each screenshot once), and about how many of the reported tokens they took (imageTokenEstimate, every call that sent one). */
+  pictures?: { count: number; tokens: number };
+  /** Set when the chat model did not take a picture and the repair went on with the text view only. */
+  pictureNote?: string;
+}
+
+/**
+ * Whether a failed call may have failed for its picture: a 4xx answer other than 408 and 429, or an error that names
+ * images or content. Anything else (a timeout, a rate limit, a server error, a lost connection) is the call's own
+ * failure and is reported as such, pictures or not.
+ */
+export function mayBePictureRefusal(err: unknown): boolean {
+  const e = err as { status?: unknown; statusCode?: unknown; response?: { status?: unknown }; message?: unknown } | null;
+  const status = [e?.status, e?.statusCode, e?.response?.status].find((x): x is number => typeof x === 'number');
+  if (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429) return true;
+  return /\bimages?\b|image_url|\bcontent\b/i.test(typeof e?.message === 'string' ? e.message : String(err));
+}
+
+/** The note when the chat model did not take a picture (V3: the repair goes on with the text view). */
+export const PICTURES_REFUSED_NOTE = 'the chat model did not take the screenshot, so the repair went on with the text view only';
+
+/**
+ * The agent loop over any tools: one tool call runs per turn (extra calls are answered "not run"), older page blocks are
+ * elided, three silent turns end it, model failures are masked, the circle guard nudges on the third repeat and stops on
+ * the fourth, and the action, token and time budgets stop it. Never throws for model errors.
+ */
+export async function driveAgentLoop<O extends string>(spec: LoopSpec<O>): Promise<LoopCore<O>> {
+  const { masker, tools } = spec;
+  const maxActions = spec.budget.maxActions ?? DEFAULT_MAX_ACTIONS;
+  const maxTokens = spec.budget.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const bound = spec.model.bindTools(spec.toolDefs);
+  const messages: ChatMessage[] = [{ role: 'system', content: spec.system }];
   let tokens = 0;
   let llmCalls = 0;
   let used = 0;
   let idle = 0;
+  let nudged = false;
+  let picturesOn = true;
+  let pictureCount = 0;
+  let pictureTokens = 0;
+  let pictureNote: string | undefined;
+  /** Messages before this index carry pictures of views that are no longer the latest (see latestPictureOnly). */
+  let staleBefore = 0;
   const maskArgs = (args: Record<string, unknown>) => JSON.parse(masker.mask(JSON.stringify(args))) as Record<string, unknown>;
-  const finish = (outcome: AgentLoopResult['outcome'], note: string): AgentLoopResult => ({
-    outcome, actions: tools.actions, tokens, llmCalls, note: masker.mask(note).slice(0, 500),
-    transcript: messages.map(({ raw: _raw, ...m }) => ({
+  const finish = (outcome: LoopCore<O>['outcome'], note: string): LoopCore<O> => ({
+    outcome, tokens, llmCalls, note: masker.mask(note).slice(0, 500),
+    // Pictures never leave in the transcript: only the text of their message does.
+    transcript: messages.map(({ raw: _raw, images: _images, ...m }) => ({
       ...m, content: masker.mask(m.content),
       ...(m.tool_calls ? { tool_calls: m.tool_calls.map((c) => ({ ...c, args: maskArgs(c.args ?? {}) })) } : {}),
     })),
-    ...(tools.codeSubmittedAt ? { codeSubmittedAt: tools.codeSubmittedAt } : {}),
-    ...(tools.signInStage ? { signInStage: tools.signInStage } : {}),
+    ...(pictureCount > 0 ? { pictures: { count: pictureCount, tokens: pictureTokens } } : {}),
+    ...(pictureNote ? { pictureNote } : {}),
   });
+  /** A user message with pictures (only while pictures are on), counted once each. */
+  const userMessage = (content: string, images: ChatImage[] | undefined): ChatMessage => {
+    if (!images?.length || !picturesOn) return { role: 'user', content };
+    pictureCount += images.length;
+    return { role: 'user', content, images };
+  };
+  const stop = () => spec.stopped?.();
 
-  if (ctx.violations.some((v) => v.fatal)) return finish('blocked', BLOCKED_STOP);
+  let halt = stop();
+  if (halt) return finish(halt.outcome, halt.note);
   try {
-    messages.push({ role: 'user', content: firstUserMessage(input.failure, await tools.look(), masker, input.route) });
+    const f = await spec.first();
+    messages.push(typeof f === 'string' ? { role: 'user', content: f } : userMessage(f.text, f.images));
   } catch (err) {
-    if (ctx.violations.some((v) => v.fatal)) return finish('blocked', BLOCKED_STOP);
-    return finish('error', `the page could not be read: ${(err as Error)?.message ?? String(err)}`);
+    halt = stop();
+    if (halt) return finish(halt.outcome, halt.note);
+    return finish('error', `${spec.unreadable}: ${(err as Error)?.message ?? String(err)}`);
   }
 
   for (;;) {
-    if (ctx.violations.some((v) => v.fatal)) return finish('blocked', BLOCKED_STOP);
-    if (input.signal?.aborted) return finish('budget', 'the run was cancelled');
-    const left = input.budget.deadlineMs - Date.now();
+    halt = stop();
+    if (halt) return finish(halt.outcome, halt.note);
+    if (spec.signal?.aborted) return finish('budget', 'the run was cancelled');
+    const left = spec.budget.deadlineMs - Date.now();
     if (left <= 0) return finish('budget', 'the time budget ran out');
     if (tokens >= maxTokens) return finish('budget', `the token budget of ${maxTokens} ran out`);
     if (used >= maxActions) return finish('budget', `the action budget of ${maxActions} ran out`);
@@ -183,31 +308,56 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), left);
     const relay = () => ac.abort();
-    input.signal?.addEventListener('abort', relay, { once: true });
+    spec.signal?.addEventListener('abort', relay, { once: true });
     const aborted = new Promise<never>((_, reject) => ac.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
     aborted.catch(() => undefined);
     let res: ChatResponse;
-    let sent: ChatMessage[] = messages;
-    // Attempts, not successes: a call that throws or times out may still have been billed, and the node's
-    // once-per-execution repair cap reads this count.
-    llmCalls++;
+    let sent: ModelMessage[] = [];
+    let sentImages: ChatImage[] = [];
+    const prepare = (withPictures: boolean) => {
+      const shown = latestPictureOnly(elideOldPages(messages), withPictures, staleBefore);
+      sentImages = shown.flatMap((m) => m.images ?? []);
+      sent = shown.map(toModelMessage);
+    };
     try {
-      sent = elideOldPages(messages);
-      res = await Promise.race([bound.invoke(sent, { signal: ac.signal }), aborted]);
+      prepare(picturesOn);
+      // Attempts, not successes: a call that throws or times out may still have been billed, and the node's
+      // once-per-execution repair cap reads this count.
+      llmCalls++;
+      try {
+        res = await Promise.race([bound.invoke(sent, { signal: ac.signal }), aborted]);
+      } catch (err) {
+        // A call with a picture that failed in a way a refused picture fails (mayBePictureRefusal): the same call goes
+        // again without pictures, once. Only when that works does the repair go on with the text view (V3); if it
+        // fails too, the first error is the one reported.
+        if (ac.signal.aborted || !sentImages.length || !picturesOn || !mayBePictureRefusal(err)) throw err;
+        prepare(false);
+        llmCalls++;
+        try {
+          res = await Promise.race([bound.invoke(sent, { signal: ac.signal }), aborted]);
+        } catch {
+          throw err;
+        }
+        picturesOn = false;
+        pictureNote = PICTURES_REFUSED_NOTE;
+        spec.picturesRefused?.();
+      }
     } catch (err) {
-      if (ac.signal.aborted) return finish('budget', input.signal?.aborted ? 'the run was cancelled' : 'the time budget ran out');
+      if (ac.signal.aborted) return finish('budget', spec.signal?.aborted ? 'the run was cancelled' : 'the time budget ran out');
       return finish('error', `the model call failed: ${modelErrorText((err as Error)?.message ?? String(err), masker)}`);
     } finally {
       clearTimeout(timer);
-      input.signal?.removeEventListener('abort', relay);
+      spec.signal?.removeEventListener('abort', relay);
     }
+    const sentPictureTokens = sentImages.reduce((n, i) => n + imageTokenEstimate(i), 0);
+    pictureTokens += sentPictureTokens;
     // Provider counts are untrusted: each one is used only as a finite, non-negative integer, so a negative or
     // fractional report can never lower the total or keep the token budget from running out.
     const inTok = tokenCount(res.usage_metadata?.input_tokens);
     const outTok = tokenCount(res.usage_metadata?.output_tokens);
     tokens += inTok !== undefined || outTok !== undefined
       ? (inTok ?? 0) + (outTok ?? 0)
-      : Math.ceil(sent.reduce((n, m) => n + m.content.length, 0) / 4);
+      : Math.ceil(sent.reduce((n, m) => n + modelMessageText(m).length, 0) / 4) + sentPictureTokens;
     const calls = (res.tool_calls ?? []).map((c, i) => (c.id ? c : { ...c, id: `call_${llmCalls}_${i}` }));
     messages.push({
       role: 'assistant', content: responseText(res.content) || '(no text)',
@@ -216,18 +366,51 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
     });
     if (calls.length === 0) {
       if (++idle >= MAX_IDLE_TURNS) return finish('error', 'the model stopped calling tools');
-      messages.push({ role: 'user', content: 'Reply with exactly one tool call. Call done when you have finished.' });
+      messages.push({ role: 'user', content: spec.idleText });
       continue;
     }
     idle = 0;
     const [first, ...extra] = calls;
-    if (ctx.violations.some((v) => v.fatal)) return finish('blocked', BLOCKED_STOP);
+    halt = stop();
+    if (halt) return finish(halt.outcome, halt.note);
     const out = await tools.run(first);
     used++;
-    messages.push({ role: 'tool', tool_call_id: first.id, content: out.text, status: out.error ? 'error' : 'success' });
+    const nudge = !out.done && !nudged && tools.lastRepeat >= CIRCLE_NUDGE && tools.lastRepeat < CIRCLE_STOP;
+    if (nudge) nudged = true;
+    const content = nudge ? withNote(out.text, spec.nudgeText) : out.text;
+    messages.push({ role: 'tool', tool_call_id: first.id, content, status: out.error ? 'error' : 'success' });
     // Every call gets its result (providers require the pairing); the extra ones say plainly that they did not run.
-    const notRun = `ERROR: not run: only the first tool call of a turn runs (only the ${echoedToolName(first.name)} call was run; read its result).`;
+    const notRun = `ERROR: not run: only the first tool call of a turn runs (only the ${echoedToolName(first.name, spec.toolNames)} call was run; read its result).`;
     for (const c of extra) messages.push({ role: 'tool', tool_call_id: c.id, content: notRun, status: 'error' });
+    // A tool result's picture comes after every tool result of the turn (providers pair results with calls first).
+    // An empty list: the tool took a new view without a picture, so the last picture is stale and goes no more.
+    if (out.images && picturesOn && !out.done) {
+      if (out.images.length) messages.push(userMessage(spec.pictureCaption ?? 'Screenshot for the result above.', out.images));
+      else staleBefore = messages.length;
+    }
     if (out.done) return finish(out.done.outcome, out.done.note);
+    if (tools.lastRepeat >= CIRCLE_STOP) return finish('circling', spec.circlingNote(tools.lastRepeat));
   }
+}
+
+/** Drives the model through the agent tools on the live page until it finishes or a budget runs out. Never throws for model errors. */
+export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResult> {
+  const { ctx, state, output } = input;
+  const masker = ctx.masker;
+  const tools = new AgentTools({ ctx, state, output, ...(input.download ? { download: input.download } : {}) });
+  const blocked = () => (ctx.violations.some((v) => v.fatal) ? { outcome: 'blocked' as const, note: BLOCKED_STOP } : undefined);
+  const core = await driveAgentLoop<DoneOutcome>({
+    model: input.model, tools, toolDefs: input.download ? FILE_AGENT_TOOLS : AGENT_TOOLS, toolNames: AGENT_TOOL_NAMES,
+    system: agentSystemPrompt(input.goal, output, { ...(input.download ? { download: input.download } : {}), vars: promptVars(ctx.vars, masker) }),
+    first: async () => firstUserMessage(input.failure, await tools.look(), masker, input.route),
+    unreadable: 'the page could not be read', masker, budget: input.budget, ...(input.signal ? { signal: input.signal } : {}), stopped: blocked,
+    nudgeText: CIRCLE_NUDGE_TEXT,
+    circlingNote: (n) => `it did the same action on the same page ${n} times without finding anything new`,
+    idleText: 'Reply with exactly one tool call. Call done when you have finished.',
+  });
+  return {
+    ...core, actions: tools.actions,
+    ...(tools.codeSubmittedAt ? { codeSubmittedAt: tools.codeSubmittedAt } : {}),
+    ...(tools.signInStage ? { signInStage: tools.signInStage } : {}),
+  };
 }

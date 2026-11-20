@@ -51,6 +51,11 @@ public sealed class WindowsProcessHost : SystemProcessHost
         return base.IsDescendantOf(pid, roots);
     }
 
+    public override void RequestClose(int pid)
+    {
+        if (!HasExited(pid)) Native.PostCloseToWindowsOf(pid);
+    }
+
     public override void KillTree(int pid)
     {
         if (_jobs.TryRemove(pid, out var job))

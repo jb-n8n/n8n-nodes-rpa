@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The recorder's scenario CI runs on Windows: a stand-in for a person drives ERP Demo with synthetic input while
+       RpaRecorder.exe records headless (its scenario build, published with -p:RecorderScenario=true: the package's
+       build refuses headless), and the recording is checked against the engine's golden recording. No
+       recorder code: it sees the recorder as a person and n8n would. WinForms only for the clipboard. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>Rpa.Recorder.Scenario</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+  </ItemGroup>
+</Project>

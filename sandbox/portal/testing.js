@@ -10,6 +10,11 @@ export const SANDBOX = {
   username: 'summit-ops',
   password: 'demo-password',
   totpSecret: 'JBSWY3DPEHPK3PXP',
+  // The two other dealer accounts (server.js ACCOUNTS): each home page names its own dealer. Only lakeside-ops asks for a code.
+  accounts: {
+    lakeside: { username: 'lakeside-ops', password: 'lakeside-password', totpSecret: 'LAKESIDE2345ABCD', name: 'Lakeside Auto', dealer: 'LA-4410' },
+    harbor: { username: 'harbor-ops', password: 'harbor-password', name: 'Harbor Cars', dealer: 'HB-2290' },
+  },
   bulletins: BULLETINS,
   erp: {
     header: LINE_ITEM_HEADER,

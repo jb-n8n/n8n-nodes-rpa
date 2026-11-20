@@ -2,8 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { openSession, type Session } from '../src/browser/session.js';
 import type { Page } from 'playwright-core';
-import { offListSite, PASSWORD_FILL_REFUSED_STEPS, SIGNIN_NEEDS_SITE_LOGIN } from '../src/messages.js';
+import { INPUT_CONTAINS_SECRET, offListSite, PASSWORD_FILL_REFUSED_STEPS, SIGNIN_NEEDS_SITE_LOGIN } from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
+import { classifyFailure, shownFailure } from '../src/classify/classify.js';
 import { runSteps, type StepContext } from '../src/steps/run.js';
 import type { Step } from '../src/types.js';
 import { baselineScript, LOCAL, policyFor, SECRETS, SIGN_IN_STEPS } from './helpers.js';
@@ -99,6 +100,35 @@ describe('runSteps basics', () => {
       expect(r.failure.message).toContain('[secret]');
     } finally { await session.close(); }
   });
+  it('a value the field\'s type refuses (text in a date field) says which field and value, keeps the browser\'s text, and is not drift (IB-10)', async () => {
+    const ctx = await ctxFor();
+    try {
+      await logIn(ctx.page);
+      const r = await runSteps(ctx, [
+        { intent: 'Open the reports', goto: '/acme/reports' },
+        { intent: 'Type into From: "2026-09-01"', fill: { field: { label: 'From' }, value: 'first of September' } },
+      ]);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.failure).toMatchObject({ index: 1, intent: 'Type into From: "2026-09-01"' });
+      expect(r.failure.message).toMatch(/^the field "From" did not take the value "first of September": it does not fit that field, for example text in a date field \(browser: locator\.fill: .*Malformed value.*\)$/);
+      expect(classifyFailure({ violations: [], failure: r.failure })).toBe('policy_violation');
+      expect(shownFailure(r.failure.intent, r.failure.message, r.failure.index)).toMatch(/^Step 2 \(Type into From: "2026-09-01"\): the field "From" did not take the value "first of September"/);
+    } finally { await session.close(); }
+  });
+  it('a control a signed bot no longer finds: no Find-by advice, the two ways on (IB-7)', async () => {
+    const ctx = await ctxFor();
+    try {
+      const step: Step = { intent: 'Click Line Item Report', timeoutMs: 300, click: { role: 'button', name: 'Line Item Report' } };
+      const signed = await runSteps({ ...ctx, signed: true }, [step]);
+      expect(signed.ok).toBe(false);
+      if (signed.ok) return;
+      expect(signed.failure.message).toMatch(/^No element found for Role and Name button "Line Item Report" on .* after 1 s\. The page no longer has that control\. To go on, change the bot on the import form, or let self-repair fix it if it is set up \(AI Repair on the RPA node\)\.$/);
+      expect(signed.failure.message).not.toContain('Find by');
+      const unsigned = await runSteps(ctx, [step]);
+      expect(unsigned.ok ? '' : unsigned.failure.message).toContain('Check the spelling or try Find by: Visible Text.');
+    } finally { await session.close(); }
+  });
   it('the fill verb refuses a password field with a fatal sign-in violation, before typing', async () => {
     const ctx = await ctxFor();
     try {
@@ -148,6 +178,86 @@ describe('runSteps basics', () => {
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.failure.message).toBe(SIGNIN_NEEDS_SITE_LOGIN);
       expect(ctx.violations).toContainEqual(expect.objectContaining({ kind: 'signin', fatal: true }));
+    } finally { await session.close(); }
+  });
+});
+
+describe('runSteps conditions', () => {
+  const fillUser = (intent: string, when: Step['when'], value: string): Step => ({ intent, when, fill: { field: { css: '#username' }, value } });
+  const notes = (r: Awaited<ReturnType<typeof runSteps>>) => r.state.log.map((l) => [l.status, l.note]);
+  it('a step with when.hidden runs when the element is absent and is skipped when it shows', async () => {
+    const ctx = await ctxFor();
+    try {
+      const r = await runSteps(ctx, [
+        fillUser('No banner', { hidden: { css: '#cookie-overlay' } }, 'absent'),
+        fillUser('User field gone', { hidden: { css: '#username' } }, 'shown'),
+      ]);
+      expect(r.ok).toBe(true);
+      expect(notes(r)).toEqual([['ok', undefined], ['skipped', 'condition not met']]);
+      expect(await session.page.inputValue('#username')).toBe('absent');
+    } finally { await session.close(); }
+  });
+  it('a step with a variable condition runs when the variable equals the value and is skipped with "condition not met" when it does not', async () => {
+    const ctx = await ctxFor();
+    try {
+      const r = await runSteps(ctx, [
+        fillUser('Same value', { var: 'dealer', equals: 'SM-7702' }, 'equal'),
+        fillUser('Other case', { var: 'dealer', equals: 'sm-7702' }, 'case differs'),
+      ]);
+      expect(r.ok).toBe(true);
+      expect(notes(r)).toEqual([['ok', undefined], ['skipped', 'condition not met']]);
+      expect(await session.page.inputValue('#username')).toBe('equal');
+    } finally { await session.close(); }
+  });
+  it('notEquals is the reverse', async () => {
+    const ctx = await ctxFor();
+    try {
+      const r = await runSteps(ctx, [
+        fillUser('Not another value', { var: 'dealer', notEquals: 'SM-0000' }, 'differs'),
+        fillUser('Not this value', { var: 'dealer', notEquals: 'SM-7702' }, 'same'),
+      ]);
+      expect(r.ok).toBe(true);
+      expect(notes(r)).toEqual([['ok', undefined], ['skipped', 'condition not met']]);
+      expect(await session.page.inputValue('#username')).toBe('differs');
+    } finally { await session.close(); }
+  });
+  it('a variable condition is checked before the locators are rendered: a skipped step needs none of its own variables', async () => {
+    const ctx = await ctxFor();
+    try {
+      const r = await runSteps(ctx, [
+        { intent: 'Detail', when: { var: 'dealer', equals: 'other' }, click: { role: 'link', name: '{{var.detail}}' } },
+        fillUser('After', undefined, 'ran'),
+      ]);
+      expect(r.ok).toBe(true);
+      expect(notes(r)).toEqual([['skipped', 'condition not met'], ['ok', undefined]]);
+      // An element condition still renders its locator first: an unset variable there fails as before.
+      const e = await runSteps(ctx, [{ intent: 'Gate', when: { hidden: { text: '{{var.detail}}' } }, click: { css: '#x' } }]);
+      expect(e.ok).toBe(false);
+      if (!e.ok) expect(e.failure.message).toBe('missing input "detail"');
+    } finally { await session.close(); }
+  });
+  it('a variable condition on a variable that holds a secret fill value is refused, never compared', async () => {
+    const ctx = { ...(await ctxFor()), masker: createMasker(['demo-password']), vars: { a: 'Tr0ub4dor-77-x', b: 'Tr0ub4dor-77-x' } };
+    try {
+      const r = await runSteps(ctx, [
+        fillUser('Gate', { var: 'b', equals: 'Tr0ub4dor-77-x' }, 'never'),
+        { intent: 'Type the export password', fill: { field: { css: '#password' }, value: '{{var.a}}', secret: true } },
+      ]);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure).toMatchObject({ index: 0, message: INPUT_CONTAINS_SECRET });
+      expect(await session.page.inputValue('#username')).toBe('');
+    } finally { await session.close(); }
+  });
+  it('a variable condition on an unset variable fails the run', async () => {
+    const ctx = await ctxFor();
+    try {
+      const r = await runSteps(ctx, [
+        fillUser('Unknown', { var: 'region', equals: '' }, 'never'),
+        fillUser('After', undefined, 'never either'),
+      ]);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure).toMatchObject({ index: 0, message: 'missing input "region"' });
+      expect(await session.page.inputValue('#username')).toBe('');
     } finally { await session.close(); }
   });
 });

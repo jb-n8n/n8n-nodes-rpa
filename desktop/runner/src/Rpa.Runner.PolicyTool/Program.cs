@@ -152,6 +152,19 @@ internal sealed class PolicyFiles : IPolicyFiles
     public void CreateBackupFolder(string folder) =>
         new DirectoryInfo(folder).Create(AdministratorsOnly(new DirectorySecurity(), InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit));
 
+    /// <summary>The same test as the backup folder's, in the change folder's words.</summary>
+    public IReadOnlyList<string> ChangeFolderProblems(string folder) =>
+        new DirectoryInfo(folder).Attributes.HasFlag(FileAttributes.ReparsePoint)
+            ? ["the change folder is a link to another folder"]
+            : PolicyFileCheck.FolderProblems(folder, "the change folder");
+
+    /// <summary>Created as the backup folder is: for administrators only, and what is created in it inherits that.</summary>
+    public void CreateChangeFolder(string folder) => CreateBackupFolder(folder);
+
+    /// <summary>Created as a backup is: a new file for administrators only from before its first byte, then with the
+    /// change folder's rules.</summary>
+    public void CreateChangeCopy(string path, byte[] content) => CreateBackup(path, content);
+
     /// <summary>
     /// The backup is a new file, created for administrators only like the temporary file; once written, its owner is
     /// Administrators and its access rules are the ones it inherits from the backup folder. It does not carry the

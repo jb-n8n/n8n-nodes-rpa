@@ -108,7 +108,7 @@ variable "n8n_extra_env" {
 # ── The browser service ──────────────────────────────────────────────────────
 
 variable "browser_image" {
-  description = "The rpa-browser image: repository plus tag and/or digest, for example { repository = \"ghcr.io/jb-n8n/rpa-browser\", tag = \"<version>\" }. Its run-server must match the node's playwright-core (README, Version matching)."
+  description = "The rpa-browser image: repository plus tag and/or digest, for example { repository = \"ghcr.io/jb-n8n/rpa-browser\", tag = \"<version>\" }. Its run-server must match the node's playwright-core (docs/reference/operator.md, Version matching)."
   type = object({
     repository = string
     tag        = optional(string, "")

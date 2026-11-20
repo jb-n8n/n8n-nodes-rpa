@@ -3,7 +3,8 @@
 # It runs beside the default stack: its own project name (`name:` below overrides docker-compose.yml's n8n-rpa; `-p`
 # makes it explicit),
 # its own image tags (so a build here never replaces the images the default stack runs), and its own host ports:
-# n8n http://localhost:35678, sandbox :38080, Mailpit :38025, browser gate :33000 (all on 127.0.0.1).
+# n8n http://localhost:35678, sandbox :38080, Mailpit :38025, browser gate :33000 (all on 127.0.0.1). n8n's port is one
+# setting, RPA_QUEUE_N8N_PORT in .env (default 35678): it is both the published port and the port in N8N_WEBHOOK_URL.
 # Run Steps with an RPA Site Login needs an RPA Redis credential here: Host `redis`, Port 6379, no user or password.
 # Redis and Postgres are on their own `queue` network with n8n and the workers; the browser is not on it, so a page that
 # took over the browser cannot reach the queue, the breaker or the lock. Neither publishes a port.
@@ -12,7 +13,7 @@ name: n8n-rpa-queue
 # Merged into n8n and both workers. Workers take everything else (the encryption key included) from docker-compose.yml's
 # n8n service through `extends`.
 x-queue-env: &queue-env
-  WEBHOOK_URL: http://localhost:35678/
+  N8N_WEBHOOK_URL: http://localhost:${RPA_QUEUE_N8N_PORT:-35678}/
   EXECUTIONS_MODE: queue
   OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS: "true"
   QUEUE_BULL_REDIS_HOST: redis
@@ -42,7 +43,7 @@ services:
     image: n8n-rpa/n8n:queue
     environment: *queue-env
     ports: !override
-      - "127.0.0.1:35678:5678" # n8n editor
+      - "127.0.0.1:${RPA_QUEUE_N8N_PORT:-35678}:5678" # n8n editor (RPA_QUEUE_N8N_PORT, the same as in N8N_WEBHOOK_URL above)
     networks: [browser, mail, queue]
     depends_on: *queue-depends
     healthcheck: *n8n-health

@@ -5,7 +5,7 @@ import { classifyFailure, stripShownPrefix } from '../classify/classify.js';
 import { runBinaryProblem } from '../steps/limits.js';
 import type { DownloadTemplate } from '../steps/file-check.js';
 import { CompileError, compileProposal, type CompileResult } from '../compile/compile.js';
-import { AGENT_SIGN_IN_UNFINISHED, agentSignInLocked, agentSignInRejected, FILE_NOT_DELIVERABLE, FILE_WITHHELD, ROWS_WITHHELD } from '../messages.js';
+import { AGENT_OUT_OF_BUDGET, AGENT_SIGN_IN_UNFINISHED, agentSignInLocked, agentSignInRejected, FILE_NOT_DELIVERABLE, FILE_WITHHELD, ROWS_WITHHELD, WENT_IN_CIRCLES, withCost } from '../messages.js';
 import { noWritePolicy } from '../policy/derive.js';
 import { flattenSteps, loginBlockEnd } from '../policy/validate.js';
 import { buildProposal, proposalDigest, type Proposal } from '../proposal/proposal.js';
@@ -18,7 +18,7 @@ import { isVisibleNow } from '../steps/locator.js';
 import { newRunState, type StepContext } from '../steps/run.js';
 import { stopTrace, wantTrace } from '../trace/trace.js';
 import { maskSessionSegments, shownMessage } from '../steps/urls.js';
-import type { ChatModel } from '../agent/model.js';
+import { countingModel } from '../agent/model.js';
 import type { ErrorCode, RunState, Script, StepFailure, Violation } from '../types.js';
 import { verifyRows } from '../verify/verify.js';
 import { runProve } from './prove-run.js';
@@ -95,16 +95,6 @@ export async function finishLane(input: TaskInput, runtime: LaneRuntime, result:
   return out;
 }
 
-/** The model with every invoke counted before it is sent: the count survives a throw anywhere in the agent lane. */
-function countingModel(model: ChatModel, calls: { n: number }): ChatModel {
-  return {
-    bindTools(defs) {
-      const bound = model.bindTools(defs);
-      return { invoke(messages, options) { calls.n++; return bound.invoke(messages, options); } };
-    },
-  };
-}
-
 export async function agentLane(input: TaskInput, original: RepairInput, h: Handoff): Promise<TaskResult> {
   // Every agent-lane result carries llmCalls, the thrown path included.
   const calls = { n: 0 };
@@ -148,6 +138,8 @@ export async function agentLane(input: TaskInput, original: RepairInput, h: Hand
   const wrote = h.prior.submitted || session.writesSent > 0;
   if (result.ok && result.lane === 'agent') result = { ...result, submitted: wrote };
   else if (!result.ok && wrote) result = { ...result, submitted: true };
+  // A new password the script lane's sign-in set before the drift is in use now: the workflow must learn it either way.
+  if (h.prior.passwordChanged) result = { ...result, passwordChanged: true };
   return finishLane(input, h.runtime, result, released);
 }
 
@@ -275,8 +267,9 @@ async function agentLaneBody(input: TaskInput, repair: RepairInput, h: Handoff, 
   const extra = { lane: 'agent' as const, agentLog, tokens, llmCalls, transcript };
   const scriptFailure = h.failure ? { failure: { ...h.failure, intent: masker.mask(h.failure.intent), message: masker.mask(h.failure.message) } } : {};
   // Messages carry model notes, prove reasons and compile issues: every URL in them is shown without query string.
+  // Once the model was called, the message ends with what it used (calls and tokens), where a person reads it.
   const fail = (code: ErrorCode, message: string, more: Violation[] = []): TaskFailure => ({
-    ...laneFailure(h.t0, masker, code, shownMessage(message, masker), {
+    ...laneFailure(h.t0, masker, code, withCost(shownMessage(message, masker), llmCalls, tokens), {
       violations: [...session.violations, ...more], blockedRequests: session.blockedRequests, log, ...scriptFailure,
       ...(h.version !== undefined ? { version: h.version } : {}), ...(h.hash ? { hash: h.hash } : {}),
     }),
@@ -298,7 +291,8 @@ async function agentLaneBody(input: TaskInput, repair: RepairInput, h: Handoff, 
   }
   if (loop.outcome === 'blocked') return fail('auth_blocked', `the agent could not continue: ${loop.note}`);
   if (loop.outcome === 'not_found') return fail('not_found', `the agent did not find the data: ${loop.note}`);
-  if (loop.outcome === 'budget') return fail('incomplete', `the agent ran out of budget: ${loop.note}`);
+  if (loop.outcome === 'budget') return fail('incomplete', `${AGENT_OUT_OF_BUDGET}: ${loop.note}`);
+  if (loop.outcome === 'circling') return fail('incomplete', `${h.base ? 'the repair' : 'the AI'} ${WENT_IN_CIRCLES}: ${loop.note}`);
   if (loop.outcome === 'error') {
     // 'error' is infrastructure: the model failed or went silent (or, rarely, the page could not be read at all).
     if (loop.note.startsWith(PAGE_UNREADABLE)) return fail('incomplete', `the agent could not continue: ${loop.note}`);
@@ -348,7 +342,7 @@ async function agentLaneBody(input: TaskInput, repair: RepairInput, h: Handoff, 
     if (input.signal?.aborted) return fail('incomplete', CANCELLED);
     if (prove.policyViolation) {
       // The prove trace (scrubbed) shows the blocked request: it replaces the healing trace.
-      const out = fail('policy_violation', 'the compiled script attempted a blocked request during prove', prove.violations);
+      const out = fail('policy_violation', 'the compiled steps attempted a blocked request during prove', prove.violations);
       return prove.trace ? { ...out, trace: prove.trace } : out;
     }
     if (prove.ok) {

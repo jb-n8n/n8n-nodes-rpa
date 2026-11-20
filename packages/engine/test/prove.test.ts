@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startPortal, SANDBOX } from 'n8n-rpa-sandbox/testing.js';
 import { openSession } from '../src/browser/session.js';
 import { openReusedSession } from '../src/prove/entry.js';
+import { filesEvidenceProblem } from '../src/import/adopt.js';
 import { proveScript, type ProveInput } from '../src/prove/prove.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { installInterrupts } from '../src/steps/interrupts.js';
@@ -88,7 +89,7 @@ describe('proveScript', () => {
     const state = await healingState();
     const r = await prove(baselineScript(portal.url, 2), { ...state, agentRows: [], output: { idPattern: 'N26-\\d{4}', emptyPattern: 'No active notices' } });
     expect(r.ok).toBe(false);
-    expect(r.reasons).toEqual(['a zero-row proof cannot confirm a recorded script']);
+    expect(r.reasons).toEqual(['a zero-row proof cannot confirm recorded steps']);
     expect(r.policyViolation).toBe(false);
   });
   it('fails when the count does not match the stated total', async () => {
@@ -142,7 +143,7 @@ describe('proveScript', () => {
     expect(JSON.stringify(boom.reasons)).not.toContain(SECRETS.password);
     const cant = await prove(baselineScript(portal.url, 2), { endpoint: { mode: 'playwright', wsUrl: 'ws://127.0.0.1:1/never' } });
     expect(cant.ok).toBe(false);
-    expect(cant.reasons[0]).toMatch(/^could not open a browser to prove the script/);
+    expect(cant.reasons[0]).toMatch(/^could not open a browser to prove the steps/);
   });
   it('proves a full replay that starts on a login page served with 401', async () => {
     const script = { ...baselineScript(portal.url, 2), startUrl: `${portal.url}/acme/login?status=401` };
@@ -325,6 +326,45 @@ describe('file proofs', () => {
     expect(r.ok).toBe(false);
     expect(r.reasons).toEqual(['the proof downloaded 2 files; expected one']);
     expect(r).not.toHaveProperty('file');
+  });
+  describe('several files or a screenshot (expectFiles)', () => {
+    const proveFiles = (script: Script) => proveScript({
+      script, policy: publicPolicy(portal, { startUrl: script.startUrl }), output: {}, endpoint: LOCAL, masker,
+      defaultStepTimeoutMs: 3000, budgetMs: 30_000, agentRows: [], expectFiles: true,
+    });
+    const csv = { intent: 'Download the report', download: { trigger: { css: '#csv' }, mime: ['text/csv'], check: { name: '^report', columns: ['code'] } } } as Step;
+    const zip = { intent: 'Download the archive', download: { trigger: { css: '#zip' }, mime: ['application/zip'], check: { name: '^archive' } } } as Step;
+    const shot = { intent: 'Keep a screenshot', screenshot: { capture: 'viewport' } } as Step;
+    it('passes with each checked file and the screenshot, each with its step number', async () => {
+      const script: Script = { ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, csv, shot, zip] };
+      const r = await proveFiles(script);
+      // What a real proof gives is what Sign Steps takes: the one rule (filesEvidenceProblem).
+      expect(filesEvidenceProblem(script, r.files, r.screenshots)).toBeUndefined();
+      expect(r.reasons).toEqual([]);
+      expect(r.ok).toBe(true);
+      expect(r.files?.map((f) => [f.step, f.fileName])).toEqual([[2, 'report.csv'], [4, 'archive.zip']]);
+      expect(r.files?.[0]).toMatchObject({ mimeType: 'text/csv', bytes: 'code,name\nSKU-1,Widget\n'.length, columns: ['code', 'name'], rows: 1 });
+      expect(r.screenshots).toEqual([3]);
+      expect(r).not.toHaveProperty('file');
+    });
+    it('a step its condition skipped is not listed; an optional download that brought no file fails the proof', async () => {
+      const skipped = { ...zip, when: { visible: { text: 'No such text' } } } as Step;
+      const withSkip: Script = { ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, csv, skipped] };
+      const ok = await proveFiles(withSkip);
+      expect(filesEvidenceProblem(withSkip, ok.files, ok.screenshots)).toBeUndefined();
+      expect(ok.reasons).toEqual([]);
+      expect(ok.files?.map((f) => f.step)).toEqual([2]);
+      const missing = { intent: 'Download a missing file', optional: true, timeoutMs: 500, download: { trigger: { css: '#none' }, check: { name: '^x' } } } as Step;
+      const r = await proveFiles({ ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, csv, missing] });
+      expect(r.ok).toBe(false);
+      expect(r.reasons).toEqual(['the download in step 3 brought no file in the proof']);
+    });
+    it('a proof that downloaded nothing and took no screenshot fails', async () => {
+      const skipped = { ...shot, when: { visible: { text: 'No such text' } } } as Step;
+      const r = await proveFiles({ ...filesScript(null), steps: [{ intent: 'Open the files page', goto: `${portal.url}/public/files` }, skipped] });
+      expect(r.ok).toBe(false);
+      expect(r.reasons).toEqual(['the proof downloaded no file and took no screenshot']);
+    });
   });
   it('a file proof with a failing check fails with the check reason', async () => {
     const r = await proveFile(filesScript({ check: { columns: ['No Such Column'] } }));

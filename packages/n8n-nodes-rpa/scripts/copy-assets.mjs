@@ -27,6 +27,6 @@ for (const file of walk(engineDist).filter((f) => f.endsWith('.js'))) {
 }
 // The engine is an ES module; the node package itself is CommonJS.
 writeFileSync(join(root, 'dist', 'engine', 'package.json'), '{ "type": "module" }\n');
-// The step document's JSON Schema, for editors (README: Step schema).
+// The step document's JSON Schema, for editors (docs/reference/steps.md: Step schema).
 mkdirSync(join(root, 'dist', 'schema'), { recursive: true });
 cpSync(join(root, '..', 'engine', 'schema', 'steps.schema.json'), join(root, 'dist', 'schema', 'steps.schema.json'));

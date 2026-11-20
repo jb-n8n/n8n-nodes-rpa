@@ -110,6 +110,21 @@ public class SystemProcessHost : IProcessHost
         }
     }
 
+    /// <summary>Asks the main window of a process this host started to close (no input is sent).</summary>
+    public virtual void RequestClose(int pid)
+    {
+        if (!_started.TryGetValue(pid, out var p)) return;
+        try { if (!p.HasExited) p.CloseMainWindow(); }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { /* gone, or exiting */ }
+    }
+
+    public virtual bool HasExited(int pid)
+    {
+        if (!_started.TryGetValue(pid, out var p)) return true;
+        try { return p.HasExited; }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { return true; }
+    }
+
     /// <summary>Kills a process this host started (never another process that happens to have the id).</summary>
     public virtual void KillTree(int pid)
     {

@@ -26,6 +26,22 @@ public interface IUiNode
     /// <summary>The value (UI Automation ValuePattern), or null when the element has none.</summary>
     string? Value { get; }
 
+    /// <summary>The bounding rectangle on the screen (physical pixels; empty when nothing of it is shown), or null when it
+    /// cannot be read.</summary>
+    PixelRect? Bounds { get; }
+
+    /// <summary>
+    /// Texts the element may show beyond Name and Value: its TextPattern document text and its LegacyIAccessible name and
+    /// value, where it has them. Null when it has such content that cannot be read (or is too long to read whole), its
+    /// Value included: an element whose ValuePattern is supported but whose value cannot be read answers null here
+    /// (Value itself answers null too, which alone would look like no value).
+    /// </summary>
+    IReadOnlyList<string>? OtherTexts { get; }
+
+    /// <summary>Every descendant in UI Automation's raw view (not only control elements), in document order. Throws
+    /// ElementGoneException when the element cannot be read.</summary>
+    IReadOnlyList<IUiNode> RawDescendants();
+
     IReadOnlyList<IUiNode> GetChildren();
 
     IUiNode? GetParent();
@@ -93,6 +109,20 @@ public interface IDesktop
     byte[] CaptureWindowPng(IUiNode window);
 
     /// <summary>
+    /// One top-level window's own pixels (not what overlaps it) and the processes of its child windows, for AI repair's
+    /// masked picture (RepairPicture). Null when the window is minimized or has no size. Throws ElementGoneException when
+    /// it went away.
+    /// </summary>
+    WindowCapture? CaptureWindow(IUiNode window);
+
+    /// <summary>A top-level window's rectangle as the capture reads it (GetWindowRect), or null when it cannot be read.</summary>
+    PixelRect? GetWindowRect(IUiNode window);
+
+    /// <summary>The rectangle of an element's own native window (GetWindowRect of its NativeWindowHandle), or null when
+    /// it has none: checked against UI Automation's rectangle before a box is trusted.</summary>
+    PixelRect? GetNativeRect(IUiNode element);
+
+    /// <summary>
     /// The clipboard's sequence number (GetClipboardSequenceNumber): it changes every time the clipboard's content
     /// changes. 0 when the runner cannot see the clipboard.
     /// </summary>
@@ -135,6 +165,15 @@ public interface IProcessHost
     /// before the child, so a reused process id cannot pose as a parent.
     /// </summary>
     bool IsDescendantOf(int pid, IReadOnlyCollection<int> roots);
+
+    /// <summary>
+    /// Asks the process to close the way a person closing its windows would (a close request to its top-level
+    /// windows). Never types, clicks or answers a question the app asks. Returns at once and does not wait.
+    /// </summary>
+    void RequestClose(int pid);
+
+    /// <summary>True when the process has ended, or is not one this host started.</summary>
+    bool HasExited(int pid);
 
     /// <summary>Kills the process and its descendants; ignores processes that already exited.</summary>
     void KillTree(int pid);

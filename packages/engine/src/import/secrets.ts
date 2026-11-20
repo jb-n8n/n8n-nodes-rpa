@@ -2,11 +2,11 @@
 // the recorded sign-in becomes one signIn event (with a Site Login) or is removed (without one), every other credential
 // value is removed with its step, and labels, locators, addresses and report items that name a secret are redacted.
 import { IMPORT_NEEDS_SITE_LOGIN } from '../messages.js';
-import { CREDENTIAL_FIELD, STRICT_TOTP_FIELD } from '../secrets/credential-field.js';
+import { CREDENTIAL_FIELD, PASSWORD_FIELD, STRICT_TOTP_FIELD } from '../secrets/credential-field.js';
 import { createMasker, type Masker } from '../secrets/mask.js';
 import { canonicalize } from '../sign.js';
 import type { Locator } from '../types.js';
-import { capEvent, MAX_CANDIDATE_CHARS, MIN_SECRET_LENGTH, nameOf } from './draft.js';
+import { capEvent, describeEvent, MAX_CANDIDATE_CHARS, MIN_SECRET_LENGTH, nameOf } from './draft.js';
 import type { Candidate, ImportEvent, ImportItem, ImportOptions, ImportReport } from './types.js';
 
 const PASSWORD_TYPE = /type\s*=\s*["']?password\b/i;
@@ -15,8 +15,6 @@ const TOTP_FIELD = /code|otp|token|2fa|verification|authenticat/i;
 const TOTP_VALUE = /^\d{6,8}$/;
 /** The hint a fill typed from a TOTP activity's output carries (the UiPath importer adds it): that fill is the code. */
 export const TOTP_OUTPUT_HINT = 'one-time code (a TOTP activity output)';
-/** A field that is a password field, not merely credential-looking ("Passenger"): only one starts a sign-in. */
-const PASSWORD_NAMED = /password|passwd|passwort|kennwort|passcode|pwd|\bpin\b/i;
 /** A field labelled like a username, preferred over the nearest fill when no value matches the Site Login username. */
 const USERNAME_NAMED = /user|login|e-?mail|account|\bid\b/i;
 
@@ -35,12 +33,17 @@ const AMBIGUOUS_USERNAME =
 const SIGN_IN_PAGES =
   'the username and password are on different pages with more than one click, or a field, between them; the import builds signIn with next only when one click or Enter separates them: add the sign-in by hand';
 const BETWEEN_PAGES = 'it checks the page between the username and the password, which signIn passes in one step (next)';
-const CODE_FROM_EXPRESSION = 'the code is not typed text (an expression or a variable, such as a TOTP activity\'s output): the sign-in types a fresh code from the Site Login\'s authenticator secret';
+const HOVER_BETWEEN_PAGES = 'it is on the page between the username and the password, which signIn passes in one step (next)';
+/** A wait or a hover: neither leaves the page nor types, so the sign-in grouping steps over both. */
+const isPause = (e: ImportEvent): boolean => e.kind === 'waitFor' || e.kind === 'hover';
+const CODE_FROM_EXPRESSION = 'the code is not typed text (an expression or a variable, such as a TOTP activity\'s output): the sign-in types a fresh code from the Site Login\'s authenticator secret, or from the One-Time Code Workflow when one is set';
 const CODE_UNJOINED = 'the code step could not be joined to the sign-in: it must follow the sign-in\'s submit on the same page, then a click or Enter';
 const SIGN_IN_INCOMPLETE =
   'the recorded sign-in needs a username field before the password and a submit control after it, on the same page: add a signIn step to the draft';
 
 type Typed = Extract<ImportEvent, { kind: 'fill' | 'select' }>;
+/** Each value a fill or select types: one, or each option of a multi-select. */
+const valuesOf = (e: Typed): string[] => [e.value].flat();
 type Role = 'username' | 'password' | 'totp' | undefined;
 
 /** Every string a locator carries (not its role), its scope's and its fallbacks' too. */
@@ -55,7 +58,7 @@ const isCredentialField = (e: Typed): boolean => e.secure === true || fieldTexts
 /** A code typed with a separator (`123 456`, `123-456`) is still a code. */
 const compactCode = (v: string): string => v.replace(/[\s-]/g, '');
 const isTotpLabelled = (e: Typed): boolean => fieldTexts(e).some((t) => TOTP_FIELD.test(t));
-const isTotpField = (e: Typed): boolean => TOTP_VALUE.test(compactCode(e.value)) && isTotpLabelled(e);
+const isTotpField = (e: Extract<ImportEvent, { kind: 'fill' }>): boolean => TOTP_VALUE.test(compactCode(e.value)) && isTotpLabelled(e);
 /** A field typed from an expression that is the code: a TOTP activity's output, or its own texts name a code. */
 const isExpressionCodeField = (e: Typed): boolean => e.hints.includes(TOTP_OUTPUT_HINT)
   || [e.label, ...e.target.flatMap(locatorStrings)].some((t) => STRICT_TOTP_FIELD.test(t.slice(0, MAX_CANDIDATE_CHARS).trim()));
@@ -64,7 +67,8 @@ const isExpressionCodeField = (e: Typed): boolean => e.hints.includes(TOTP_OUTPU
  * `[strOtp]` from a TOTP activity) or only a template (`{{var.otp}}`, a mapped variable).
  */
 const isExpressionValue = (v: string): boolean => v.trim() === '' || /^\s*\{\{[^{}]*\}\}\s*$/.test(v);
-const isPasswordField = (e: Typed): boolean => e.secure === true || fieldTexts(e).some((t) => PASSWORD_TYPE.test(t) || PASSWORD_NAMED.test(t));
+/** A field that is a password field, not merely credential-looking ("Client secret"): only one starts a sign-in. */
+const isPasswordField = (e: Typed): boolean => e.secure === true || fieldTexts(e).some((t) => PASSWORD_TYPE.test(t) || PASSWORD_FIELD.test(t));
 const isUsernameLike = (e: Typed): boolean => fieldTexts(e).some((t) => USERNAME_NAMED.test(t));
 const sameElement = (a: Candidate[], b: Candidate[]): boolean => {
   const keys = new Set(a.map((c) => canonicalize({ ...c, fallbacks: undefined })));
@@ -111,7 +115,7 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
   const shortSecrets = slValues.filter((s) => s.length < MIN_SECRET_LENGTH);
   const isShortSecret = (t: string) => shortSecrets.some((x) => same(t, x));
   const maskText = (t: string) => (isShortSecret(t) ? '[secret]' : masker.mask(t));
-  const add = (at: string, kind: ImportItem['kind'], what: string, reason: string) => items.push({ at, kind, what, reason });
+  const add = (at: string, kind: ImportItem['kind'], what: string, reason: string, notNeeded = false) => items.push({ at, kind, what, reason, ...(notNeeded ? { notNeeded: true as const } : {}) });
   const reportSecret = (e: Typed, reason: string) => add(e.at, 'secret', nameOf(e.label, e.target) || 'a field', reason);
 
   const roleOf = (e: ImportEvent): Role => {
@@ -146,22 +150,27 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
 
   const removed = new Set<number>(emptied);
   const typedSecrets: { value: string; wholeNumber: boolean }[] = [];
+  /** An option of a multi-select that is a secret by its value: a Site Login value, or one that holds a known secret. */
+  const secretOption = (v: string) => slValues.some((s) => equalsSecret(v, s)) || masker.containsSecret(v);
   const strip = (i: number, reason = NEVER_IMPORTED) => {
     const e = events[i] as Typed;
     if (removed.has(i)) return;
     removed.add(i);
-    if (e.value) typedSecrets.push({ value: e.value, wholeNumber: roles[i] === 'totp' });
-    if (e.value && roles[i] === 'totp') typedSecrets.push({ value: compactCode(e.value), wholeNumber: true });
+    // A multi-select's other options are not secrets: only the options that are one count as typed secrets elsewhere.
+    for (const value of Array.isArray(e.value) ? e.value.filter(secretOption) : [e.value]) {
+      if (value) typedSecrets.push({ value, wholeNumber: roles[i] === 'totp' });
+      if (value && roles[i] === 'totp') typedSecrets.push({ value: compactCode(value), wholeNumber: true });
+    }
     reportSecret(e, reason);
   };
   const removeWithFocus = (fields: number[]) => {
     for (const [click, field] of focusOf) if (fields.includes(field)) removed.add(click);
   };
-  /** The submit after a field: the next click (not one that focuses a field) or Enter; -1 at a goto or another field. */
+  /** The submit after a field: the next click (not one that focuses a field) or Enter; -1 at a goto or another field. A key press (Tab to the button) stays on the page. */
   const submitAfter = (from: number): number => {
     for (let k = from + 1; k < events.length; k++) {
       const e = events[k];
-      if (e.kind === 'report' || e.kind === 'expectUrl' || e.kind === 'waitFor') continue;
+      if (e.kind === 'report' || e.kind === 'expectUrl' || isPause(e) || e.kind === 'press') continue;
       if (e.kind === 'click' && focusOf.has(k)) continue;
       return e.kind === 'click' || e.kind === 'enter' ? k : -1;
     }
@@ -182,13 +191,14 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       let j = from - 1;
       for (let clicks = 0; leaving && j >= 0; j--) {
         const e = events[j];
-        if (e.kind === 'report' || e.kind === 'waitFor' || e.kind === 'expectUrl') continue;
+        if (e.kind === 'report' || isPause(e) || e.kind === 'expectUrl') continue;
         if (((e.kind === 'click' && !focusOf.has(j)) || e.kind === 'enter') && clicks++ === 0) continue;
         break;
       }
       for (; j >= 0; j--) {
         const e = events[j];
-        if (e.kind === 'report' || e.kind === 'waitFor' || (e.kind === 'click' && focusOf.has(j))) continue;
+        // A key press (Tab from one field to the next) stays on the page.
+        if (e.kind === 'report' || isPause(e) || e.kind === 'press' || (e.kind === 'click' && focusOf.has(j))) continue;
         if (e.kind === 'fill' || e.kind === 'select' || e.kind === 'check') {
           if (e.kind === 'fill' && roles[j] !== 'password' && roles[j] !== 'totp') fills.push(j);
           continue;
@@ -208,9 +218,9 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       return { confident, ambiguous: [...new Set([fills[0], ...fills.filter(usernameLike)].filter((j) => j !== undefined))] };
     };
     /**
-     * The one click or Enter (`next`) that left the page before `to` for the page `to` is on, and the URL checks and
-     * waits after it; undefined unless only those, report events and `to`'s focus click lie between `next` and `to`, and
-     * only URL checks, waits and report events lie between the previous page's last field (or its focus click) and `next`.
+     * The one click or Enter (`next`) that left the page before `to` for the page `to` is on, and the URL checks,
+     * waits and hovers after it; undefined unless only those, report events and `to`'s focus click lie between `next` and
+     * `to`, and only URL checks, waits, hovers and report events lie between the previous page's last field (or its focus click) and `next`.
      * A click marked `popup` is never `next`.
      */
     const leftFor = (to: number): { next: number; checks: number[] } | undefined => {
@@ -219,7 +229,7 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       for (let j = to - 1; j >= 0; j--) {
         const e = events[j];
         if (e.kind === 'report') continue;
-        if (e.kind === 'expectUrl' || e.kind === 'waitFor') { if (next < 0) checks.push(j); continue; }
+        if (e.kind === 'expectUrl' || isPause(e)) { if (next < 0) checks.push(j); continue; }
         if (next < 0 && e.kind === 'click' && focusOf.get(j) === to) continue;
         // A click that opened a popup left the page for another tab: the password page is not where `next` leads.
         if (next < 0 && e.kind === 'click' && e.popup) return undefined;
@@ -275,7 +285,7 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       for (let k = s + 1; k < events.length; k++) {
         const e = events[k];
         if (e.kind === 'report') continue;
-        if (e.kind === 'expectUrl' || e.kind === 'waitFor') { between.push(k); continue; }
+        if (e.kind === 'expectUrl' || isPause(e)) { between.push(k); continue; }
         if (e.kind === 'click' && focusOf.has(k) && isCode(focusOf.get(k)!)) continue;
         if (e.kind === 'fill' && isCode(k)) t = k;
         break;
@@ -291,7 +301,7 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
     const complete = u >= 0 && s >= 0;
     const fields = [...new Set([...earlier, u, ...ambiguous, p, ...(complete && ts >= 0 ? [t] : [])])].filter((i) => i >= 0).sort((a, b) => a - b);
     for (const i of fields) {
-      const why = i === t && isExpressionValue((original[i] as Typed).value) ? CODE_FROM_EXPRESSION : NEVER_IMPORTED;
+      const why = i === t && valuesOf(original[i] as Typed).every(isExpressionValue) ? CODE_FROM_EXPRESSION : NEVER_IMPORTED;
       strip(i, i !== u && (ambiguous.includes(i) || (earlier.includes(i) && roles[i] !== 'username')) ? AMBIGUOUS_USERNAME : why);
       joined.add(i);
     }
@@ -300,9 +310,24 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       const hops = twoPage ? [twoPage.next, ...twoPage.checks] : [];
       const members = [s, ...hops, ...(ts >= 0 ? [ts, ...between] : [])];
       for (const i of members) removed.add(i);
-      const checkName = (i: number, wait: string) => events[i].kind === 'expectUrl' ? `URL check ${(events[i] as { path: string }).path}` : wait;
-      for (const i of twoPage ? [...twoPage.checks].reverse() : []) add(events[i].at, 'dropped', checkName(i, 'Wait between the username and the password'), BETWEEN_PAGES);
-      for (const i of ts >= 0 ? between : []) add(events[i].at, 'dropped', checkName(i, 'Wait between the sign-in and the code'), 'it checks the page between the password and the code, which signIn passes in one step');
+      // A key pressed between the sign-in's fields moved between them, which signIn does itself.
+      for (let k = Math.min(...fields) + 1; k < s; k++) {
+        const e = events[k];
+        if (e.kind !== 'press' || removed.has(k)) continue;
+        removed.add(k);
+        const tab = e.key === 'Tab' || e.key === 'Shift+Tab';
+        add(e.at, 'dropped', describeEvent(e), tab ? 'it moves between the sign-in\'s fields, which the sign-in step does itself' : 'it is pressed between the sign-in\'s fields, which the sign-in step fills and submits by itself', tab);
+      }
+      const checkName = (i: number, wait: string) => {
+        const e = events[i];
+        return e.kind === 'expectUrl' ? `URL check ${e.path}` : e.kind === 'hover' ? `Hover over ${nameOf(e.label, e.target) || 'the element'}` : wait;
+      };
+      const isHover = (i: number) => events[i].kind === 'hover';
+      // A check or wait between the parts is what signIn does itself; a hover there could open something, so it is listed.
+      for (const i of twoPage ? [...twoPage.checks].reverse() : []) add(events[i].at, 'dropped', checkName(i, 'Wait between the username and the password'), isHover(i) ? HOVER_BETWEEN_PAGES : BETWEEN_PAGES, !isHover(i));
+      for (const i of ts >= 0 ? between : []) {
+        add(events[i].at, 'dropped', checkName(i, 'Wait between the sign-in and the code'), `it ${isHover(i) ? 'is on' : 'checks'} the page between the password and the code, which signIn passes in one step`, !isHover(i));
+      }
       const enterSubmit = (k: number, fallback: Candidate[]): Candidate[] => {
         const e = events[k];
         if (e.kind === 'click') return e.target;
@@ -332,13 +357,13 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
   // 2. Every other credential field and Site Login value.
   events.forEach((e, i) => {
     if (removed.has(i) || (e.kind !== 'fill' && e.kind !== 'select')) return;
-    if (roles[i] || slValues.some((s) => equalsSecret(e.value, s)) || masker.containsSecret(e.value)) strip(i);
+    if (roles[i] || valuesOf(e).some(secretOption)) strip(i);
     else if (capped.has(i)) strip(i, CAPPED_VALUE);
   });
   // 3. Values typed into credential fields are secrets too, wherever else they appear (the username typed twice).
   for (const { value, wholeNumber } of typedSecrets) if (value.trim().length >= MIN_SECRET_LENGTH) masker.add([value, value.trim()], { wholeNumber });
   events.forEach((e, i) => {
-    if (!removed.has(i) && (e.kind === 'fill' || e.kind === 'select') && masker.containsSecret(e.value)) strip(i);
+    if (!removed.has(i) && (e.kind === 'fill' || e.kind === 'select') && valuesOf(e).some((v) => masker.containsSecret(v))) strip(i);
   });
 
   // 4. Redact what remains.
@@ -348,12 +373,23 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
     ...(e.totp ? { totp: { field: clean(e.totp.field), submit: clean(e.totp.submit) } } : {}),
   });
   const out: ImportEvent[] = [];
-  events.forEach((e, i) => {
+  events.forEach((source, i) => {
     if (signIn?.at === i) {
       const s = signIn.event;
       out.push(cleanSignIn(s));
     }
     if (removed.has(i)) return;
+    // A condition's element is cleaned as a target is; a step whose condition names only sign-in values goes, condition and all.
+    let e = source;
+    if ('when' in source && source.when) {
+      const cands = 'visible' in source.when ? source.when.visible : source.when.hidden;
+      const kept = clean(cands);
+      if (kept.length === 0 && cands.length > 0) {
+        add(source.at, 'secret', maskText(describeEvent(source)), 'the element its condition looks at is named only by a sign-in value: the step was removed');
+        return;
+      }
+      e = { ...source, when: 'visible' in source.when ? { visible: kept } : { hidden: kept } } as ImportEvent;
+    }
     switch (e.kind) {
       case 'goto': {
         const url = cleanUrl(e.url, masker);

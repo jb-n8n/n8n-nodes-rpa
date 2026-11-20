@@ -5,11 +5,14 @@ import { SANDBOX, startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { clickNamed, done, fakeModel, use } from '../../engine/test/fake-model.js';
 import { bound } from '../../engine/test/timing.js';
 import { loadEngine, type Engine } from '../nodes/Playwright/engine.js';
-import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
+import { resetGuardsForTests, siteLoginKey } from '../nodes/Playwright/guard.js';
 import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
 import { credentialsV2, FEED_NAME, nodeContext, repairedItem, runStepsParams, signStepsParams, type Site } from './feed-fixtures.js';
 import { baselineScript, SECRETS } from './fixtures.js';
+
+/** The breaker key of the sandbox account on the fixtures' Site Login. */
+const BREAKER = siteLoginKey('site-login-1', SECRETS.username);
 
 let portal: Awaited<ReturnType<typeof startPortal>>;
 let engine: Engine;
@@ -28,18 +31,20 @@ const HEAL = () => [clickNamed('Field Actions'), use('extract'), done('found', '
 const ids = (item: INodeExecutionData) => (item.json.rows as { id: string }[]).map((r) => r.id).sort();
 const jsonOnly = (items: INodeExecutionData[]) => JSON.stringify(items.map((i) => i.json));
 
-async function sign(item: IDataObject, approved = true): Promise<IDataObject> {
+async function sign(item: IDataObject, approved = true, siteLoginId?: string): Promise<IDataObject> {
   const params = signStepsParams(approved);
-  const [records] = await executeSignSteps(nodeContext({ params, rawParameters: params, items: [{ json: item }], credentials: credentialsV2(portal) }), engine);
+  const [records] = await executeSignSteps(nodeContext({ params, rawParameters: params, items: [{ json: item }], credentials: credentialsV2(portal), siteLoginId }), engine);
   return records[0].json;
 }
 function run(record: IDataObject | undefined, o: {
   site?: Site | null; model?: unknown; staticData?: IDataObject; signal?: AbortSignal; password?: string; over?: Record<string, unknown>; options?: Record<string, unknown>;
+  siteLoginId?: string;
 } = {}) {
   const params = runStepsParams(record, o.over, o.options);
   const site = o.site === null ? undefined : (o.site ?? portal);
   return executeRunSteps(nodeContext({
     params, rawParameters: params, credentials: credentialsV2(site, { password: o.password }), model: o.model, staticData: o.staticData, signal: o.signal, continueOnFail: true,
+    siteLoginId: o.siteLoginId,
   }), engine);
 }
 
@@ -67,7 +72,10 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     expect(repaired[0].json.digest).toMatch(/^[0-9a-f]{64}$/);
     expect(String(repaired[0].json.changeList)).toContain('Changed: Open Recalls & Stop-Sales (click role "link" name "Recalls & Stop-Sales") -> Open Field Actions (click role "link" name "Field Actions" exact');
     expect(repaired[0].binary?.before?.mimeType).toBe('image/png');
-    for (const secret of [SECRETS.password, SECRETS.username]) expect(jsonOnly([...data, ...repaired])).not.toContain(secret);
+    // The user name is on the Data item as `account` (which account the run was), and nowhere else; the password nowhere.
+    expect(data[0].json.account).toBe(SECRETS.username);
+    expect(jsonOnly([...data, ...repaired])).not.toContain(SECRETS.password);
+    expect(jsonOnly([...data.map((d) => ({ ...d, json: { ...d.json, account: undefined } })), ...repaired])).not.toContain(SECRETS.username);
 
     // Edited after review, even with the hash recomputed: the digest covers the steps.
     const edited = JSON.parse(JSON.stringify(repaired[0].json.steps)) as Script;
@@ -82,18 +90,83 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     expect(idle.invocations).toHaveLength(0);
   });
 
-  it('a wrong password trips the breaker on the Site Login; the next run is locked_out (golden) with no login; a new reset key allows it', async () => {
+  it('a wrong password trips the breaker on the Site Login; the same password is locked_out (golden) with no login; the corrected one gets a try and clears it', async () => {
     const record = await sign(repairedItem(v(1), null));
     const staticData: IDataObject = {};
     const [bad] = await run(record, { staticData, password: 'wrong-pass-123' });
-    expect(bad[0].json.details).toMatchObject({ code: 'login_failed', name: FEED_NAME });
+    // The steps also have a detect step with a login_failed check: signIn raises the one login_failed, and one breaker opens.
+    expect(bad[0].json.details).toMatchObject({ code: 'login_failed', name: FEED_NAME, stepIntent: 'Sign in' });
+    expect(Object.keys(staticData.playwrightLoginBreakers as IDataObject)).toEqual([BREAKER]);
     expect(jsonOnly(bad)).not.toContain('wrong-pass-123');
     const logins = portal.state().logins;
-    const [locked] = await run(record, { staticData });
-    expect(locked[0].json.error).toBe(`locked_out: A previous login for ${portal.host} failed, so no login was tried.`);
+    expect(logins).toBe(1);
+    const [locked] = await run(record, { staticData, password: 'wrong-pass-123' });
+    expect(locked[0].json.error).toBe(`locked_out: A previous login of this account on ${portal.host} failed, so no login was tried.`);
     expect(portal.state().logins).toBe(logins);
-    const [reset] = await run(record, { staticData, options: { breakerResetKey: '2026-10-06' } });
-    expect(reset[0].json).toMatchObject({ lane: 'script', version: 1 });
+    // The password corrected in the Site Login, with no new reset key: one login, accepted, and the breaker is cleared.
+    const [corrected] = await run(record, { staticData });
+    expect(corrected[0].json).toMatchObject({ lane: 'script', version: 1 });
+    expect(portal.state().logins).toBe(logins + 1);
+    expect(staticData.playwrightLoginBreakers).toEqual({});
+  });
+
+  it('a hand-written sign-in with no detect step: a wrong password is login_failed and opens the breaker on that Site Login only', async () => {
+    // The steps a person writes by hand: sign in, open the page, read it. No detect step checks the sign-in.
+    const handWritten: Script = {
+      name: FEED_NAME, version: 1, startUrl: `${portal.url}/acme/login`,
+      steps: [
+        { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } },
+        { intent: 'Open the notices', goto: `${portal.url}/acme/service/recalls-and-stop-sales` },
+        { intent: 'Read notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}', textMode: 'textContent' } },
+      ],
+    };
+    const record = await sign(repairedItem(handWritten, null));
+    const staticData: IDataObject = {};
+    const [bad] = await run(record, { staticData, password: 'wrong-pass-123' });
+    expect(bad[0].json.details).toMatchObject({ code: 'login_failed', name: FEED_NAME, stepIntent: 'Sign in' });
+    expect(jsonOnly(bad)).not.toContain('wrong-pass-123');
+    expect(portal.state().logins).toBe(1);
+    expect(Object.keys(staticData.playwrightLoginBreakers as IDataObject)).toEqual([BREAKER]);
+    const [locked] = await run(record, { staticData, password: 'wrong-pass-123' });
+    expect(locked[0].json.error).toBe(`locked_out: A previous login of this account on ${portal.host} failed, so no login was tried.`);
+    expect(portal.state().logins).toBe(1);
+    // Another Site Login is not affected by this breaker.
+    const other = await sign(repairedItem(handWritten, null), true, 'site-login-2');
+    const [elsewhere] = await run(other, { staticData, siteLoginId: 'site-login-2' });
+    expect(elsewhere[0].json).toMatchObject({ lane: 'script', version: 1 });
+    expect(portal.state().logins).toBe(2);
+    // A new Login Breaker Reset Key allows one more try: still the wrong password, so the breaker opens again.
+    const [again] = await run(record, { staticData, password: 'wrong-pass-123', options: { breakerResetKey: '2026-11-10' } });
+    expect(again[0].json.details).toMatchObject({ code: 'login_failed' });
+    expect(portal.state().logins).toBe(3);
+    const [lockedAgain] = await run(record, { staticData, password: 'wrong-pass-123', options: { breakerResetKey: '2026-11-10' } });
+    expect(lockedAgain[0].json.details).toMatchObject({ code: 'locked_out' });
+    expect(portal.state().logins).toBe(3);
+    // Fixed credential and a new key: the run signs in and reads.
+    const [fixed] = await run(record, { staticData, options: { breakerResetKey: '2026-11-11' } });
+    expect(fixed[0].json).toMatchObject({ lane: 'script', version: 1 });
+  });
+
+  it('a locked account is account_locked, and the breaker records that code, with or without a detect step after the sign-in', async () => {
+    const handWritten: Script = {
+      name: FEED_NAME, version: 1, startUrl: `${portal.url}/acme/login`,
+      steps: [
+        { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } },
+        { intent: 'Open the notices', goto: `${portal.url}/acme/service/recalls-and-stop-sales` },
+        { intent: 'Read notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}', textMode: 'textContent' } },
+      ],
+    };
+    for (const script of [v(1), handWritten]) {
+      portal.reset();
+      resetGuardsForTests();
+      portal.setState({ locked: true });
+      const record = await sign(repairedItem(script, null));
+      const staticData: IDataObject = {};
+      const [locked] = await run(record, { staticData });
+      expect(locked[0].json.details).toMatchObject({ code: 'account_locked', stepIntent: 'Sign in' });
+      expect(staticData.playwrightLoginBreakers).toMatchObject({ [BREAKER]: { code: 'account_locked' } });
+      expect(portal.state().logins).toBe(1);
+    }
   });
 
   it('an edited record, a blank signature or a wrong Expected Version is script_untrusted before any login', async () => {
@@ -106,7 +179,7 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     const [swapped] = await run({ ...record, approvedBy: 'mallory@example.com' });
     expect(swapped[0].json.details).toMatchObject({ code: 'script_untrusted' });
     const [blank] = await run({ ...record, signature: '' });
-    expect(blank[0].json.error).toBe('script_untrusted: The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first.');
+    expect(blank[0].json.error).toBe('script_untrusted: The steps are not signed, or the signature is not valid, and Require Signed Steps is on. To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot\'s name. Its steps may also have been changed in the Data Table after they were approved: read every step on the form before you approve. Steps used without the form: sign them with Sign Steps first.');
     const [rolledBack] = await run(record, { options: { expectedVersion: '2' } });
     expect(rolledBack[0].json.error).toBe('script_untrusted: the signed steps are version 1, but Expected Version is 2');
     expect(portal.state().logins).toBe(before);

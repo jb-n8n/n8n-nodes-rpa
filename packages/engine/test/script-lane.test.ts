@@ -1,11 +1,16 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { strFromU8, unzipSync } from 'fflate';
 import { chromium } from 'playwright-core';
 import { startPortal, SANDBOX } from 'n8n-rpa-sandbox/testing.js';
-import { runScriptLane, screenshotMasks, type ScriptLaneInput } from '../src/lane/script-lane.js';
+import { createMasker } from '../src/secrets/mask.js';
+import { MAX_BUDGET_MS, openLaneRuntime, runScriptLane, screenshotMasks, type ScriptLaneInput } from '../src/lane/script-lane.js';
 import { ENDPOINT_NOT_SECURE, nameMismatch, offListSite, privateAddress, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
 import type { Script, Step } from '../src/types.js';
-import { baselineScript, LOCAL, policyFor, reportScript, SECRETS, SIGN_IN_STEPS, signedLaneInput, TEST_KEY } from './helpers.js';
+import { APPROVER, baselineScript, LOCAL, policyFor, reportScript, SECRETS, SIGN_IN_STEPS, signedLaneInput, TEST_KEY } from './helpers.js';
+import { verifyScript } from '../src/sign.js';
+import { parseScript } from '../src/steps/parse.js';
+import { describeStep } from '../src/proposal/describe.js';
+import { secretFillVariables } from '../src/secrets/secret-fills.js';
 import { notReachedNetworkIdle, tooManyRows } from '../src/messages.js';
 import { publicPolicy } from './helpers.js';
 import { bound } from './timing.js';
@@ -82,6 +87,23 @@ describe('runScriptLane', () => {
     if (!bad.ok) expect(bad.code).toBe('login_failed');
     const { screenshot: _s, ...rest } = bad as { screenshot?: Buffer };
     expect(JSON.stringify(rest)).not.toContain('wrong-pass-123');
+  });
+  it('a locked account is account_locked, with or without a detect step after the sign-in', async () => {
+    const handWritten: Script = {
+      name: 'hand-written', version: 1, startUrl: `${portal.url}/acme/login`,
+      steps: [
+        { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } },
+        { intent: 'Open the notices', goto: `${portal.url}/acme/service/recalls-and-stop-sales` },
+        { intent: 'Read notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}', textMode: 'textContent' } },
+      ],
+    };
+    for (const script of [baselineScript(portal.url), handWritten]) {
+      portal.reset();
+      portal.setState({ locked: true });
+      const r = await runScriptLane(input(script));
+      expect(r, script.name).toMatchObject({ ok: false, code: 'account_locked', failure: { index: 0, intent: 'Sign in' } });
+      expect(portal.state().logins).toBe(1);
+    }
   });
   it('a tampered script is untrusted and never opens a browser', async () => {
     const script = baselineScript(portal.url);
@@ -170,6 +192,30 @@ describe('runScriptLane', () => {
     s.steps.push({ intent: 'Wait forever', timeoutMs: 20_000, waitFor: { target: { css: '#never' } } } as Step);
     const r = await runScriptLane(input(s, { budgetMs: 4000 }));
     if (!r.ok) expect(r.code).toBe('incomplete'); else throw new Error('expected failure');
+  });
+  it('a run at the 600 s cap ends as incomplete when its budget runs out and closes its session', async () => {
+    const timers: { fn: () => void; ms: number }[] = [];
+    const real = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+      if (typeof ms === 'number' && ms > 590_000) { timers.push({ fn, ms }); return 0 as never; }
+      return real(fn, ms, ...rest);
+    }) as never);
+    let lane: Awaited<ReturnType<typeof openLaneRuntime>> | undefined;
+    try {
+      lane = await openLaneRuntime({ endpoint: LOCAL, policy: publicPolicy(portal), masker: createMasker([]), budgetMs: 999_999_999, trace: false });
+      expect(lane.budget).toBe(MAX_BUDGET_MS);
+      expect(timers).toHaveLength(1);
+      expect(timers[0].ms).toBeLessThanOrEqual(600_000);
+      expect(lane.override()).toBeNull();
+      timers[0].fn();
+      await vi.waitFor(() => expect(lane!.session.closed).toBe(true));
+      expect(lane.timedOut).toBe(true);
+      expect(lane.session.closeReason).toBe('budget');
+      expect(lane.override('Read')).toEqual({ code: 'incomplete', message: 'run budget of 600000 ms ran out at "Read"' });
+    } finally {
+      spy.mockRestore();
+      await lane?.dispose();
+    }
   });
   it('an off-list redirect is a policy violation, not a budget overrun', async () => {
     const s = baselineScript(portal.url);
@@ -507,5 +553,65 @@ describe('public pages: start page, status handling and verification', () => {
     if (!fine.ok) throw new Error(fine.message);
     expect(fine.rows).toHaveLength(10_000);
     expect(fine.verified).toBe(true);
+  });
+});
+
+/**
+ * Step lists signed before the browser step gaps (conditions, new verbs, a password change) must verify, parse and run
+ * exactly as before. Each change in that work adds its case here, against this one fixture or a sibling of it.
+ */
+describe('a step list signed before this change verifies and runs', () => {
+  const signedBefore = (url: string): Script => ({
+    name: 'signed-before-step-gaps', version: 1, startUrl: `${url}/acme/login`,
+    steps: [
+      ...SIGN_IN_STEPS,
+      { intent: 'Close a banner if one shows', when: { visible: { css: '#no-such-banner' } }, click: { css: '#no-such-banner button' } },
+      { intent: 'Open Service', click: { role: 'link', name: 'Service', exact: true, within: { role: 'navigation' } } },
+      { intent: 'Open Recalls & Stop-Sales', click: { role: 'link', name: 'Recalls & Stop-Sales' }, expect: { heading: 'Recalls & Stop-Sales' }, checkpoint: true },
+      { intent: 'Read the notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}', textMode: 'textContent' } },
+    ],
+  });
+  /** signScript(signedBefore('http://127.0.0.1:9999'), TEST_KEY, { approvedBy: APPROVER }) with the code of 0.2.0. */
+  const SIGNED_AT_0_2_0 = '81b17b4dd7d981aab6887d3560b2f04ac1939fc37df64633c621eb7c19b352d4';
+
+  it('the signature made before the change still verifies, and signing gives the same one', () => {
+    const doc = signedBefore('http://127.0.0.1:9999');
+    expect(verifyScript(doc, TEST_KEY, { approvedBy: APPROVER, signature: SIGNED_AT_0_2_0 })).toBe(true);
+    expect(signedLaneInput(doc, {}).trust.signature).toBe(SIGNED_AT_0_2_0);
+  });
+  it('when.visible: a step whose element shows runs, one whose element is absent is skipped', async () => {
+    portal.setState({ interrupts: ['survey'] });
+    const r = await runScriptLane(input(signedBefore(portal.url)));
+    expect(r).toMatchObject({ ok: true, verified: true, name: 'signed-before-step-gaps' });
+    if (!r.ok) return;
+    expect(r.log.map((e) => [e.intent, e.status, e.note])).toEqual([
+      ['Sign in', 'ok', undefined],
+      ['Skip the survey', 'ok', undefined],
+      ['Check sign-in worked', 'ok', undefined],
+      ['Close a banner if one shows', 'skipped', 'condition not met'],
+      ['Open Service', 'ok', undefined],
+      ['Open Recalls & Stop-Sales', 'ok', undefined],
+      ['Read the notices', 'ok', undefined],
+    ]);
+    expect(sorted(r.rows.map((x) => x.id))).toEqual(sorted(SANDBOX.bulletins));
+    // signIn.changePassword: a sign-in without it reports no new password.
+    expect(r).not.toHaveProperty('passwordChanged');
+  });
+  it('changePassword: a list without it has no secret variable, so its conditions stay allowed', () => {
+    expect(secretFillVariables(signedBefore('http://127.0.0.1:9999').steps)).toEqual(new Set());
+  });
+  it('press, hover and click modifiers: the list parses to the same steps, and every step keeps its approval text', () => {
+    const doc = signedBefore('http://127.0.0.1:9999');
+    expect(parseScript(doc).steps).toEqual(doc.steps);
+    // describeStep with the code of 0.2.0: a click without modifiers reads as before.
+    expect(doc.steps.map(describeStep)).toEqual([
+      'Sign in (sign in with label "Dealer user ID", label "Password", submit role "button" name "Sign in", code in label "Authentication code", submit role "button" name "Verify")',
+      'Skip the survey (if css "#survey-later" shows, click css "#survey-later")',
+      'Check sign-in worked (detect "afterLogin": "logged_in" css "body[data-page=home]"; "mfa_sms" css "#sms-code"; "login_failed" css "#login-error")',
+      'Close a banner if one shows (if css "#no-such-banner" shows, click css "#no-such-banner button")',
+      'Open Service (click role "link" name "Service" exact within [role "navigation"])',
+      'Open Recalls & Stop-Sales (click role "link" name "Recalls & Stop-Sales")',
+      'Read the notices (extract rows from css "main", ID pattern N26-\\d{4})',
+    ]);
   });
 });

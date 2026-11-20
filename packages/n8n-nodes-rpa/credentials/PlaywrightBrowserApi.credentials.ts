@@ -7,7 +7,7 @@ export class PlaywrightBrowserApi implements ICredentialType {
 
   icon: Icon = { light: 'file:rpa.svg', dark: 'file:rpa.svg' };
 
-  documentationUrl = 'https://docs.n8n.io/integrations/community-nodes/';
+  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/reference/operator.md#where-the-browser-runs';
 
   properties: INodeProperties[] = [
     {
@@ -30,7 +30,7 @@ export class PlaywrightBrowserApi implements ICredentialType {
     },
     {
       displayName:
-        'Start the reference server with: docker compose up -d browser (README: Where the browser runs). On the compose network it listens on ws://browser:3000/: turn on Private Network Endpoint and set the Token from BROWSER_TOKEN in .env.',
+        "Start the reference server with: docker compose up -d browser (README: Where the browser runs). On the compose network it listens on ws://browser:3000/: turn on Private Network Endpoint and set the Token from BROWSER_TOKEN in .env. For the browser on a Windows machine (Windows guide, section 6): paste the browser's Connection Line, which the installer prints when it finishes and, on that machine as an administrator, & \"C:\\Program Files\\RPA Runner\\rpa.cmd\" connection -ShowTokens prints again; Private Network Endpoint stays off (the address is wss://).",
       name: 'playwrightNotice',
       type: 'notice',
       default: '',
@@ -49,6 +49,20 @@ export class PlaywrightBrowserApi implements ICredentialType {
       type: 'notice',
       default: '',
       displayOptions: { show: { mode: ['local'] } },
+    },
+    // The line holds the token (the rule reads only the field's name).
+    // eslint-disable-next-line @n8n/community-nodes/credential-unnecessary-password
+    {
+      displayName: 'Connection Line',
+      name: 'connectionLine',
+      type: 'string',
+      typeOptions: { password: true },
+      default: '',
+      noDataExpression: true,
+      placeholder: 'rpa-browser://<address>:3000/#token=…&fingerprint=…',
+      description:
+        'The one line the Windows installer prints for the browser. It holds the address, the token and the certificate fingerprint: keep it as secret as the token. When it is filled, Endpoint URL, Token and Certificate Fingerprint are not used.',
+      displayOptions: { show: { mode: ['playwright'] } },
     },
     {
       displayName: 'Endpoint URL',

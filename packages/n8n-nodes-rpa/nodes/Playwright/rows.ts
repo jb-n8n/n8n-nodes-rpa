@@ -15,8 +15,20 @@ export const STEPS_TABLE_COLUMNS: readonly { name: string; type: ColumnType }[] 
   { name: 'status', type: 'string' },
   { name: 'expiresAt', type: 'string' },
 ];
+/**
+ * The run log's columns, in the order a new table gets them: first what a person reads (name, code, message, guidance,
+ * file, account), then the rest. Rows are written by column name, so a table made in another order (by an earlier
+ * version) gets its rows all the same.
+ */
 export const RUN_TABLE_COLUMNS: readonly { name: string; type: ColumnType }[] = [
   { name: 'name', type: 'string' },
+  { name: 'code', type: 'string' },
+  // Added after the first version. A table made earlier has none of these four: the generated workflow writes the
+  // columns the table has (see import/workflow.ts), and the templates write only the first version's ten.
+  { name: 'message', type: 'string' },
+  { name: 'guidance', type: 'string' },
+  { name: 'file', type: 'string' },
+  { name: 'account', type: 'string' },
   { name: 'lane', type: 'string' },
   { name: 'version', type: 'number' },
   { name: 'hash', type: 'string' },
@@ -24,9 +36,14 @@ export const RUN_TABLE_COLUMNS: readonly { name: string; type: ColumnType }[] = 
   { name: 'rowCount', type: 'number' },
   { name: 'durationMs', type: 'number' },
   { name: 'llmTokens', type: 'number' },
-  { name: 'code', type: 'string' },
   { name: 'executionId', type: 'string' },
 ];
+/**
+ * The run log's columns of the first version, in its order: every playwright_runs table has them, also one made by an
+ * earlier version.
+ */
+export const RUN_TABLE_FIRST_COLUMNS: readonly { name: string; type: ColumnType }[] = ['name', 'lane', 'version', 'hash', 'confirmed', 'rowCount', 'durationMs', 'llmTokens', 'code', 'executionId']
+  .map((name) => RUN_TABLE_COLUMNS.find((c) => c.name === name)!);
 
 /** The record Sign Steps outputs, shaped as a row of the steps table (the approval template writes it by hash). */
 export interface StepsRecord {

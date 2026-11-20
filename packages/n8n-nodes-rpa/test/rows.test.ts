@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SignedStepsRow } from 'n8n-rpa-engine';
-import { rejectedRecord, RUN_TABLE, RUN_TABLE_COLUMNS, signedRecord, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
+import { rejectedRecord, RUN_TABLE, RUN_TABLE_COLUMNS, RUN_TABLE_FIRST_COLUMNS, signedRecord, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
 
 describe('Data Table rows', () => {
   it('names the two tables and their columns in documented order', () => {
@@ -9,7 +9,13 @@ describe('Data Table rows', () => {
     expect(STEPS_TABLE_COLUMNS.map((c) => `${c.name}:${c.type}`)).toEqual([
       'name:string', 'version:number', 'steps:string', 'hash:string', 'signature:string', 'approvedBy:string', 'approvedAt:string', 'status:string', 'expiresAt:string',
     ]);
+    // A new run log's first columns are the ones a person reads, then the rest; every name and type as before.
     expect(RUN_TABLE_COLUMNS.map((c) => `${c.name}:${c.type}`)).toEqual([
+      'name:string', 'code:string', 'message:string', 'guidance:string', 'file:string', 'account:string',
+      'lane:string', 'version:number', 'hash:string', 'confirmed:boolean', 'rowCount:number', 'durationMs:number', 'llmTokens:number', 'executionId:string',
+    ]);
+    // A table made by an earlier version has the first version's ten, in that version's order.
+    expect(RUN_TABLE_FIRST_COLUMNS.map((c) => `${c.name}:${c.type}`)).toEqual([
       'name:string', 'lane:string', 'version:number', 'hash:string', 'confirmed:boolean', 'rowCount:number', 'durationMs:number', 'llmTokens:number', 'code:string', 'executionId:string',
     ]);
   });

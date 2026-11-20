@@ -41,6 +41,24 @@ const PORTAL_NAME = 'Acme Partner Portal';
 const DEALER = 'SM-7702';
 export const USERNAME = 'summit-ops';
 const PAGE_SIZE = 4;
+/** How long the sign-in POST takes to answer with the slowLogin test hook on. */
+const SLOW_LOGIN_MS = 1500;
+/** A new password on the change-password page: at least this long (checked in the page) and with a digit (checked here). */
+const NEW_PASSWORD_MIN = 12;
+/**
+ * The dealer accounts, for a bot that signs in with one account after another. summit-ops is the account every other
+ * test signs in as: its password is PORTAL_PASSWORD (or the one the change-password page set), it asks for a code when
+ * the release's MFA does, and forcePasswordChange expires its password. The other two ignore those settings: each has
+ * its own password, lakeside-ops always asks for a code from its own authenticator secret, harbor-ops never does.
+ */
+export const ACCOUNTS = {
+  [USERNAME]: { name: 'Summit Motors', dealer: DEALER, allocated: 14 },
+  'lakeside-ops': {
+    name: 'Lakeside Auto', dealer: 'LA-4410', allocated: 9,
+    password: process.env.PORTAL_PASSWORD_LAKESIDE || 'lakeside-password', totpSecret: process.env.PORTAL_TOTP_SECRET_LAKESIDE || 'LAKESIDE2345ABCD',
+  },
+  'harbor-ops': { name: 'Harbor Cars', dealer: 'HB-2290', allocated: 22, password: process.env.PORTAL_PASSWORD_HARBOR || 'harbor-password' },
+};
 
 // ---- state ----
 export const CONTROLS = {
@@ -56,7 +74,11 @@ export const INTERRUPTS = ['cookie-banner', 'whats-new-modal', 'survey'];
 export const BASELINE = {
   nav: 'top', label: 'Recalls & Stop-Sales', parent: 'service', render: 'table',
   interrupts: [], paginate: false, mfa: 'none', content: 'present', seed: null, acknowledgements: 0,
-  widgetPosts: 0, logins: 0, locked: false, attacks: false, deletes: 0, erp: 'baseline', erpDecoy: false,
+  widgetPosts: 0, logins: 0, locked: false, slowLogin: false, attacks: false, deletes: 0, erp: 'baseline', erpDecoy: false,
+  // Test hook: the next sign-in lands on the change-password page. `password` is the one it set (null: PORTAL_PASSWORD).
+  forcePasswordChange: false, password: null,
+  // Test hook: the change-password page asks only for the new password, twice (no current-password field).
+  changeWithoutCurrent: false,
 };
 
 let state = loadState();
@@ -88,6 +110,11 @@ export function applyChange(change) {
   if (change.attacks !== undefined) next.attacks = change.attacks === true || change.attacks === 'true' || change.attacks === 'on';
   // Test hook: the dealer account is locked, so every sign-in is refused with lockout wording.
   if (change.locked !== undefined) next.locked = change.locked === true || change.locked === 'true' || change.locked === 'on';
+  // Test hook: a slow site. The sign-in POST answers after SLOW_LOGIN_MS, so the browser stays on the login page that long.
+  if (change.slowLogin !== undefined) next.slowLogin = change.slowLogin === true || change.slowLogin === 'true' || change.slowLogin === 'on';
+  // Test hook: the password has expired, so the next sign-in must set a new one on the change-password page.
+  if (change.forcePasswordChange !== undefined) next.forcePasswordChange = change.forcePasswordChange === true || change.forcePasswordChange === 'true' || change.forcePasswordChange === 'on';
+  if (change.changeWithoutCurrent !== undefined) next.changeWithoutCurrent = change.changeWithoutCurrent === true || change.changeWithoutCurrent === 'true' || change.changeWithoutCurrent === 'on';
   next.seed = change.seed ?? null;
   state = next;
   sessions.clear(); // a portal release signs everyone out
@@ -137,11 +164,11 @@ export const noticesPath = (st = state) =>
       : `/${BRAND}/compliance/programs/${slug(st.label)}`;
 
 // ---- sessions (in memory) ----
-const sessions = new Map(); // sid -> { stage: 'mfa-totp'|'mfa-sms'|'survey'|'ok', exp }
+const sessions = new Map(); // sid -> { stage: 'mfa-totp'|'mfa-sms'|'survey'|'ok', user, exp }
 const SESSION_MS = 30 * 60 * 1000;
-function newSession(stage, next) {
+function newSession(stage, next, user = USERNAME) {
   const sid = randomBytes(18).toString('hex');
-  sessions.set(sid, { stage, exp: Date.now() + SESSION_MS, ...(next ? { next } : {}) });
+  sessions.set(sid, { stage, user, exp: Date.now() + SESSION_MS, ...(next ? { next } : {}) });
   return sid;
 }
 // Where sign-in returns to: the page that sent the browser to the login (?next=), when it is a path on this site
@@ -160,6 +187,21 @@ function parseCookies(req) {
 }
 const sessionCookie = (sid) => `sid_${BRAND}=${sid}; Path=/; HttpOnly; SameSite=Lax`;
 const afterAuth = () => (state.interrupts.includes('survey') ? 'survey' : 'ok');
+/** After the password (and the code): the change-password page while summit-ops's password has expired, else afterAuth. */
+const afterSignIn = (user = USERNAME) => (user === USERNAME && state.forcePasswordChange ? 'change-password' : afterAuth());
+const currentPassword = () => state.password ?? PORTAL_PASSWORD;
+/** The account with this user name and password, or undefined. */
+function accountFor(username, password) {
+  const user = Object.hasOwn(ACCOUNTS, username) ? username : undefined;
+  if (!user) return undefined;
+  return safeEqual(password, user === USERNAME ? currentPassword() : ACCOUNTS[user].password) ? user : undefined;
+}
+/** The code stage an account's sign-in goes to: summit-ops follows the release's MFA, the others their own setting. */
+function mfaStage(user) {
+  if (user !== USERNAME) return ACCOUNTS[user].totpSecret ? 'mfa-totp' : null;
+  return state.mfa === 'totp' ? 'mfa-totp' : state.mfa === 'sms' ? 'mfa-sms' : null;
+}
+const totpSecretOf = (user) => (user === USERNAME ? TOTP_SECRET : ACCOUNTS[user].totpSecret);
 
 // ---- tiny response helpers ----
 function send(res, status, body, headers = {}) {
@@ -337,19 +379,24 @@ async function portalRoute(req, res, rest, url) {
   if (rest === '/login' && req.method === 'POST') {
     state.logins = (state.logins || 0) + 1; saveState();
     const f = await readBody(req);
+    if (st.slowLogin) await new Promise((resolve) => setTimeout(resolve, SLOW_LOGIN_MS));
     if (st.locked) return redirect(res, `/${BRAND}/login?locked=1`);
-    if (!(safeEqual(f.username || '', USERNAME) && safeEqual(f.password || '', PORTAL_PASSWORD))) return redirect(res, `/${BRAND}/login?error=1`);
-    const stage = st.mfa === 'totp' ? 'mfa-totp' : st.mfa === 'sms' ? 'mfa-sms' : afterAuth();
+    const user = accountFor(String(f.username || ''), String(f.password || ''));
+    if (!user) return redirect(res, `/${BRAND}/login?error=1`);
+    const stage = mfaStage(user) ?? afterSignIn(user);
     const returnTo = safeNext(f.next);
-    const sid = newSession(stage, returnTo);
-    const next = { ok: 'home', survey: 'survey', 'mfa-totp': 'mfa', 'mfa-sms': 'verify-phone' }[stage];
+    const sid = newSession(stage, returnTo, user);
+    const next = { ok: 'home', survey: 'survey', 'mfa-totp': 'mfa', 'mfa-sms': 'verify-phone', 'change-password': 'change-password' }[stage];
     return redirect(res, stage === 'ok' && returnTo ? returnTo : `/${BRAND}/${next}`, { 'Set-Cookie': sessionCookie(sid) });
   }
   if (rest === '/mfa') {
     if (!s || s.stage !== 'mfa-totp') return redirect(res, `/${BRAND}/login`);
     if (req.method === 'POST') {
       const f = await readBody(req);
-      if (verifyTotp(TOTP_SECRET, f.code || '')) { s.stage = afterAuth(); return redirect(res, s.stage === 'ok' ? landing(s) : `/${BRAND}/survey`); }
+      if (verifyTotp(totpSecretOf(s.user), f.code || '')) {
+        s.stage = afterSignIn(s.user);
+        return redirect(res, s.stage === 'ok' ? landing(s) : `/${BRAND}/${s.stage === 'survey' ? 'survey' : 'change-password'}`);
+      }
       return redirect(res, `/${BRAND}/mfa?error=1`);
     }
     const err = url.searchParams.get('error') ? '<p class="error" id="otp-error">That code is not valid. Try again.</p>' : '';
@@ -357,6 +404,37 @@ async function portalRoute(req, res, rest, url) {
       <p>Enter the 6-digit code from your authenticator app.</p>
       <form method="post" action="/${BRAND}/mfa"><label for="otp">Authentication code</label><input id="otp" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
       <button id="verify" type="submit">Verify</button></form>`, 'mfa-totp'));
+  }
+  // The password has expired (forcePasswordChange): the current password (none with changeWithoutCurrent), a new one twice. The page refuses a new password
+  // shorter than NEW_PASSWORD_MIN without posting (the typed values stay); the server refuses one without a digit, or
+  // that does not match its confirmation, and sends the page back empty.
+  if (rest === '/change-password') {
+    if (!s || s.stage !== 'change-password') return redirect(res, `/${BRAND}/login`);
+    if (req.method === 'POST') {
+      const f = await readBody(req);
+      const next = f.new || '';
+      const ok = (st.changeWithoutCurrent || safeEqual(f.current || '', currentPassword())) && next === (f.confirm || '') && next.length >= NEW_PASSWORD_MIN && /[0-9]/.test(next)
+        && next !== currentPassword();
+      if (!ok) return redirect(res, `/${BRAND}/change-password?error=1`);
+      state.password = next;
+      state.forcePasswordChange = false;
+      saveState();
+      s.stage = afterAuth();
+      return redirect(res, s.stage === 'ok' ? landing(s) : `/${BRAND}/survey`);
+    }
+    const err = url.searchParams.get('error') ? '<p class="error" id="change-error">The new password does not meet the rules. Try again.</p>' : '';
+    return send(res, 200, authPage('Change your password', `<h3>Change your password</h3>${err}
+      <p>Your password has expired. Choose a new one of at least ${NEW_PASSWORD_MIN} characters, with a digit.</p>
+      <p class="error" id="too-short" hidden>The new password is too short.</p>
+      <p><button id="generate" type="button" disabled>Suggest a password</button></p>
+      <form id="change-form" method="post" action="/${BRAND}/change-password">
+        ${st.changeWithoutCurrent ? '' : '<label for="current-password">Current password</label><input id="current-password" name="current" type="password" autocomplete="current-password">'}
+        <label for="new-password">New password</label><input id="new-password" name="new" type="password" autocomplete="new-password">
+        <label for="confirm-password">Confirm new password</label><input id="confirm-password" name="confirm" type="password" autocomplete="new-password">
+        <button id="change-password" type="submit">Change password</button></form>
+      <script>document.getElementById('change-form').addEventListener('submit', (e) => {
+        if (document.getElementById('new-password').value.length < ${NEW_PASSWORD_MIN}) { e.preventDefault(); document.getElementById('too-short').hidden = false; }
+      });</script>`, 'change-password'));
   }
   if (rest === '/verify-phone') {
     if (!s || s.stage !== 'mfa-sms') return redirect(res, `/${BRAND}/login`);
@@ -475,8 +553,9 @@ async function portalRoute(req, res, rest, url) {
       ? `<div id="whats-new"><div class="box"><h3>What's new in ${PORTAL_NAME}</h3><p>We've reorganised menus and refreshed the dashboard. Take a look around!</p>
          <button id="whats-new-dismiss" onclick="sessionStorage.setItem('wn','1');document.getElementById('whats-new').remove()">Got it</button></div></div>
          <script>if(sessionStorage.getItem('wn'))document.getElementById('whats-new').remove()</script>` : '';
-    return send(res, 200, page('Home', `${moved}<h2>Welcome, Summit Motors</h2><p>Dealer code ${DEALER}.</p>
-      <div class="card"><h3>Allocation</h3><p>14 units allocated for next month. 3 awaiting confirmation.</p></div>
+    const account = ACCOUNTS[s.user] ?? ACCOUNTS[USERNAME];
+    return send(res, 200, page('Home', `${moved}<h2>Welcome, ${account.name}</h2><p>Dealer code ${account.dealer}.</p>
+      <div class="card"><h3>Allocation</h3><p>${account.allocated} units allocated for next month. 3 awaiting confirmation.</p></div>
       <div class="card"><h3>Messages</h3><p>You have 2 unread messages from your regional office.</p></div>${whatsNew}`, { dataPage: 'home' }));
   }
 

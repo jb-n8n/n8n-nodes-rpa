@@ -277,3 +277,20 @@ test('/public/multi is a multi-select with one option preselected', async () => 
   assert.match(body, /<select id="regions" multiple>/);
   assert.equal(count(body, ' selected>'), 1);
 });
+
+test('/public/hover-menu, /public/pick-list and /public/keys, whose note form posts back to the same page', async () => {
+  assert.match((await html('/public/hover-menu')).body, /#reports:hover #reports-items \{ display: block; \}.*<a href="\/public\/echo\?text=Monthly">Monthly<\/a>/s);
+  const picks = (await html('/public/pick-list')).body;
+  assert.equal(count(picks, 'role="option"'), 3);
+  assert.ok(picks.includes('e.ctrlKey || e.metaKey'));
+  const keys = (await html('/public/keys')).body;
+  for (const f of ['<form id="search" method="get" action="/public/echo">', '<form id="note" method="post" action="/public/keys/note">', '<input type="password" name="pin">']) {
+    assert.ok(keys.includes(f), f);
+  }
+  const res = await postForm('/public/keys/note', { note: 'first', pin: 'never-stored' });
+  assert.equal(res.status, 200);
+  const body = await res.text();
+  assert.ok(body.includes('<form id="note"') && body.includes('<p id="saved">Saved</p>'));
+  assert.ok(!body.includes('never-stored'));
+  assert.deepEqual((await counters()).posts, [{ path: '/public/keys/note', name: 'first' }]);
+});

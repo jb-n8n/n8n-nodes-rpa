@@ -24,7 +24,7 @@ variable "n8n_security_group_ids" {
 }
 
 variable "image" {
-  description = "The rpa-browser image with a tag and/or a digest, for example ghcr.io/jb-n8n/rpa-browser:<version>. Its run-server must match the node's playwright-core (README, Version matching)."
+  description = "The rpa-browser image with a tag and/or a digest, for example ghcr.io/jb-n8n/rpa-browser:<version>. Its run-server must match the node's playwright-core (docs/reference/operator.md, Version matching)."
   type        = string
 }
 

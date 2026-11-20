@@ -610,3 +610,25 @@ describe('repeated fills collapse', () => {
     expect(values(r.script.steps.slice(5))).toEqual(['fill A=new']);
   });
 });
+
+describe('conditions other than when.visible', () => {
+  it('a step gated by when.hidden or a variable condition is treated like a when.visible step by repair', () => {
+    const F: Locator = { label: 'A', exact: true };
+    for (const when of [{ visible: { css: '#gate' } }, { hidden: { css: '#gate' } }, { var: 'mode', equals: 'full' }, { var: 'mode', notEquals: 'full' }] as Step['when'][]) {
+      const label = JSON.stringify(when);
+      const gate = (a: AgentAction): AgentAction => ({ ...a, step: { ...a.step!, when } as Step });
+      // 1. A gated click is no plain navigation click: an exploration loop is never cut across it.
+      const nav = (name: string, at: string): AgentAction => ({ ...click(name, at, 'navigation'), pageState: at });
+      const loop = compileProposal(repair([nav('Sales', '/acme/vehicles'), gate(nav('Vehicles', '/acme/sales')), nav('Service', '/acme/vehicles'), extract('/acme/service')]));
+      expect(loop.script.steps.slice(4).map((s) => s.intent), label).toEqual(['Open Sales', 'Open Vehicles', 'Open Service', 'Read the rows on this page']);
+      // 2. A gated fill ends a run of repeated fills: none is collapsed across it.
+      const fill = (value: string): AgentAction => ({ tool: 'fill', ok: true, url: U('/acme/reports'), step: { intent: 'Set A', fill: { field: F, value } } });
+      const fills = compileProposal(repair([click('Reports', '/acme/service'), fill('1'), gate(fill('g')), fill('2'), doneA('/acme/reports')])).script.steps.slice(5);
+      expect(fills.map((s) => ('fill' in s ? s.fill.value : '-')), label).toEqual(['1', 'g', '2']);
+      // 3. A gated click never takes the checkpoint: the plain click before it does.
+      const at = '/acme/service/field-actions';
+      const cp = compileProposal(repair([click('Field Actions', '/acme/service'), gate(click('Details', at)), extract(at), doneA(at)])).script.steps.slice(4);
+      expect(cp.map((s) => [s.intent, s.checkpoint ?? false]), label).toEqual([['Open Field Actions', true], ['Open Details', false], ['Read the rows on this page', false]]);
+    }
+  });
+});

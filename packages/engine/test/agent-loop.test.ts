@@ -1,6 +1,7 @@
+import { modelMessageText } from '../src/agent/model.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startPortal } from 'n8n-rpa-sandbox/testing.js';
-import { modelErrorText, runAgentLoop, type AgentLoopInput } from '../src/agent/loop.js';
+import { CIRCLE_NUDGE_TEXT, modelErrorText, runAgentLoop, type AgentLoopInput } from '../src/agent/loop.js';
 import type { ChatModel, ChatResponse } from '../src/agent/model.js';
 import { AGENT_TOOLS } from '../src/agent/tools.js';
 import { openSession, type Session } from '../src/browser/session.js';
@@ -100,7 +101,7 @@ describe('runAgentLoop', () => {
       expect(system.role).toBe('system');
       expect(system.content).toContain(GOAL);
       expect(system.content).toContain('untrusted data');
-      expect(user.content.startsWith('There are no steps for this site yet.')).toBe(true);
+      expect(modelMessageText(user).startsWith('There are no steps for this site yet.')).toBe(true);
       expect(user.content).toContain('<page_content>');
       expect(model.invocations[1].at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'call_1_0', status: 'success' });
       expect(res.transcript).toHaveLength(10);
@@ -216,14 +217,15 @@ describe('runAgentLoop', () => {
   it('elides all but the latest two tool-result pages while keeping pairing', async () => {
     const { ctx, state } = await signedIn();
     try {
-      const model = fakeModel([use('look'), use('look'), use('look'), use('look'), use('look'), use('look'), done()]);
+      // A new page half way: six looks at one page would end the run (the circle guard).
+      const model = fakeModel([use('look'), use('look'), use('look'), clickNamed('Parts'), use('look'), use('look'), done()]);
       await loop(ctx, state, model);
       const sent = model.invocations[6];
       const tools = sent.filter((m) => m.role === 'tool');
       expect(tools).toHaveLength(6);
-      expect(tools.filter((m) => m.content.includes('<page_content>'))).toHaveLength(2);
+      expect(tools.filter((m) => modelMessageText(m).includes('<page_content>'))).toHaveLength(2);
       expect(tools[0].content).toContain('(earlier page omitted)');
-      expect(tools[0].content.startsWith('OK')).toBe(true);
+      expect(modelMessageText(tools[0]).startsWith('OK')).toBe(true);
       // the initial user message keeps its page by design
       expect(sent[1].content).toContain('<page_content>');
       for (const c of sent.flatMap((m) => m.tool_calls ?? [])) expect(tools.some((m) => m.tool_call_id === c.id)).toBe(true);
@@ -241,7 +243,7 @@ describe('runAgentLoop', () => {
       await loop(ctx, state, model);
       const sent = model.invocations[3];
       const tools = sent.filter((m) => m.role === 'tool');
-      expect(tools.filter((m) => m.content.includes('<page_content>'))).toHaveLength(2);
+      expect(tools.filter((m) => modelMessageText(m).includes('<page_content>'))).toHaveLength(2);
       const executed = tools.find((m) => m.tool_call_id === 'call_2_0');
       expect(executed?.content).toContain('<page_content>');
     } finally { await session.close(); }
@@ -295,6 +297,56 @@ describe('runAgentLoop', () => {
       const res = await loop(ctx, state, fakeModel([clickNamed('Elsewhere'), use('look')]));
       expect(res).toMatchObject({ outcome: 'blocked', note: 'stopped: a blocked request was attempted', llmCalls: 1 });
       expect(ctx.violations.some((v) => v.fatal)).toBe(true);
+    } finally { await session.close(); }
+  });
+});
+
+describe('the circle guard', () => {
+  // The recorded failing repair (repair-v2, exec 4, Shuffle seed 42437): the bulletins had moved under Resources as a
+  // tab, and the model clicked Compliance → Programs → Service eleven times until 200,000 tokens were used (37 calls).
+  const CYCLE = ['Compliance', 'Programs', 'Service'];
+  const recorded = () => Array.from({ length: 37 }, (_, i) => clickNamed(CYCLE[i % 3]));
+  it('stops the recorded loop the fourth time the same click on the same page brings nothing new, after one nudge', async () => {
+    portal.setState({ parent: 'resources', render: 'js-tab' });
+    const { ctx, state } = await signedIn();
+    try {
+      const model = fakeModel(recorded());
+      const res = await loop(ctx, state, model);
+      // Three new pages, then three laps that find nothing new: the first click of the fourth lap stops the run
+      // (call 13 of the 37; in the recorded run, which began with a code and two pop-ups, call 16 of 37).
+      expect(res).toMatchObject({ outcome: 'circling', llmCalls: 13 });
+      expect(res.note).toBe('it did the same action on the same page 4 times without finding anything new');
+      expect(res.actions.map((a) => a.tool)).toEqual(Array(13).fill('click'));
+      // The nudge comes once, with the result of call 10 (the third time), as engine text before the page block.
+      const nudged = model.texts.flatMap((t, i) => (t.includes(CIRCLE_NUDGE_TEXT) ? [i] : []));
+      expect(nudged).toEqual([10]);
+      expect(model.texts[10].indexOf(CIRCLE_NUDGE_TEXT)).toBeLessThan(model.texts[10].indexOf('<page_content>'));
+      expect(CIRCLE_NUDGE_TEXT).toContain('done this same action on this same page 3 times');
+    } finally { await session.close(); }
+  });
+  it('lets a model that goes round twice and then finds a new way go on (the recorded two-item repair went 13 actions without anything new)', async () => {
+    portal.setState({ parent: 'resources', render: 'table' });
+    const { ctx, state } = await signedIn();
+    try {
+      const five = ['Vehicles', 'Sales', 'Service', 'Parts', 'Compliance'];
+      const turns = [...Array.from({ length: 18 }, (_, i) => clickNamed(five[i % 5])), clickNamed('Resources'), clickNamed('Recalls & Stop-Sales'), use('extract'), done('found', 'all')];
+      const model = fakeModel(turns);
+      const res = await loop(ctx, state, model);
+      expect(res).toMatchObject({ outcome: 'found', llmCalls: 22 });
+      expect(state.rows).toHaveLength(7);
+      expect(model.texts.filter((t) => t.includes(CIRCLE_NUDGE_TEXT))).toHaveLength(1);
+    } finally { await session.close(); }
+  });
+  it('counts a repeated action that changes nothing, and anything new starts the count again', async () => {
+    const { ctx, state } = await signedIn();
+    try {
+      const looks = Array.from({ length: 6 }, () => use('look'));
+      expect(await loop(ctx, state, fakeModel(looks))).toMatchObject({ outcome: 'circling', llmCalls: 4 });
+      // Three looks, then a page not seen before: three more looks there do not stop the run.
+      await ctx.page.goto(`${portal.url}/acme/home`);
+      const fresh = newRunState();
+      const res = await loop(ctx, fresh, fakeModel([use('look'), use('look'), use('look'), clickNamed('Parts'), use('look'), use('look'), use('look'), done('not_found', 'none')]));
+      expect(res).toMatchObject({ outcome: 'not_found', llmCalls: 8 });
     } finally { await session.close(); }
   });
 });

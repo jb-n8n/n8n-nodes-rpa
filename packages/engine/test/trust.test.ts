@@ -23,7 +23,7 @@ const BAD = 'a'.repeat(64);
 
 describe('golden trust messages', () => {
   it('are verbatim', () => {
-    expect(UNSIGNED_REQUIRED).toBe('The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first.');
+    expect(UNSIGNED_REQUIRED).toBe('The steps are not signed, or the signature is not valid, and Require Signed Steps is on. To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot\'s name. Its steps may also have been changed in the Data Table after they were approved: read every step on the form before you approve. Steps used without the form: sign them with Sign Steps first.');
     expect(SIGNATURE_INVALID).toBe('The signature is not valid for these steps: it does not match their name, version, start site, Site Login or approver.');
     expect(SIGNATURE_WITHOUT_KEY).toBe('a signature is present but no Step Signing credential is attached');
     expect(UNSIGNED_WRITES).toBe('Unsigned steps cannot sign in, submit a form or download through a form. Sign them with Sign Steps, or turn on Options → Allow Unsigned Writes.');

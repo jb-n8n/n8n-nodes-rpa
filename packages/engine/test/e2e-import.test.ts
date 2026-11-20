@@ -5,12 +5,13 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startPortal, SANDBOX } from 'n8n-rpa-sandbox/testing.js';
 import type { ChatModel } from '../src/agent/model.js';
-import { adoptDraft, type AdoptInput, type AdoptResult } from '../src/import/adopt.js';
+import { adoptDraft, statedIdPattern, type AdoptInput, type AdoptResult } from '../src/import/adopt.js';
 import { importSource } from '../src/import/index.js';
 import { runScriptLane } from '../src/lane/script-lane.js';
 import { runTask } from '../src/lane/task.js';
 import { IMPORT_REFUSES_WRITES } from '../src/messages.js';
 import { loginBlockEnd } from '../src/policy/validate.js';
+import { needsApprovalAsWritten } from '../src/proposal/not-replayed.js';
 import { signSteps, type SignedStepsRow } from '../src/proposal/proposal.js';
 import type { PortalPolicy, PortalSecrets, Script } from '../src/types.js';
 import { clickNamed, done, fakeModel, refByName, type FakeTurn } from './fake-model.js';
@@ -30,6 +31,8 @@ const ORIGIN = 'http://localhost:8080';
 const ERP_DOWNLOAD = { mime: ['text/csv'], check: ERP_CHECK };
 const septemberFile = `LINEITEMS_1000_${SANDBOX.erp.from}_${SANDBOX.erp.to}.csv`;
 const json = (x: unknown) => JSON.stringify(x);
+/** A file of the repository, by its path from the root. */
+const read = (path: string) => readFileSync(new URL(`../../../${path}`, import.meta.url), 'utf8');
 
 /** An SAP export recording, pointed at the sandbox, imported with the Expected File and the run variables. */
 function importedDraft(source: 'chrome' | 'playwright' = 'chrome'): Script {
@@ -240,6 +243,58 @@ describe('adopting imported steps against the sandbox portal', () => {
     expect(lane.rows).toHaveLength(r.proposal.evidence.count);
   }, 120_000);
 
+  // docs/samples/sandbox-line-items.steps.json, the browser bot guide's first bot: uploaded on the import form as it is,
+  // it imports as one step list that the import replays (no write, no secret typed) and proves with the file it
+  // downloads, under the Site Login the guide makes (its two sign-in pages and one Requests That Only Read line, no
+  // form it may submit), with or without an authenticator code.
+  it.each([['without', 'none'], ['with', 'totp']] as const)('the browser guide\'s sample imports, adopts %s an authenticator code and proves its file', async (_label, mfa) => {
+    portal.setState({ mfa });
+    const sample = read('docs/samples/sandbox-line-items.steps.json');
+    expect(sample).toContain('http://sandbox:8080/');
+    const imported = importSource('steps', sample.split('http://sandbox:8080').join(portal.url), { name: 'sandbox-line-items', hasSiteLogin: true, secrets: SECRETS });
+    expect(imported.report.items.filter((i) => i.kind === 'error')).toEqual([]);
+    expect(imported.drafts).toHaveLength(1);
+    const draft = imported.drafts[0].script;
+    expect(needsApprovalAsWritten(draft.steps)).toBe(false);
+    const policy: PortalPolicy = { ...policyFor(portal), allowedSubmits: [], readPosts: [{ host: portal.host, path: '/sap*/bc/gui/sap/its/webgui' }] };
+    const r = await adopt(draft, { policy, vars: {}, repair: { model: noModel, goal: 'Export the line items' } });
+    if (!r.ok) throw new Error(json(r).slice(0, 1500));
+    expect(r).toMatchObject({ lane: 'script', llmCalls: 0 });
+    expect(r.proposal).toMatchObject({ name: 'sandbox-line-items', baseVersion: null, version: 1 });
+    expect(r.proposal.evidence.file).toMatchObject({ fileName: septemberFile, rows: SANDBOX.erp.rowsInSeptember1000 });
+    leakFree(r);
+  }, 120_000);
+
+  // docs/samples/sandbox-rows.steps.json, a bot that reads rows: its extract step says its own ID Pattern, so it imports
+  // and adopts with nothing more (no ID Pattern given), under the same Site Login, and the signed steps read the same rows.
+  it('the rows sample adopts with the ID Pattern its steps state, signs and reads the same rows', async () => {
+    const sample = read('docs/samples/sandbox-rows.steps.json');
+    const imported = importSource('steps', sample.split('http://sandbox:8080').join(portal.url), { name: 'sandbox-rows', hasSiteLogin: true, secrets: SECRETS });
+    expect(imported.report.items.filter((i) => i.kind === 'error')).toEqual([]);
+    const draft = imported.drafts[0].script;
+    expect(needsApprovalAsWritten(draft.steps)).toBe(false);
+    expect(statedIdPattern(draft)).toBe('N26-\\d{4}');
+    const policy: PortalPolicy = { ...policyFor(portal), allowedSubmits: [], readPosts: [{ host: portal.host, path: '/sap*/bc/gui/sap/its/webgui' }] };
+    const r = await adopt(draft, { policy, vars: {} });
+    if (!r.ok) throw new Error(json(r).slice(0, 1500));
+    expect(r).toMatchObject({ lane: 'script', llmCalls: 0 });
+    expect(r.proposal.evidence.count).toBeGreaterThan(0);
+    expect(r.proposal.evidence.file).toBeUndefined();
+    leakFree(r);
+    const signed = signSteps({ proposal: r.proposal, key: TEST_KEY, approverId: APPROVER, policy, secrets: SECRETS, reviewedDigest: r.digest });
+    if (!signed.ok) throw new Error(signed.reasons.join('; '));
+    const lane = await runScriptLane({
+      script: signed.row.steps, trust: { required: true, signature: signed.row.signature, approvedBy: APPROVER, key: TEST_KEY },
+      policy, secrets: SECRETS, endpoint: LOCAL, defaultStepTimeoutMs: 3000, output: { idPattern: 'N26-\\d{4}' },
+    });
+    if (!lane.ok) throw new Error(json(lane).slice(0, 1500));
+    expect(lane.rows).toHaveLength(r.proposal.evidence.count);
+    // Each row is a notice a person can read: its ID and the table's columns, not the ID alone.
+    expect(Object.keys(lane.rows[0]).sort()).toEqual(['Bulletin', 'Date', 'Models', 'Summary', 'Type', 'id']);
+    expect(lane.rows[0]).toMatchObject({ id: 'N26-0417', Bulletin: 'N26-0417', Type: 'Stop-Sale', Summary: expect.stringMatching(/^Rear seat belt buckle may not latch /) });
+    expect(String(lane.rows[0].Date)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  }, 120_000);
+
   it('adoption never writes: a declared form post is refused before the browser, a click that posts is blocked', async () => {
     const policy = policyFor(portal);
     const reportDraft = (download: Record<string, unknown>): Script => ({
@@ -259,6 +314,8 @@ describe('adopting imported steps against the sandbox portal', () => {
     expect(posted).toMatchObject({ ok: false, code: 'policy_violation' });
     expect(posted).not.toHaveProperty('proposal');
     expect(posted.ok ? [] : posted.violations.map((v) => v.url)).toContainEqual(expect.stringContaining('/acme/reports/export'));
+    // The refusal names the request and where it can be let through.
+    expect(posted.ok ? '' : posted.message).toContain(`a blocked request was attempted during the run: POST ${portal.host}/acme/reports/export. If it only reads data, list it in the RPA Site Login under Requests That Only Read`);
     leakFree(posted);
   }, 120_000);
 });

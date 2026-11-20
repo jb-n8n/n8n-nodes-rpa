@@ -41,6 +41,14 @@ describe('step changes from the canonical steps, not intents', () => {
     expect(describeStep({ intent: 'Find', fill: { field: { label: 'Search', frame: 'iframe#f' }, value: 'x' } })).toBe('Find (fill label "Search" in frame "iframe#f" with "x")');
     expect(describeStep({ intent: 'Go', goto: 'https://example.com/a?b=1' })).toBe('Go (go to "https://example.com/a?b=1")');
     expect(describeStep({ intent: 'Skip', when: { visible: { css: '#later' } }, click: { css: '#later' } })).toBe('Skip (if css "#later" shows, click css "#later")');
+    expect(describeStep({ intent: 'Go on', when: { hidden: { css: '#busy' } }, click: { css: '#next' } })).toBe('Go on (if css "#busy" does not show, click css "#next")');
+    expect(describeStep({ intent: 'Full', when: { var: 'mode', equals: 'full "all"' }, click: { css: '#all' } })).toBe('Full (if variable mode is "full \\"all\\"", click css "#all")');
+    expect(describeStep({ intent: 'Short', when: { var: 'mode', notEquals: 'full' }, click: { css: '#short' } })).toBe('Short (if variable mode is not "full", click css "#short")');
+    expect(describeStep({ intent: 'Search', press: { key: 'Enter', target: { label: 'Search' } } })).toBe('Search (press Enter on label "Search")');
+    expect(describeStep({ intent: 'Back', press: { key: 'Shift+Tab' } })).toBe('Back (press Shift+Tab)');
+    expect(describeStep({ intent: 'Menu', hover: { role: 'button', name: 'Reports' } })).toBe('Menu (hover over role "button" name "Reports")');
+    expect(describeStep({ intent: 'Add', click: { text: 'Beta' }, modifiers: ['Ctrl'] })).toBe('Add (Ctrl+click text "Beta")');
+    expect(describeStep({ intent: 'Range', click: { text: 'Beta' }, modifiers: ['Shift', 'Alt'] })).toBe('Range (Shift+Alt+click text "Beta")');
     expect(describeInterrupt({ target: { css: '#cookie-overlay' }, click: { role: 'button', name: 'Accept all', fallbacks: [{ testId: 'ok' }] } }))
       .toBe('Pop-up handler: when css "#cookie-overlay" shows, click role "button" name "Accept all" or test id "ok"');
     // Names are JSON-quoted: page text cannot fake a separator or a second candidate.
@@ -159,6 +167,12 @@ describe('review binding and input hardening', () => {
     const e = mk(); e.screenshots = { before: Buffer.from('z') };
     expect([a, b, c].map(proposalDigest).every((x) => x !== d)).toBe(true);
     expect(proposalDigest(e)).toBe(d);
+  });
+  it('leftOut is covered when present; a proposal without it keeps the digest it had before the field existed', () => {
+    const p = mk();
+    const { name, baseVersion, version, steps, changes, safetyFlags, evidence } = p;
+    expect(proposalDigest(p)).toBe(scriptHash({ name, baseVersion, version, steps, changes, safetyFlags, evidence }));
+    expect(proposalDigest({ ...p, leftOut: ['step 4, Wait'] })).not.toBe(proposalDigest(p));
   });
   it('pins approval to the reviewed digest', () => {
     expect(ok({ reviewedDigest: proposalDigest(mk()) }).ok).toBe(true);

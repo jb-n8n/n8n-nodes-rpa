@@ -1,0 +1,16 @@
+<Activity mc:Ignorable="sap sap2010" x:Class="InitAllApplications" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:s="clr-namespace:System;assembly=mscorlib" xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation" xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:uix="http://schemas.uipath.com/workflow/activities/uix" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <uix:NApplicationCard DisplayName="Use Browser Chrome: Invoice portal" sap2010:WorkflowViewState.IdRef="NApplicationCard_1">
+    <uix:NApplicationCard.Body>
+      <ActivityAction x:TypeArguments="x:Object">
+        <Sequence DisplayName="Do" sap2010:WorkflowViewState.IdRef="Sequence_1">
+          <uix:NClick DisplayName="Click 'Invoices'" sap2010:WorkflowViewState.IdRef="NClick_1">
+            <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='A' aaname='Invoices' /&gt;" /></uix:NClick.Target>
+          </uix:NClick>
+        </Sequence>
+      </ActivityAction>
+    </uix:NApplicationCard.Body>
+    <uix:NApplicationCard.TargetApp>
+      <uix:TargetApp BrowserType="Chrome" Url="https://invoices.example.com/" />
+    </uix:NApplicationCard.TargetApp>
+  </uix:NApplicationCard>
+</Activity>

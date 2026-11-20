@@ -5,7 +5,7 @@ name: rpa-browser
 description: The RPA browser service for n8n workers (browser sessions behind a token gate), with drain, policies and scaling
 type: application
 version: 0.1.0
-# The Playwright version inside the image (README: Version matching). image.tag or image.digest picks the image itself.
+# The Playwright version inside the image (docs/reference/operator.md: Version matching). image.tag or image.digest picks the image itself.
 appVersion: "1.63.0"
 keywords:
   - n8n

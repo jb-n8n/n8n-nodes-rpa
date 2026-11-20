@@ -51,7 +51,7 @@
       "id": "0c0e1d2a-3b4c-4d5e-8f60-000000000004",
       "name": "Screenshot the site",
       "type": "n8n-nodes-rpa.playwright",
-      "typeVersion": 1,
+      "typeVersion": 2,
       "position": [440, 0]
     }
   ],

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Rpa.Runner.Core.Protocol;
@@ -10,8 +11,12 @@ namespace Rpa.Runner.Core.Policy;
 
 /// <summary>The policy file's new text, and the lines an administrator reads before approving it: one per thing the
 /// change adds or updates, warnings under the lines they belong to, and a count line last (empty when the policy
-/// already has everything).</summary>
-public sealed record PolicyChangeResult(string Json, IReadOnlyList<string> Summary);
+/// already has everything). <see cref="Notes"/> are lines that change nothing: for each app of the change that the policy
+/// already had and that no write control protects, how to add the protection.</summary>
+public sealed record PolicyChangeResult(string Json, IReadOnlyList<string> Summary)
+{
+    public IReadOnlyList<string> Notes { get; init; } = [];
+}
 
 /// <summary>
 /// Merges a change file into the policy. A change is a JSON object with any of <c>allowedApps</c>,
@@ -20,6 +25,14 @@ public sealed record PolicyChangeResult(string Json, IReadOnlyList<string> Summa
 /// unknown keys are refused. An <c>allowedApps</c> entry with the exe and path of an existing entry (case-insensitive)
 /// is merged into it: a <c>sha256</c> sets or changes the pin (none keeps it), <c>allowedArgs</c> lists are added, and
 /// <c>allowUserWritable</c> can be turned on but not off.
+/// <para>
+/// Two things a change may have that a policy file does not, both only for the question and never kept: a
+/// <c>name</c> in a <c>writeControls</c> entry (the control's name as the recorder showed it), and
+/// <c>leftOutControls</c>, the controls the recorder did not propose because their ids are those of Windows' standard
+/// dialog buttons (OK, Cancel, Yes, No and the like): 1 to 11 in a classic dialog, CommandButton_1 to CommandButton_11
+/// in a task dialog, which every dialog of an app shares. Such an entry with any other id is refused, so the line that
+/// says why it was left out stays true.
+/// </para>
 /// <para>
 /// The summary is all the administrator approves, and a change file may come from a user who is not one. So a change
 /// has limits (entries, arguments per list, value lengths; PolicyCommand limits the length of the summary), every
@@ -45,6 +58,21 @@ public static class PolicyChange
     private const string SpacesWarning = "WARNING: a value in this line has leading, trailing or repeated spaces";
     private const string HelperWarning = "WARNING: any program at this path counts as part of the app that started it";
 
+    /// <summary>Under the named write controls a change adds: what the runner then refuses (RunnerService's write gate).</summary>
+    public const string ProtectMeaning = "A run must then mark a step as a write to press one of these, and to press any key but Tab, arrows, Home, End, " +
+                                         "PageUp, PageDown or Escape while a window that holds one is open.";
+
+    /// <summary>Under the write controls a change adds to an app the policy already allowed, for that app: bots of it
+    /// approved before have no step marked as a write for these buttons.</summary>
+    private const string BotsBefore = "Bots of {0} approved earlier stop where they press one of these buttons, or a key other than Tab, arrows, Home, " +
+                                      "End, PageUp, PageDown or Escape while a window that holds one is open, unless that step was ticked as a write. " +
+                                      "Sign such a bot again on the import form with that step ticked.";
+
+    private const string LeftOutReason = ": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares";
+    private const string LeftOutTaskReason = ": CommandButton_1 to CommandButton_11 are the ids of the standard buttons of Windows' task dialogs, " +
+                                             "which every task dialog of the app shares";
+    private const string TaskButton = "CommandButton_";
+
     // The keys of a policy file and of the entries in its lists, as RunnerPolicy reads them.
     private static readonly string[] PolicyKeys = ["allowedApps", "writeControls", "gatedKeys", "maxFileBytes", "helperProcesses", "clipboardRead"];
 
@@ -54,6 +82,28 @@ public static class PolicyChange
         ["writeControls"] = ["exe", "automationId"],
         ["helperProcesses"] = ["exe", "pathPattern"],
     };
+
+    // What a change may have beyond a policy file: names for the question, and the controls left out.
+    private const string LeftOutKey = "leftOutControls";
+    private static readonly string[] ChangeKeys = [.. PolicyKeys, LeftOutKey];
+
+    private static readonly Dictionary<string, string[]> ChangeEntryKeys = new(EntryKeys)
+    {
+        ["writeControls"] = ["exe", "automationId", "name"],
+        [LeftOutKey] = ["exe", "automationId", "name"],
+    };
+
+    /// <summary>Whether an automation id is one of Windows' standard dialog button ids, 1 to 11 (IDOK to IDCONTINUE),
+    /// written as Windows writes them: as the number in a classic dialog, as CommandButton_ and the number in a task
+    /// dialog ("Confirm Save As" names its Yes CommandButton_6). An app's own buttons in a task dialog have ids the app
+    /// chooses. The recorder leaves such a control out (WriteRules.IsDialogButtonId, held to this).</summary>
+    public static bool IsDialogButtonId(string automationId) => Regex.IsMatch(automationId, "^(?:CommandButton_)?(?:[1-9]|1[01])\\z");
+
+    /// <summary>A control the change names: a write control with its name, or one left out.</summary>
+    private sealed record NamedControl(string Exe, string AutomationId, string? Name);
+
+    /// <summary>What a change holds for the question only, and the change without it, as RunnerPolicy reads it.</summary>
+    private sealed record ChangeExtras(HashSet<int> WritableOff, List<NamedControl> Names, List<NamedControl> LeftOut, string PolicyJson);
 
     // Keys in the order of policy.example.json; an entry's unset options are left out.
     private sealed record FileOut(List<AppOut> AllowedApps, List<RunnerPolicy.WriteControl> WriteControls, List<string> GatedKeys,
@@ -82,9 +132,10 @@ public static class PolicyChange
     public static PolicyChangeResult Apply(string currentJson, string changeJson)
     {
         var current = string.IsNullOrWhiteSpace(currentJson) ? new RunnerPolicy() : Parse(currentJson, "the current policy");
-        var writableOff = CheckChange(changeJson);
-        var change = RunnerPolicy.Parse(changeJson, "the change");
-        CheckSize(change);
+        var extras = CheckChange(changeJson);
+        var writableOff = extras.WritableOff;
+        var change = RunnerPolicy.Parse(extras.PolicyJson, "the change");
+        CheckSize(change, extras);
 
         var lines = new List<string>();
         void Add(string format, params string[] values)
@@ -95,15 +146,31 @@ public static class PolicyChange
             if (values.Any(value => value.StartsWith(' ') || value.EndsWith(' ') || value.Contains("  ", StringComparison.Ordinal))) lines.Add(SpacesWarning);
         }
 
-        // Lines that only tighten come first; the lines that widen what may run follow, nearest the prompt.
+        // Lines that only tighten come first; the lines that widen what may run follow. The controls left out, which
+        // change nothing, come last: a question does not open with what it leaves out.
         var writes = current.WriteControls.ToList();
+        bool Protected(string exe, string id) => writes.Any(w => Same(w.Exe, exe) && w.AutomationId == id);
+        var named = 0;
         foreach (var write in change.WriteControls)
         {
-            if (writes.Any(w => Same(w.Exe, write.Exe) && w.AutomationId == write.AutomationId)) continue;
+            if (Protected(write.Exe, write.AutomationId)) continue;
             writes.Add(write);
-            Add("Add write control {0} / {1}", write.Exe, write.AutomationId);
+            // A name from the recorder: the control as the person saw it, then its id.
+            if (extras.Names.FirstOrDefault(n => Same(n.Exe, write.Exe) && n.AutomationId == write.AutomationId)?.Name is { } name)
+            {
+                Add("Protect {0} ({1}) of {2} as a write control", name, write.AutomationId, write.Exe);
+                named++;
+            }
+            else Add("Add write control {0} / {1}", write.Exe, write.AutomationId);
         }
+        if (named > 0) lines.Add(ProtectMeaning);
         var addedWrites = writes.Count - current.WriteControls.Count;
+        // An app the policy already allowed may have bots, approved without these buttons marked as writes.
+        var allowedBefore = writes.Skip(current.WriteControls.Count)
+            .Select(w => current.AllowedApps.FirstOrDefault(a => Same(a.Exe, w.Exe))?.Exe)
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var exe in allowedBefore) Add(BotsBefore, exe);
 
         var keys = current.GatedKeys.ToList();
         foreach (var key in change.GatedKeys)
@@ -166,11 +233,31 @@ public static class PolicyChange
         var clipboardOn = change.ClipboardRead && !current.ClipboardRead;
         if (clipboardOn) lines.Add("Turn on clipboard read");
 
-        if (lines.Count > 0)
+        var shownLeftOut = new List<NamedControl>();
+        foreach (var left in extras.LeftOut)
+        {
+            if (Protected(left.Exe, left.AutomationId) || shownLeftOut.Any(s => Same(s.Exe, left.Exe) && s.AutomationId == left.AutomationId)) continue;
+            shownLeftOut.Add(left);
+            var reason = left.AutomationId.StartsWith(TaskButton, StringComparison.Ordinal) ? LeftOutTaskReason : LeftOutReason;
+            if (left.Name is { } name) Add("Not protected: {0} ({1}) of {2}" + reason, name, left.AutomationId, left.Exe);
+            else Add("Not protected: {0} of {1}" + reason, left.AutomationId, left.Exe);
+        }
+
+        // A left-out control alone changes nothing, and gets no question.
+        if (changedApps + addedHelpers + addedWrites + addedKeys == 0 && !clipboardOn) lines.Clear();
+        else
         {
             lines.Add($"This change: {changedApps} app(s) allowed or updated, {addedHelpers} helper process pattern(s), {addedWrites} write control(s), " +
                       $"{addedKeys} gated key(s){(clipboardOn ? ", clipboard read turned on" : "")}.");
         }
+
+        // An app the policy had (allowed by an earlier version, for example) that no write control protects.
+        var notes = change.AllowedApps.Select(a => a.Exe)
+            .Where(exe => current.AllowedApps.Any(a => Same(a.Exe, exe)) && !writes.Any(w => Same(w.Exe, exe)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(exe => $"No write control is listed for {Literal(exe)}, so the runner gates no write in it. To protect its save or post buttons, " +
+                           "record a run that clicks them and apply that recording's change file the same way.")
+            .ToList();
 
         var json = JsonSerializer.Serialize(new FileOut(
             apps.Select(a => new AppOut(a.Exe, a.Path, a.Sha256, a.AllowedArgs.Count > 0 ? a.AllowedArgs : null, a.AllowUserWritable ? true : null)).ToList(),
@@ -180,7 +267,7 @@ public static class PolicyChange
             helpers.Count > 0 ? helpers.Select(h => new HelperOut(h.Exe, h.PathPattern)).ToList() : null,
             current.ClipboardRead || change.ClipboardRead ? true : null), OutOptions) + Environment.NewLine;
         RunnerPolicy.Parse(json, "the changed policy");
-        return new PolicyChangeResult(json, lines);
+        return new PolicyChangeResult(json, lines) { Notes = notes };
     }
 
     /// <summary>
@@ -365,9 +452,10 @@ public static class PolicyChange
         if (root.ValueKind != JsonValueKind.Object) return;
         // The two texts for a change that earlier rulings fixed carry no "the change: ".
         var entrySource = change ? "" : $"{source}: ";
+        var (topKeys, entryKeys) = change ? (ChangeKeys, ChangeEntryKeys) : (PolicyKeys, EntryKeys);
         foreach (var property in root.EnumerateObject())
         {
-            if (!PolicyKeys.Contains(property.Name)) throw Refused($"{source}: unknown key {Echo(property.Name)}");
+            if (!topKeys.Contains(property.Name)) throw Refused($"{source}: unknown key {Echo(property.Name)}");
             if (property.Value.ValueKind != JsonValueKind.Array) continue;
             if (property.NameEquals("gatedKeys"))
             {
@@ -377,7 +465,7 @@ public static class PolicyChange
                     catch (RpcException) { throw Refused($"{source}: gatedKeys has an invalid key chord {Echo(key)}"); }
                 }
             }
-            if (!EntryKeys.TryGetValue(property.Name, out var keys)) continue;
+            if (!entryKeys.TryGetValue(property.Name, out var keys)) continue;
             foreach (var entry in property.Value.EnumerateArray())
             {
                 if (entry.ValueKind != JsonValueKind.Object) throw Refused($"{entrySource}an entry in {property.Name} must be an object");
@@ -405,9 +493,10 @@ public static class PolicyChange
     /// The rules a change has beyond a policy file's: no maxFileBytes, clipboardRead only true, and no short (8.3)
     /// name in a path, which would name an existing entry's file without being that entry. Returns the positions of
     /// the allowedApps entries that write <c>allowUserWritable: false</c>, which the parsed policy cannot tell from
-    /// an entry that leaves it out.
+    /// an entry that leaves it out; the names and the left-out controls (<see cref="ReadExtras"/>); and the change
+    /// without them, for RunnerPolicy.
     /// </summary>
-    private static HashSet<int> CheckChange(string changeJson)
+    private static ChangeExtras CheckChange(string changeJson)
     {
         JsonDocument document;
         try
@@ -442,8 +531,58 @@ public static class PolicyChange
                     foreach (var helper in entries) CheckFullPath(helper, "pathPattern");
                 }
             }
-            return writableOff;
+            var (names, leftOut) = ReadExtras(document.RootElement);
+            var policyJson = changeJson;
+            if (names.Count > 0 || document.RootElement.TryGetProperty(LeftOutKey, out _))
+            {
+                // What RunnerPolicy reads: the change without what is only for the question.
+                var stripped = JsonNode.Parse(changeJson, documentOptions: DocumentOptions)!.AsObject();
+                stripped.Remove(LeftOutKey);
+                if (stripped["writeControls"] is JsonArray writes)
+                {
+                    foreach (var write in writes.OfType<JsonObject>()) write.Remove("name");
+                }
+                policyJson = stripped.ToJsonString();
+            }
+            return new ChangeExtras(writableOff, names, leftOut, policyJson);
         }
+    }
+
+    /// <summary>
+    /// The names of a change's write controls, and its left-out controls: each with an exe (a file name) and an id of
+    /// Windows' standard dialog buttons (<see cref="IsDialogButtonId"/>), and a name when it has one. A name is text.
+    /// </summary>
+    private static (List<NamedControl> Names, List<NamedControl> LeftOut) ReadExtras(JsonElement root)
+    {
+        static string? Text(JsonElement entry, string key) =>
+            entry.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        static string? Name(JsonElement entry)
+        {
+            if (!entry.TryGetProperty("name", out var name)) return null;
+            if (name.ValueKind != JsonValueKind.String) throw Refused("the change: a control's name must be text");
+            return name.GetString();
+        }
+        var names = new List<NamedControl>();
+        if (root.TryGetProperty("writeControls", out var writes) && writes.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var write in writes.EnumerateArray())
+            {
+                if (Name(write) is { } name && Text(write, "exe") is { } exe && Text(write, "automationId") is { } id) names.Add(new NamedControl(exe, id, name));
+            }
+        }
+        var leftOut = new List<NamedControl>();
+        if (!root.TryGetProperty(LeftOutKey, out var left)) return (names, leftOut);
+        if (left.ValueKind != JsonValueKind.Array) throw Refused($"the change: {LeftOutKey} must be a list");
+        foreach (var entry in left.EnumerateArray())
+        {
+            var exe = Text(entry, "exe");
+            var id = Text(entry, "automationId");
+            if (string.IsNullOrWhiteSpace(exe) || exe.IndexOfAny(['\\', '/']) >= 0 || id is null) throw Refused($"the change: {LeftOutKey}[] needs exe and automationId");
+            if (!IsDialogButtonId(id))
+                throw Refused($"the change: {LeftOutKey} lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not {Echo(id)}");
+            leftOut.Add(new NamedControl(exe, id, Name(entry)));
+        }
+        return (names, leftOut);
     }
 
     private static void CheckFullPath(JsonElement entry, string key)
@@ -457,17 +596,20 @@ public static class PolicyChange
         if (Regex.IsMatch(path, "~[0-9]")) throw Refused($"write the full path, not a short (8.3) name: {Echo(path)}");
     }
 
-    /// <summary>The limits on a change: its entries, the arguments in a list and the length of a value.</summary>
-    private static void CheckSize(RunnerPolicy change)
+    /// <summary>The limits on a change: its entries (a left-out control is one), the arguments in a list and the length
+    /// of a value (a name is one).</summary>
+    private static void CheckSize(RunnerPolicy change, ChangeExtras extras)
     {
         var lists = change.AllowedApps.SelectMany(a => a.AllowedArgs).ToList();
-        var entries = change.AllowedApps.Count + lists.Count + change.WriteControls.Count + change.GatedKeys.Count + change.HelperProcesses.Count;
+        var entries = change.AllowedApps.Count + lists.Count + change.WriteControls.Count + change.GatedKeys.Count + change.HelperProcesses.Count +
+                      extras.LeftOut.Count;
         if (entries > MaxEntries) throw Refused($"a change may hold at most {MaxEntries} entries; this one holds {entries}");
         if (lists.Any(list => list.Count > MaxArguments)) throw Refused($"an allowed argument list may hold at most {MaxArguments} arguments");
         var values = change.AllowedApps.SelectMany(a => new[] { a.Exe, a.Path })
             .Concat(lists.SelectMany(list => list))
             .Concat(change.WriteControls.SelectMany(w => new[] { w.Exe, w.AutomationId }))
-            .Concat(change.HelperProcesses.SelectMany(h => new[] { h.Exe, h.PathPattern }));
+            .Concat(change.HelperProcesses.SelectMany(h => new[] { h.Exe, h.PathPattern }))
+            .Concat(extras.Names.Concat(extras.LeftOut).SelectMany(c => new[] { c.Exe, c.AutomationId, c.Name ?? "" }));
         if (values.Any(value => value.Length > MaxValueLength)) throw Refused($"a value in the change is longer than {MaxValueLength} characters");
     }
 

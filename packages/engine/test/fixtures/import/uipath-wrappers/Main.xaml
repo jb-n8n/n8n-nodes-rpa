@@ -1,0 +1,211 @@
+<Activity mc:Ignorable="sap sap2010" x:Class="Main" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:s="clr-namespace:System;assembly=mscorlib" xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation" xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:uix="http://schemas.uipath.com/workflow/activities/uix" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Orders and ledger" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:Boolean" Name="noticeShown" />
+      <Variable x:TypeArguments="x:Boolean" Name="hasMore" />
+      <Variable x:TypeArguments="x:Boolean" Name="exportReady" />
+      <Variable x:TypeArguments="x:String" Name="region" />
+    </Sequence.Variables>
+    <uix:NApplicationCard DisplayName="Use Browser Chrome: Orders portal" sap2010:WorkflowViewState.IdRef="NApplicationCard_1">
+      <uix:NApplicationCard.Body>
+        <ActivityAction x:TypeArguments="x:Object">
+          <Sequence DisplayName="Do" sap2010:WorkflowViewState.IdRef="Sequence_2">
+            <ui:RetryScope DisplayName="Retry Scope: open the orders" NumberOfRetries="3" RetryInterval="00:00:05" sap2010:WorkflowViewState.IdRef="RetryScope_1">
+              <ui:RetryScope.ActivityBody>
+                <ActivityAction>
+                  <Sequence DisplayName="Action" sap2010:WorkflowViewState.IdRef="Sequence_3">
+                    <uix:NClick DisplayName="Click 'Orders'" sap2010:WorkflowViewState.IdRef="NClick_1">
+                      <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='A' aaname='Orders' /&gt;" /></uix:NClick.Target>
+                    </uix:NClick>
+                    <uix:NClick DisplayName="Click 'Refresh'" sap2010:WorkflowViewState.IdRef="NClick_2">
+                      <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Refresh' /&gt;" /></uix:NClick.Target>
+                    </uix:NClick>
+                  </Sequence>
+                </ActivityAction>
+              </ui:RetryScope.ActivityBody>
+              <ui:RetryScope.Condition>
+                <ActivityFunc x:TypeArguments="x:Boolean">
+                  <ui:ElementExists DisplayName="Element Exists 'Orders table'" sap2010:WorkflowViewState.IdRef="ElementExists_1">
+                    <ui:ElementExists.Target><ui:Target Selector="&lt;webctrl tag='TABLE' id='orders' /&gt;" /></ui:ElementExists.Target>
+                  </ui:ElementExists>
+                </ActivityFunc>
+              </ui:RetryScope.Condition>
+            </ui:RetryScope>
+            <TryCatch DisplayName="Try Catch: search" sap2010:WorkflowViewState.IdRef="TryCatch_1">
+              <TryCatch.Try>
+                <Sequence DisplayName="Try" sap2010:WorkflowViewState.IdRef="Sequence_4">
+                  <uix:NTypeInto DisplayName="Type Into 'Search'" Text="open invoices" sap2010:WorkflowViewState.IdRef="NTypeInto_1">
+                    <uix:NTypeInto.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='INPUT' aaname='Search' /&gt;" /></uix:NTypeInto.Target>
+                  </uix:NTypeInto>
+                  <uix:NClick DisplayName="Click 'Apply'" sap2010:WorkflowViewState.IdRef="NClick_3">
+                    <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Apply' /&gt;" /></uix:NClick.Target>
+                  </uix:NClick>
+                </Sequence>
+              </TryCatch.Try>
+              <TryCatch.Catches>
+                <Catch x:TypeArguments="s:Exception" sap2010:WorkflowViewState.IdRef="Catch`1_1">
+                  <ActivityAction x:TypeArguments="s:Exception">
+                    <ActivityAction.Argument>
+                      <DelegateInArgument x:TypeArguments="s:Exception" Name="exception" />
+                    </ActivityAction.Argument>
+                    <Sequence DisplayName="Catch" sap2010:WorkflowViewState.IdRef="Sequence_5">
+                      <uix:NClick DisplayName="Click 'Reset filter'" sap2010:WorkflowViewState.IdRef="NClick_4">
+                        <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Reset filter' /&gt;" /></uix:NClick.Target>
+                      </uix:NClick>
+                    </Sequence>
+                  </ActivityAction>
+                </Catch>
+              </TryCatch.Catches>
+            </TryCatch>
+            <uix:NCheckState DisplayName="Check App State 'Cookie banner'" sap2010:WorkflowViewState.IdRef="NCheckState_1">
+              <uix:NCheckState.IfExists>
+                <Sequence DisplayName="Target appears" sap2010:WorkflowViewState.IdRef="Sequence_6">
+                  <uix:NClick DisplayName="Click 'Accept cookies'" sap2010:WorkflowViewState.IdRef="NClick_5">
+                    <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Accept cookies' /&gt;" /></uix:NClick.Target>
+                  </uix:NClick>
+                </Sequence>
+              </uix:NCheckState.IfExists>
+              <uix:NCheckState.IfNotExists>
+                <Sequence DisplayName="Target does not appear" sap2010:WorkflowViewState.IdRef="Sequence_7" />
+              </uix:NCheckState.IfNotExists>
+              <uix:NCheckState.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Accept cookies' /&gt;" /></uix:NCheckState.Target>
+            </uix:NCheckState>
+            <ui:ElementExists DisplayName="Element Exists 'Maintenance notice'" Exists="[noticeShown]" sap2010:WorkflowViewState.IdRef="ElementExists_2">
+              <ui:ElementExists.Target><ui:Target Selector="&lt;webctrl tag='DIV' id='maintenance-notice' /&gt;" /></ui:ElementExists.Target>
+            </ui:ElementExists>
+            <If Condition="[noticeShown]" DisplayName="If the notice shows" sap2010:WorkflowViewState.IdRef="If_1">
+              <If.Then>
+                <Sequence DisplayName="Then" sap2010:WorkflowViewState.IdRef="Sequence_8">
+                  <uix:NClick DisplayName="Click 'Dismiss notice'" sap2010:WorkflowViewState.IdRef="NClick_6">
+                    <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Dismiss notice' /&gt;" /></uix:NClick.Target>
+                  </uix:NClick>
+                </Sequence>
+              </If.Then>
+              <If.Else>
+                <Sequence DisplayName="Else" sap2010:WorkflowViewState.IdRef="Sequence_9">
+                  <uix:NClick DisplayName="Click 'Notices'" sap2010:WorkflowViewState.IdRef="NClick_7">
+                    <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='A' aaname='Notices' /&gt;" /></uix:NClick.Target>
+                  </uix:NClick>
+                </Sequence>
+              </If.Else>
+            </If>
+            <While Condition="[hasMore]" DisplayName="While more pages" sap2010:WorkflowViewState.IdRef="While_1">
+              <Sequence DisplayName="Body" sap2010:WorkflowViewState.IdRef="Sequence_10">
+                <uix:NClick DisplayName="Click 'Next page'" sap2010:WorkflowViewState.IdRef="NClick_8">
+                  <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='A' aaname='Next page' /&gt;" /></uix:NClick.Target>
+                </uix:NClick>
+              </Sequence>
+            </While>
+          </Sequence>
+        </ActivityAction>
+      </uix:NApplicationCard.Body>
+      <uix:NApplicationCard.TargetApp>
+        <uix:TargetApp BrowserType="Chrome" Url="https://orders.example.com/app" />
+      </uix:NApplicationCard.TargetApp>
+    </uix:NApplicationCard>
+    <uix:NApplicationCard DisplayName="Use Application: Ledger Demo" OpenMode="IfNotOpen" sap2010:WorkflowViewState.IdRef="NApplicationCard_2">
+      <uix:NApplicationCard.Body>
+        <ActivityAction x:TypeArguments="x:Object">
+          <Sequence DisplayName="Do" sap2010:WorkflowViewState.IdRef="Sequence_11">
+            <ui:RetryScope DisplayName="Retry Scope: post the batch" NumberOfRetries="2" RetryInterval="00:00:10" sap2010:WorkflowViewState.IdRef="RetryScope_2">
+              <ui:RetryScope.ActivityBody>
+                <ActivityAction>
+                  <Sequence DisplayName="Action" sap2010:WorkflowViewState.IdRef="Sequence_12">
+                    <uix:NClick DisplayName="Click 'Post batch'" sap2010:WorkflowViewState.IdRef="NClick_9">
+                      <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;uia automationid='btnPost' name='Post batch' role='button' /&gt;" /></uix:NClick.Target>
+                    </uix:NClick>
+                  </Sequence>
+                </ActivityAction>
+              </ui:RetryScope.ActivityBody>
+            </ui:RetryScope>
+            <uix:NCheckState DisplayName="Check App State 'Warning'" sap2010:WorkflowViewState.IdRef="NCheckState_2">
+              <uix:NCheckState.IfExists>
+                <Sequence DisplayName="Target appears" sap2010:WorkflowViewState.IdRef="Sequence_13">
+                  <uix:NClick DisplayName="Click 'Dismiss'" sap2010:WorkflowViewState.IdRef="NClick_10">
+                    <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;uia automationid='btnDismiss' name='Dismiss' role='button' /&gt;" /></uix:NClick.Target>
+                  </uix:NClick>
+                </Sequence>
+              </uix:NCheckState.IfExists>
+              <uix:NCheckState.Target><uix:TargetAnchorable FullSelectorArgument="&lt;uia automationid='btnDismiss' name='Dismiss' role='button' /&gt;" /></uix:NCheckState.Target>
+            </uix:NCheckState>
+            <DoWhile Condition="[hasMore]" DisplayName="Do While records are left" sap2010:WorkflowViewState.IdRef="DoWhile_1">
+              <Sequence DisplayName="Body" sap2010:WorkflowViewState.IdRef="Sequence_14">
+                <uix:NClick DisplayName="Click 'Next record'" sap2010:WorkflowViewState.IdRef="NClick_11">
+                  <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;uia automationid='btnNext' name='Next record' role='button' /&gt;" /></uix:NClick.Target>
+                </uix:NClick>
+              </Sequence>
+            </DoWhile>
+          </Sequence>
+        </ActivityAction>
+      </uix:NApplicationCard.Body>
+      <uix:NApplicationCard.TargetApp>
+        <uix:TargetApp FilePath="C:\Program Files\Ledger Demo\LedgerDemo.exe" Selector="&lt;wnd app='ledgerdemo.exe' title='Ledger Demo' /&gt;" />
+      </uix:NApplicationCard.TargetApp>
+    </uix:NApplicationCard>
+    <Switch x:TypeArguments="x:String" DisplayName="Switch on region" Expression="[region]" sap2010:WorkflowViewState.IdRef="Switch`1_1">
+      <Switch.Default>
+        <Delay DisplayName="Wait for the next run" Duration="00:00:30" sap2010:WorkflowViewState.IdRef="Delay_1" />
+      </Switch.Default>
+      <uix:NApplicationCard x:Key="EMEA" DisplayName="Use Browser Chrome: EMEA reports" sap2010:WorkflowViewState.IdRef="NApplicationCard_3">
+        <uix:NApplicationCard.Body>
+          <ActivityAction x:TypeArguments="x:Object">
+            <uix:NClick DisplayName="Click 'EMEA report'" sap2010:WorkflowViewState.IdRef="NClick_12">
+              <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='A' aaname='EMEA report' /&gt;" /></uix:NClick.Target>
+            </uix:NClick>
+          </ActivityAction>
+        </uix:NApplicationCard.Body>
+        <uix:NApplicationCard.TargetApp><uix:TargetApp BrowserType="Chrome" Url="https://reports.example.com/emea" /></uix:NApplicationCard.TargetApp>
+      </uix:NApplicationCard>
+      <uix:NApplicationCard x:Key="AMER" DisplayName="Use Browser Chrome: AMER reports" sap2010:WorkflowViewState.IdRef="NApplicationCard_4">
+        <uix:NApplicationCard.Body>
+          <ActivityAction x:TypeArguments="x:Object">
+            <uix:NClick DisplayName="Click 'AMER report'" sap2010:WorkflowViewState.IdRef="NClick_13">
+              <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='A' aaname='AMER report' /&gt;" /></uix:NClick.Target>
+            </uix:NClick>
+          </ActivityAction>
+        </uix:NApplicationCard.Body>
+        <uix:NApplicationCard.TargetApp><uix:TargetApp BrowserType="Chrome" Url="https://reports.example.com/amer" /></uix:NApplicationCard.TargetApp>
+      </uix:NApplicationCard>
+    </Switch>
+    <uix:NApplicationCard DisplayName="Use Browser Chrome: Export" sap2010:WorkflowViewState.IdRef="NApplicationCard_5">
+      <uix:NApplicationCard.Body>
+        <ActivityAction x:TypeArguments="x:Object">
+          <Flowchart DisplayName="Export flow" sap2010:WorkflowViewState.IdRef="Flowchart_1">
+            <Flowchart.StartNode>
+              <x:Reference>__ReferenceID0</x:Reference>
+            </Flowchart.StartNode>
+            <FlowStep x:Name="__ReferenceID0" sap2010:WorkflowViewState.IdRef="FlowStep_1">
+              <uix:NClick DisplayName="Click 'Start export'" sap2010:WorkflowViewState.IdRef="NClick_14">
+                <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Start export' /&gt;" /></uix:NClick.Target>
+              </uix:NClick>
+              <FlowStep.Next>
+                <FlowDecision x:Name="__ReferenceID1" Condition="[exportReady]" DisplayName="Export ready?" sap2010:WorkflowViewState.IdRef="FlowDecision_1">
+                  <FlowDecision.True>
+                    <FlowStep x:Name="__ReferenceID2" sap2010:WorkflowViewState.IdRef="FlowStep_2">
+                      <uix:NClick DisplayName="Click 'Open the file list'" sap2010:WorkflowViewState.IdRef="NClick_15">
+                        <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='A' aaname='Open the file list' /&gt;" /></uix:NClick.Target>
+                      </uix:NClick>
+                    </FlowStep>
+                  </FlowDecision.True>
+                  <FlowDecision.False>
+                    <FlowStep x:Name="__ReferenceID3" sap2010:WorkflowViewState.IdRef="FlowStep_3">
+                      <uix:NClick DisplayName="Click 'Try again'" sap2010:WorkflowViewState.IdRef="NClick_16">
+                        <uix:NClick.Target><uix:TargetAnchorable FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Try again' /&gt;" /></uix:NClick.Target>
+                      </uix:NClick>
+                    </FlowStep>
+                  </FlowDecision.False>
+                </FlowDecision>
+              </FlowStep.Next>
+            </FlowStep>
+            <x:Reference>__ReferenceID1</x:Reference>
+            <x:Reference>__ReferenceID2</x:Reference>
+            <x:Reference>__ReferenceID3</x:Reference>
+          </Flowchart>
+        </ActivityAction>
+      </uix:NApplicationCard.Body>
+      <uix:NApplicationCard.TargetApp>
+        <uix:TargetApp BrowserType="Chrome" Url="https://orders.example.com/export" />
+      </uix:NApplicationCard.TargetApp>
+    </uix:NApplicationCard>
+  </Sequence>
+</Activity>

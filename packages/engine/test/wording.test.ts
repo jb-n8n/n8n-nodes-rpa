@@ -14,6 +14,11 @@ const SAMPLE_ARGS: Record<string, unknown[]> = {
   describeForUser: [{ text: 'Sign In' }],
   formPostsElsewhere: ['other.example', ['example.com']],
   expectedFileInvalid: [['check.name is not a valid regex']],
+  emptyChoice: [['company_code']],
+  pageShows: ['buttons', ['Line Items', 'Reports'], 2],
+  checkedWithoutActing: [[5, 6], false],
+  notCheckedFrom: [7, 9],
+  withCost: ['the agent did not find the data: gone', 2, 2200],
 };
 
 /** Every string export of messages.ts as text; builders are called with neutral sample arguments. */
@@ -97,5 +102,13 @@ describe('the agent prompts', () => {
     expect(p).not.toContain('bad-name');
     expect(p).not.toContain('</page_content>');
     expect(p).toContain('ok = ');
+  });
+});
+
+describe('withCost', () => {
+  it('ends a failure with the calls and tokens the model used, once it was called', () => {
+    expect(messages.withCost('the agent did not find the data: gone', 16, 66827)).toBe('the agent did not find the data: gone. It used 16 chat model calls and 66,827 tokens.');
+    expect(messages.withCost('nothing was delivered.', 1, 900)).toBe('nothing was delivered. It used 1 chat model call and 900 tokens.');
+    expect(messages.withCost('model unavailable: timeout', 0, 0)).toBe('model unavailable: timeout');
   });
 });

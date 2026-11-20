@@ -1,18 +1,11 @@
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 
 namespace Rpa.Runner.Core.Ui;
 
-/// <summary>Which values the runner never returns: password fields and fields with credential-like names.</summary>
+/// <summary>Which values the runner never returns: password fields and fields with credential-like names (the names
+/// are in CredentialNames.cs, which the recorder compiles too).</summary>
 public static partial class Redaction
 {
-    [GeneratedRegex(
-        @"password|passwort|passwd|passcode|passphrase|\bpass\b|pwd|kennwort|contrase|mot\s*de\s*passe|secret|token|credential|api[\s_-]?key|\bpin\b|\botp\b|one[\s-]?time|\b2fa\b|\bmfa\b|\bcvv\b|\bcvc\b|security\s*code",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex CredentialLike();
-
-    public static bool IsCredentialLike(string? text) => !string.IsNullOrEmpty(text) && CredentialLike().IsMatch(text);
-
     /// <summary>True when an element's value must not leave the runner.</summary>
     public static bool HidesValue(IUiNode node) =>
         node.IsPassword || IsCredentialLike(node.Name) || IsCredentialLike(node.AutomationId);
@@ -42,7 +35,9 @@ public static class SnapshotBuilder
 
     public sealed record Result(IReadOnlyList<SnapshotNode> Nodes, bool Truncated);
 
-    public static Result Build(IUiNode window, int maxNodes, int maxDepth)
+    /// <param name="sources">When given, gets the element behind each emitted node, in the same order (AI repair's
+    /// picture labels them).</param>
+    public static Result Build(IUiNode window, int maxNodes, int maxDepth, List<IUiNode>? sources = null)
     {
         var nodes = new List<SnapshotNode>();
         var truncated = false;
@@ -62,7 +57,11 @@ public static class SnapshotBuilder
                 offscreen = !root && n.IsOffscreen;
                 if (offscreen) return;
                 emit = root || !(Flattenable.Contains(n.ControlType) && n.Name.Length == 0 && n.AutomationId.Length == 0);
-                if (emit) nodes.Add(ToNode(n, $"n{nodes.Count}", depth));
+                if (emit)
+                {
+                    nodes.Add(ToNode(n, $"n{nodes.Count}", depth));
+                    sources?.Add(n);
+                }
             }
             catch (ElementGoneException)
             {

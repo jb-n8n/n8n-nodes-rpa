@@ -1,0 +1,273 @@
+{
+  "format": "rpa-recording/1",
+  "name": "ERP Demo line items",
+  "app": {
+    "exe": "ErpDemo.exe"
+  },
+  "events": [
+    {
+      "at": "2026-11-10T22:59:16.2298304+00:00",
+      "kind": "launch",
+      "exe": "ErpDemo.exe",
+      "window": {
+        "exe": "erpdemo.exe",
+        "title": "ERP Demo - Sign in"
+      },
+      "label": "ErpDemo.exe"
+    },
+    {
+      "at": "2026-11-10T22:59:16.2298304+00:00",
+      "kind": "fill",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "ERP Demo - Sign in"
+        },
+        "path": [
+          {
+            "controlType": "Edit",
+            "automationId": "txtUser",
+            "name": "User name"
+          }
+        ]
+      },
+      "label": "User name",
+      "value": "clerk"
+    },
+    {
+      "at": "2026-11-10T22:59:19.0253827+00:00",
+      "kind": "fill",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "ERP Demo - Sign in"
+        },
+        "path": [
+          {
+            "controlType": "Edit",
+            "automationId": "txtPassword",
+            "name": "Password"
+          }
+        ]
+      },
+      "label": "Password",
+      "value": "{{var.password}}",
+      "secret": true
+    },
+    {
+      "at": "2026-11-10T22:59:20.5266375+00:00",
+      "kind": "key",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "ERP Demo - Sign in"
+        },
+        "path": [
+          {
+            "controlType": "Edit",
+            "automationId": "txtPassword",
+            "name": "Password"
+          }
+        ]
+      },
+      "label": "Password",
+      "chord": "Enter"
+    },
+    {
+      "at": "2026-11-10T22:59:21.8851309+00:00",
+      "kind": "scope",
+      "window": {
+        "exe": "erpdemo.exe",
+        "title": "ERP Demo - Line items"
+      },
+      "label": "ERP Demo - Line items"
+    },
+    {
+      "at": "2026-11-10T22:59:22.9162750+00:00",
+      "kind": "select",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "ERP Demo - Line items"
+        },
+        "path": [
+          {
+            "controlType": "ComboBox",
+            "automationId": "cmbCompany",
+            "name": "Company code"
+          }
+        ]
+      },
+      "label": "Company code",
+      "option": "2000"
+    },
+    {
+      "at": "2026-11-10T22:59:23.8537094+00:00",
+      "kind": "fill",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "ERP Demo - Line items"
+        },
+        "path": [
+          {
+            "controlType": "Edit",
+            "automationId": "txtDateFrom",
+            "name": "Date from"
+          }
+        ]
+      },
+      "label": "Date from",
+      "value": "2026-01-20"
+    },
+    {
+      "at": "2026-11-10T22:59:27.1662550+00:00",
+      "kind": "fill",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "ERP Demo - Line items"
+        },
+        "path": [
+          {
+            "controlType": "Edit",
+            "automationId": "txtDateTo",
+            "name": "Date to"
+          }
+        ]
+      },
+      "label": "Date to",
+      "value": "2026-11-30"
+    },
+    {
+      "at": "2026-11-10T22:59:29.1348351+00:00",
+      "kind": "click",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "ERP Demo - Line items"
+        },
+        "path": [
+          {
+            "controlType": "Button",
+            "automationId": "btnSearch",
+            "name": "Search"
+          }
+        ]
+      },
+      "label": "Search"
+    },
+    {
+      "at": "2026-11-10T22:59:30.2291062+00:00",
+      "kind": "click",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "ERP Demo - Line items"
+        },
+        "path": [
+          {
+            "controlType": "DataItem",
+            "name": "Vendor Row 1"
+          }
+        ]
+      },
+      "label": "Vendor Row 1",
+      "positional": true
+    },
+    {
+      "at": "2026-11-10T22:59:31.4786295+00:00",
+      "kind": "click",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "ERP Demo - Line items"
+        },
+        "path": [
+          {
+            "controlType": "MenuItem",
+            "name": "File"
+          }
+        ]
+      },
+      "label": "File"
+    },
+    {
+      "at": "2026-11-10T22:59:32.7285972+00:00",
+      "kind": "scope",
+      "window": {
+        "exe": "erpdemo.exe"
+      },
+      "label": "erpdemo.exe"
+    },
+    {
+      "at": "2026-11-10T22:59:32.7285972+00:00",
+      "kind": "click",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe"
+        },
+        "path": [
+          {
+            "controlType": "MenuItem",
+            "name": "Export..."
+          }
+        ]
+      },
+      "label": "Export..."
+    },
+    {
+      "at": "2026-11-10T22:59:34.0412074+00:00",
+      "kind": "scope",
+      "window": {
+        "exe": "erpdemo.exe",
+        "title": "Export line items",
+        "className": "#32770"
+      },
+      "label": "Export line items"
+    },
+    {
+      "at": "2026-11-10T22:59:34.0412074+00:00",
+      "kind": "fill",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "Export line items",
+          "className": "#32770"
+        },
+        "path": [
+          {
+            "controlType": "Edit",
+            "automationId": "1001",
+            "name": "File name:"
+          }
+        ]
+      },
+      "label": "File name:",
+      "value": "{{$exportDir}}\\line-items.csv",
+      "exportFile": "line-items.csv"
+    },
+    {
+      "at": "2026-11-10T22:59:43.4789525+00:00",
+      "kind": "click",
+      "target": {
+        "window": {
+          "exe": "erpdemo.exe",
+          "title": "Export line items",
+          "className": "#32770"
+        },
+        "path": [
+          {
+            "controlType": "Button",
+            "automationId": "1",
+            "name": "Save"
+          }
+        ]
+      },
+      "label": "Save"
+    }
+  ],
+  "secretVariables": [
+    "password"
+  ]
+}

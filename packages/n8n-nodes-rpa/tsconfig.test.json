@@ -5,5 +5,5 @@
     "noEmit": true,
     "paths": { "n8n-rpa-engine": ["../engine/src/index.ts"] }
   },
-  "include": ["nodes/**/*.ts", "credentials/**/*.ts", "test/**/*.ts", "../engine/test/sandbox.d.ts", "../engine/test/fake-model.ts"]
+  "include": ["nodes/**/*.ts", "credentials/**/*.ts", "setup/**/*.mts", "test/**/*.ts", "../engine/test/sandbox.d.ts", "../engine/test/fake-model.ts"]
 }

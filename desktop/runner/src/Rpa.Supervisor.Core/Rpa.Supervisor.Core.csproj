@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The platform-neutral part of the RPA Supervisor: when to sign the bot user in, reuse, refuse and sign out
+       (SessionManager), and the byte-level proxy in front of the runner and the browser host (PortProxy). Windows
+       sits behind ISessions and IRdpHost (Rpa.Supervisor on Windows, fakes in the tests). -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Rpa.Supervisor.Core</RootNamespace>
+  </PropertyGroup>
+</Project>
