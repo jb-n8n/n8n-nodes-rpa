@@ -410,7 +410,8 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     }
     runId = id;
     lease = client.startLease(runId, leaseMs);
-    surface = createDesktopSurface(client, runId, script.app);
+    // The step-signing key never goes to the runner, not even as a value to cover in a screenshot.
+    surface = createDesktopSurface(client, runId, script.app, { neverToRunner: input.trust.key ? [input.trust.key] : [] });
     try {
       await launchApp(surface, script.app);
     } catch (err) {

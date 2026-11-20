@@ -8,7 +8,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { latestPictureOnly, PICTURE_OMITTED, PICTURES_REFUSED_NOTE } from '../src/agent/loop.js';
 import { imageTokenEstimate, modelMessageText, type ChatModel, type ModelMessage } from '../src/agent/model.js';
 import { DESKTOP_PICTURE_CAPTION } from '../src/desktop/repair/prompt.js';
-import { RUNNER_TOO_OLD_FOR_PICTURES } from '../src/desktop/surface.js';
+import {
+  PICTURE_MASK_TOO_MANY, PICTURE_MASK_TOO_SHORT, PICTURE_MAX_MASK_TEXT_LENGTH, PICTURE_MAX_MASK_TEXTS, pictureMaskTexts, RUNNER_TOO_OLD_FOR_PICTURES,
+} from '../src/desktop/surface.js';
 import { runDesktopTask, type DesktopRepairSuccess, type DesktopTaskInput, type DesktopTaskResult } from '../src/desktop/task.js';
 import { costSentence } from '../src/messages.js';
 import { desktopProposal, signDesktopSteps } from '../src/proposal/desktop.js';
@@ -101,6 +103,10 @@ describe('desktop repair with screenshots', () => {
     const masks = looks.at(-1)!.params.mask as string[];
     expect(masks).toEqual(expect.arrayContaining([VARS.username, VARS.in_DateFrom, VARS.in_DateTo]));
     expect(masks.every((t) => t.length >= 4)).toBe(true);
+    // The same values the text view masks: the secret variable and the runner's own token too, but never the
+    // step-signing key (the runner never gets it).
+    expect(masks).toEqual(expect.arrayContaining([ERP_PASSWORD, fr.token]));
+    expect(looks.some((q) => (q.params.mask as string[]).includes(KEY))).toBe(false);
     expect(looks.every((q) => Number.isInteger(q.params.labelStart))).toBe(true);
     // Never in the proposal or the outputs.
     expect(JSON.stringify(out.proposal)).not.toContain(FAKE_PNG);
@@ -138,6 +144,21 @@ describe('desktop repair with screenshots', () => {
     for (const sent of model.invocations) expect(imageParts(sent)).toEqual([]);
     expect(modelMessageText(model.invocations[0]!.find((m) => m.role === 'user')!))
       .toContain('Screenshot: none this time (the position of a control that must be covered cannot be read); use the text view.');
+  });
+
+  it('more masked values than the runner can look for: no look at all, the views go as text with the reason', async () => {
+    const vars = { ...VARS, ...Object.fromEntries(Array.from({ length: 70 }, (_, i) => [`extra${i}`, `secret-value-${i}`])) };
+    runner = await FakeRunner.start({ app: 'erp', policy: ERP_POLICY, erpUi: 'v2' });
+    const model = fakeModel(V2_TURNS);
+    const r = await runDesktopTask({
+      ...signed(), runner: runner.endpoint, vars, secretVars: ['password', ...Object.keys(vars).filter((k) => k.startsWith('extra'))],
+      defaultStepTimeoutMs: 400, budgetMs: 120_000,
+      repair: { model, goal: 'Export the line items of a company as a CSV file', pictures: true },
+    });
+    repaired(r);
+    expect(runner.requests.filter((q) => q.method === 'look')).toEqual([]);
+    for (const sent of model.invocations) expect(imageParts(sent)).toEqual([]);
+    expect(modelMessageText(model.invocations[0]!.find((m) => m.role === 'user')!)).toContain(`Screenshot: none this time (${PICTURE_MASK_TOO_MANY})`);
   });
 
   it('a chat model that does not take pictures: the call goes again without, and the repair goes on with text only', async () => {
@@ -187,6 +208,19 @@ describe('desktop repair with screenshots', () => {
 });
 
 describe('picture plumbing', () => {
+  it('asks the runner to cover every value the text view masks, except the signing key, and never a partial list', () => {
+    const secrets = ['runner-token-0123456789', 'signing-key-abcdef', 'Secr3t!'];
+    expect(pictureMaskTexts(secrets, ['clerk', 'abc', '2026-01-01'], ['copied text'], ['signing-key-abcdef'])).toEqual({
+      texts: ['runner-token-0123456789', 'Secr3t!', 'clerk', '2026-01-01', 'copied text'],
+    });
+    // A typed value under 4 characters is not masked in the text view either; a secret that short is a refusal.
+    expect(pictureMaskTexts(['abc'], [], [], [])).toEqual({ refused: PICTURE_MASK_TOO_SHORT });
+    const many = Array.from({ length: PICTURE_MAX_MASK_TEXTS + 1 }, (_, i) => `value-${i}`);
+    expect(pictureMaskTexts([], many, [], [])).toEqual({ refused: PICTURE_MASK_TOO_MANY });
+    expect(pictureMaskTexts([], many.slice(1), [], [])).toEqual({ texts: many.slice(1) });
+    expect(pictureMaskTexts(['x'.repeat(PICTURE_MAX_MASK_TEXT_LENGTH + 1)], [], [], [])).toEqual({ refused: PICTURE_MASK_TOO_MANY });
+  });
+
   it('keeps only the latest picture and drops them all once pictures are off', () => {
     const img = { mime: 'image/png' as const, base64: 'AA', width: 10, height: 10 };
     const msgs = [

@@ -78,6 +78,27 @@ export interface DesktopView {
 }
 /** The view's note when the runner has no `look` method. */
 export const RUNNER_TOO_OLD_FOR_PICTURES = 'the desktop runner is too old to send a screenshot; update it';
+/** The most texts, and the longest text, the runner's `look` takes to cover (RunnerService.MaxMaskTexts, MaxMaskTextLength). */
+export const PICTURE_MAX_MASK_TEXTS = 64;
+export const PICTURE_MAX_MASK_TEXT_LENGTH = 4096;
+/** The view's note when the masked values do not fit what the runner can look for: then no picture, never a partial list. */
+export const PICTURE_MASK_TOO_MANY = 'the run masks more values than the runner can look for in a screenshot';
+export const PICTURE_MASK_TOO_SHORT = 'a masked value is shorter than the runner looks for in a screenshot';
+
+/**
+ * The texts the runner must cover in a screenshot: every secret the view's masker holds (secret variables, the runner
+ * token) except the ones that never go to the runner (the step-signing key), and the run's typed variable values and
+ * clipboard texts of MIN_MASKED_TYPED characters or more. Undefined with the reason when the runner could not look for
+ * all of them (too many, too long, or a secret too short for its search): then no picture is asked for.
+ */
+export function pictureMaskTexts(secrets: readonly string[], typed: readonly string[], clipboard: readonly string[], neverToRunner: readonly string[]):
+  { texts: string[] } | { refused: string } {
+  const own = secrets.filter((t) => typeof t === 'string' && t.length > 0 && !neverToRunner.includes(t));
+  if (own.some((t) => t.length < MIN_MASKED_TYPED)) return { refused: PICTURE_MASK_TOO_SHORT };
+  const texts = [...new Set([...own, ...[...typed, ...clipboard].filter((t) => t.length >= MIN_MASKED_TYPED)])];
+  if (texts.length > PICTURE_MAX_MASK_TEXTS || texts.some((t) => t.length > PICTURE_MAX_MASK_TEXT_LENGTH)) return { refused: PICTURE_MASK_TOO_MANY };
+  return { texts };
+}
 /** The raw runner node behind a view ref (unmasked: for the engine only, never for a message). */
 export interface DesktopViewNode { node: RunnerNode; parent?: string; window: { title: string; exe: string }; truncated: boolean }
 
@@ -161,7 +182,12 @@ export class RunnerTooOldError extends RunnerError {
 }
 
 /** Creates the desktop surface for one run (run.begin already answered). */
-export function createDesktopSurface(client: RunnerClient, runId: string, app: DesktopApp): DesktopSurface {
+/**
+ * `neverToRunner`: secrets the view's masker holds that are never sent to the runner, not even for it to cover in a
+ * screenshot (the step-signing key: the runner never gets it).
+ */
+export function createDesktopSurface(client: RunnerClient, runId: string, app: DesktopApp, opts: { neverToRunner?: readonly string[] } = {}): DesktopSurface {
+  const neverToRunner = (opts.neverToRunner ?? []).filter((t): t is string => typeof t === 'string' && t.length > 0);
   const errors = new Map<number, Error>();
   const refs = new Map<string, string>();
   const typed: string[] = [];
@@ -264,13 +290,17 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
     async view(given: Masker, opts: { window?: WindowSel; maxNodes?: number; picture?: boolean } = {}): Promise<DesktopView> {
       viewNodes.clear();
       const params = { ...(opts.window ? { window: opts.window } : {}), maxNodes: opts.maxNodes ?? 400 };
-      // The runner covers the controls showing these texts in the picture (and what the run typed, and password fields).
-      const maskTexts = [...typed, ...clipboard].filter((t) => t.length >= MIN_MASKED_TYPED).slice(-64);
+      // The runner covers the controls showing these texts in the picture (and what the run typed, and password fields):
+      // the same values the text view masks. When they do not all fit, no picture: never a partial list.
+      const masks = opts.picture ? pictureMaskTexts(given.secrets, typed, clipboard, neverToRunner) : undefined;
       let snap: RunnerMethods['look']['result'];
       let noPicture: string | undefined;
-      if (opts.picture && !noLook) {
+      if (masks && 'refused' in masks) {
+        snap = await rpc('snapshot', params);
+        noPicture = masks.refused;
+      } else if (masks && !noLook) {
         try {
-          snap = await call('look', { ...params, labelStart: nextViewRef, mask: maskTexts });
+          snap = await call('look', { ...params, labelStart: nextViewRef, mask: masks.texts });
         } catch (err) {
           if (!(err instanceof RunnerError && err.code === METHOD_NOT_FOUND)) { record(err); throw err; }
           noLook = true;
